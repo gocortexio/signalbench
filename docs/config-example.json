@@ -1,0 +1,250 @@
+{
+  "techniques": {
+    "Possible C2 via dnscat2": {
+      "parameters": {
+        "download_url": "https://api.pan.run/test/dnscat",
+        "output_file": "/tmp/dnscat2",
+        "log_file": "/tmp/dnscat2_execution.log",
+        "c2_domain": "c2.example.com"
+      },
+      "cleanup_after": true
+    },
+    "DNS reconnaissance or enumeration via DNSRecon": {
+      "parameters": {
+        "target_domain": "example.com",
+        "output_file": "/tmp/dns_recon_results.txt",
+        "subdomain_list": "www,mail,api,admin,test,dev"
+      },
+      "cleanup_after": true
+    },
+    "T1046": {
+      "parameters": {
+        "target_hosts": "127.0.0.1,192.168.1.1",
+        "ports": "22,80,443,8080",
+        "output_file": "/tmp/custom_port_scan_results.txt"
+      },
+      "cleanup_after": true
+    },
+    "T1049": {
+      "parameters": {
+        "output_file": "/tmp/custom_network_connections.txt",
+        "commands": "netstat -tuln,ss -tunap"
+      },
+      "cleanup_after": true
+    },
+    "T1048": {
+      "parameters": {
+        "protocol": "dns",
+        "data_file": "/tmp/custom_exfil_data.txt",
+        "log_file": "/tmp/custom_exfil_log.txt",
+        "target": "example.com"
+      },
+      "cleanup_after": true
+    },
+    "T1095": {
+      "parameters": {
+        "protocol": "tcp",
+        "target": "127.0.0.1",
+        "port": "4444",
+        "log_file": "/tmp/custom_c2_simulation.txt",
+        "command_file": "/tmp/custom_c2_commands.txt"
+      },
+      "cleanup_after": true
+    },
+    "T1003.001": {
+      "parameters": {
+        "target_pid": "1",
+        "dump_file": "/tmp/custom_memory_dump"
+      },
+      "cleanup_after": true
+    },
+    "T1056.001": {
+      "parameters": {
+        "log_file": "/tmp/custom_keylogger.log",
+        "duration": "10"
+      },
+      "cleanup_after": true
+    },
+    "T1562.002": {
+      "parameters": {
+        "audit_rules_file": "/tmp/custom_audit_rules"
+      },
+      "cleanup_after": true
+    },
+    "T1070.003": {
+      "parameters": {
+        "history_backup": "/tmp/custom_history_backup"
+      },
+      "cleanup_after": true
+    },
+    "T1574.007": {
+      "parameters": {
+        "custom_path": "/tmp/malicious_path",
+        "env_log_file": "/tmp/custom_env_log"
+      },
+      "cleanup_after": true
+    },
+    "T1082": {
+      "parameters": {
+        "output_file": "/tmp/custom_sysinfo",
+        "commands": "uname -a,hostname,lscpu,free -h,df -h"
+      },
+      "cleanup_after": true
+    },
+    "T1016": {
+      "parameters": {
+        "output_file": "/tmp/custom_network_info",
+        "commands": "ip addr,ip route,netstat -tuln"
+      },
+      "cleanup_after": true
+    },
+    "T1059.004": {
+      "parameters": {
+        "shell": "/bin/bash",
+        "command": "echo 'Custom command execution' > /tmp/custom_cmd_output",
+        "log_file": "/tmp/custom_cmd_log"
+      },
+      "cleanup_after": true
+    },
+    "T1059.006": {
+      "parameters": {
+        "script_file": "/tmp/custom_python_script.py",
+        "log_file": "/tmp/custom_script_log"
+      },
+      "cleanup_after": true
+    },
+    "T1021.004": {
+      "parameters": {
+        "targets": "localhost,127.0.0.1",
+        "username": "$(whoami)",
+        "log_file": "/tmp/custom_ssh_log"
+      },
+      "cleanup_after": true
+    },
+    "T1547.001": {
+      "parameters": {
+        "key_name": "custom_startup_key",
+        "command": "echo 'Custom startup' > /tmp/custom_startup_output"
+      },
+      "cleanup_after": true
+    },
+    "T1547.002": {
+      "parameters": {
+        "script_name": "custom_startup.sh",
+        "script_content": "#!/bin/bash\necho 'Custom startup script' > /tmp/custom_startup_executed"
+      },
+      "cleanup_after": true
+    },
+    "T1053.003": {
+      "parameters": {
+        "cron_expression": "*/15 * * * *",
+        "command": "/usr/bin/echo 'Custom cron job' > /tmp/custom_cron_output"
+      },
+      "cleanup_after": true
+    },
+    "T1548.003": {
+      "parameters": {
+        "username": "$(whoami)",
+        "privileges": "ALL=(ALL:ALL) NOPASSWD: /usr/bin/cat,/usr/bin/ls"
+      },
+      "cleanup_after": true
+    },
+    "T1548.003.001": {
+      "parameters": {
+        "command": "whoami",
+        "test_both_variants": "true",
+        "log_file": "/tmp/custom_sudo_exploit.log"
+      },
+      "cleanup_after": true
+    },
+    "T1548.001": {
+      "parameters": {
+        "target_binary": "/tmp/custom_suid_binary"
+      },
+      "cleanup_after": true
+    },
+    "T1027": {
+      "parameters": {
+        "obfuscation_type": "encoding",
+        "output_dir": "/tmp/custom_obfuscation",
+        "log_file": "/tmp/custom_obfuscation.log",
+        "execute_after": "true"
+      },
+      "cleanup_after": true
+    },
+    "T1055": {
+      "parameters": {
+        "technique": "ptrace",
+        "target_process": "self",
+        "output_dir": "/tmp/custom_injection",
+        "log_file": "/tmp/custom_injection.log"
+      },
+      "cleanup_after": true
+    },
+    "T1059": {
+      "parameters": {
+        "interpreter": "bash",
+        "obfuscation": "base64",
+        "command": "echo 'Custom command test' > /tmp/custom_execution_test",
+        "output_dir": "/tmp/custom_command_interpreter",
+        "log_file": "/tmp/custom_cmd_execution.log"
+      },
+      "cleanup_after": true
+    },
+    "T1105": {
+      "parameters": {
+        "url": "https://raw.githubusercontent.com/simonsigre/gocortex/refs/heads/main/test-script.sh",
+        "output_dir": "/tmp/custom_download",
+        "download_tool": "curl",
+        "execution_attempt": true
+      },
+      "cleanup_after": true
+    },
+    "T1543": {
+      "parameters": {
+        "service_type": "systemd",
+        "service_name": "custom_service",
+        "command": "echo 'Custom service execution' > /tmp/custom_service_execution",
+        "output_dir": "/tmp/custom_service",
+        "install": false
+      },
+      "cleanup_after": true
+    },
+    "T1505.003": {
+      "parameters": {
+        "web_root": "/tmp/custom_webshell_test",
+        "shell_type": "php",
+        "shell_name": "custom_webshell.php"
+      },
+      "cleanup_after": true
+    },
+    "T1136.001": {
+      "parameters": {
+        "username": "custom_test_user",
+        "groups": "sudo,adm",
+        "shell": "/bin/bash"
+      },
+      "cleanup_after": true
+    },
+    "T1068": {
+      "parameters": {
+        "exploit_type": "dirty_cow",
+        "target_file": "/tmp/custom_privesc_target"
+      },
+      "cleanup_after": true
+    },
+    "T1552.001": {
+      "parameters": {
+        "search_paths": "/tmp/custom_cred_test,/home",
+        "file_patterns": ".env,.config,config.json,settings.ini",
+        "output_file": "/tmp/custom_discovered_credentials.log"
+      },
+      "cleanup_after": true
+    }
+  },
+  "global": {
+    "dry_run": false,
+    "cleanup_after": true,
+    "log_level": "info"
+  }
+}

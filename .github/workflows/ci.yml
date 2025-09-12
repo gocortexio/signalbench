@@ -1,0 +1,79 @@
+      name: Continuous Integration
+
+      on:
+        push:
+          branches: [ main, develop ]
+        pull_request:
+          branches: [ main ]
+
+      env:
+        CARGO_TERM_COLOR: always
+
+      jobs:
+        test:
+          name: Test Suite
+          runs-on: ubuntu-latest
+
+          steps:
+          - name: Checkout code
+            uses: actions/checkout@v4
+
+          - name: Install Rust
+            uses: dtolnay/rust-toolchain@stable
+
+          - name: Cache dependencies
+            uses: actions/cache@v4
+            with:
+              path: |
+                ~/.cargo/bin/
+                ~/.cargo/registry/index/
+                ~/.cargo/registry/cache/
+                ~/.cargo/git/db/
+                target/
+              key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+          - name: Check formatting
+            run: cargo fmt --all -- --check
+
+          - name: Run clippy
+            run: cargo clippy --all-targets --all-features -- -D warnings
+
+          - name: Run tests
+            run: cargo test --all-features --verbose
+
+          - name: Check if build succeeds
+            run: cargo build --release
+
+        security-audit:
+          name: Security Audit
+          runs-on: ubuntu-latest
+
+          steps:
+          - name: Checkout code
+            uses: actions/checkout@v4
+
+          - name: Install Rust
+            uses: dtolnay/rust-toolchain@stable
+
+          - name: Install cargo-audit
+            run: cargo install cargo-audit
+
+          - name: Run security audit
+            run: cargo audit
+
+        documentation:
+          name: Documentation Check
+          runs-on: ubuntu-latest
+
+          steps:
+          - name: Checkout code
+            uses: actions/checkout@v4
+
+          - name: Install Rust
+            uses: dtolnay/rust-toolchain@stable
+
+          - name: Check documentation
+            run: cargo doc --all-features --no-deps
+
+          - name: Verify documentation examples
+            run: cargo test --doc
