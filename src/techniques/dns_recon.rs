@@ -212,13 +212,18 @@ if __name__ == "__main__":
                 if Path::new(artifact).exists() {
                     info!("Removing artifact: {artifact}");
                     
-                    if let Err(e) = std::fs::remove_file(artifact) {
+                    // Check if artifact is a directory
+                    if Path::new(artifact).is_dir() {
+                        if let Err(e) = std::fs::remove_dir_all(artifact) {
+                            error!("Failed to remove directory {artifact}: {e}");
+                        }
+                    } else if let Err(e) = std::fs::remove_file(artifact) {
                         error!("Failed to remove artifact {artifact}: {e}");
                     }
                 }
             }
             
-            // Try to remove the directory if it's empty
+            // Try to remove the parent directory if it's empty
             if !artifacts.is_empty() {
                 if let Some(dir) = Path::new(&artifacts[0]).parent() {
                     if dir.exists() {

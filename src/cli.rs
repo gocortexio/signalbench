@@ -35,6 +35,10 @@ pub enum Commands {
         #[arg(long, default_value_t = false)]
         dry_run: bool,
         
+        /// Skip cleanup after technique execution (preserve artifacts for debugging)
+        #[arg(long, default_value_t = false)]
+        no_cleanup: bool,
+        
         /// Optional path to a config file for technique parameters
         #[arg(short, long)]
         config: Option<PathBuf>,
@@ -48,6 +52,10 @@ pub enum Commands {
         /// Perform a dry run without executing any operations
         #[arg(long, default_value_t = false)]
         dry_run: bool,
+        
+        /// Skip cleanup after technique execution (preserve artifacts for debugging)
+        #[arg(long, default_value_t = false)]
+        no_cleanup: bool,
         
         /// Optional path to a config file for technique parameters
         #[arg(short, long)]
@@ -66,7 +74,8 @@ pub fn get_available_categories() -> Vec<&'static str> {
         "lateral_movement",
         "execution",
         "exfiltration",
-        "command_and_control"
+        "command_and_control",
+        "software"
     ]
 }
 

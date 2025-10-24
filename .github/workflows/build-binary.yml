@@ -26,6 +26,19 @@ jobs:
     - name: Install Rust
       uses: dtolnay/rust-toolchain@stable
 
+    - name: Build helper binary for tests
+      run: |
+        echo "Building PACEMAKER helper binary for tests"
+        cd helpers/pacemaker
+        cargo build --release
+        cd ../..
+        
+        # Copy the helper binary to embedded_binaries/
+        mkdir -p embedded_binaries
+        cp helpers/pacemaker/target/release/pacemaker_helper embedded_binaries/pacemaker_helper
+        
+        echo "Helper binary ready for tests"
+
     - name: Run tests
       run: cargo test --all-features
 
@@ -81,6 +94,50 @@ jobs:
         mkdir -p ~/.cargo
         echo '[target.aarch64-unknown-linux-musl]' >> ~/.cargo/config.toml
         echo 'linker = "aarch64-linux-gnu-gcc"' >> ~/.cargo/config.toml
+
+    - name: Build helper binary with MUSL
+      run: |
+        echo "Building PACEMAKER helper binary with static MUSL linking for ${{ matrix.target }}"
+        cd helpers/pacemaker
+        cargo build --release --target ${{ matrix.target }}
+        cd ../..
+        
+        # Copy the static helper binary to embedded_binaries/
+        mkdir -p embedded_binaries
+        cp helpers/pacemaker/target/${{ matrix.target }}/release/pacemaker_helper embedded_binaries/pacemaker_helper
+        
+        # Verify it's statically linked
+        echo "Verifying helper binary is statically linked:"
+        file embedded_binaries/pacemaker_helper
+        ldd embedded_binaries/pacemaker_helper || echo "Static binary confirmed (ldd failed as expected)"
+
+    - name: Install YARA for verification
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y yara
+
+    - name: Verify YARA signatures in helper binary
+      run: |
+        echo "Verifying PACEMAKER helper binary contains required YARA signatures..."
+        
+        # Check for signature strings using strings command
+        echo "Checking for /proc/%d/mem string:"
+        strings embedded_binaries/pacemaker_helper | grep -F "/proc/%d/mem" || (echo "ERROR: /proc/%d/mem not found" && exit 1)
+        
+        echo "Checking for /proc/%s/maps string:"
+        strings embedded_binaries/pacemaker_helper | grep -F "/proc/%s/maps" || (echo "ERROR: /proc/%s/maps not found" && exit 1)
+        
+        echo "Checking for /proc/%s/cmdline string:"
+        strings embedded_binaries/pacemaker_helper | grep -F "/proc/%s/cmdline" || (echo "ERROR: /proc/%s/cmdline not found" && exit 1)
+        
+        echo "Checking for credential format string:"
+        strings embedded_binaries/pacemaker_helper | grep -F "Name:%s || Pwd:%s || AuthNum:%s" || (echo "ERROR: Credential format string not found" && exit 1)
+        
+        # Run YARA scan
+        echo "Running YARA scan against FE_APT_Trojan_Linux_PACEMAKER rule:"
+        yara -s .github/yara/pacemaker.yar embedded_binaries/pacemaker_helper
+        
+        echo "YARA signature verification passed"
 
     - name: Build release binary
       run: cargo build --release --target ${{ matrix.target }}
@@ -165,6 +222,51 @@ jobs:
         mkdir -p ~/.cargo
         echo '[target.aarch64-unknown-linux-gnu]' >> ~/.cargo/config.toml
         echo 'linker = "aarch64-linux-gnu-gcc"' >> ~/.cargo/config.toml
+
+    - name: Build helper binary
+      shell: bash
+      run: |
+        . ~/.cargo/env
+        echo "Building PACEMAKER helper binary for ${{ matrix.target }}"
+        cd helpers/pacemaker
+        cargo build --release --target ${{ matrix.target }}
+        cd ../..
+        
+        # Copy the helper binary to embedded_binaries/
+        mkdir -p embedded_binaries
+        cp helpers/pacemaker/target/${{ matrix.target }}/release/pacemaker_helper embedded_binaries/pacemaker_helper
+        
+        echo "Helper binary ready for embedding"
+
+    - name: Install YARA for verification
+      shell: bash
+      run: |
+        apt-get update
+        apt-get install -y yara
+
+    - name: Verify YARA signatures in helper binary
+      shell: bash
+      run: |
+        echo "Verifying PACEMAKER helper binary contains required YARA signatures..."
+        
+        # Check for signature strings using strings command
+        echo "Checking for /proc/%d/mem string:"
+        strings embedded_binaries/pacemaker_helper | grep -F "/proc/%d/mem" || (echo "ERROR: /proc/%d/mem not found" && exit 1)
+        
+        echo "Checking for /proc/%s/maps string:"
+        strings embedded_binaries/pacemaker_helper | grep -F "/proc/%s/maps" || (echo "ERROR: /proc/%s/maps not found" && exit 1)
+        
+        echo "Checking for /proc/%s/cmdline string:"
+        strings embedded_binaries/pacemaker_helper | grep -F "/proc/%s/cmdline" || (echo "ERROR: /proc/%s/cmdline not found" && exit 1)
+        
+        echo "Checking for credential format string:"
+        strings embedded_binaries/pacemaker_helper | grep -F "Name:%s || Pwd:%s || AuthNum:%s" || (echo "ERROR: Credential format string not found" && exit 1)
+        
+        # Run YARA scan
+        echo "Running YARA scan against FE_APT_Trojan_Linux_PACEMAKER rule:"
+        yara -s .github/yara/pacemaker.yar embedded_binaries/pacemaker_helper
+        
+        echo "YARA signature verification passed"
 
     - name: Build release binary
       shell: bash

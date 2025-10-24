@@ -54,6 +54,7 @@ pub fn list_techniques() -> Result<(), String> {
 pub async fn run_technique(
     technique_id: &str, 
     dry_run: bool,
+    no_cleanup: bool,
     config_path: Option<std::path::PathBuf>,
 ) -> Result<(), String> {
     // Load configuration
@@ -109,7 +110,15 @@ pub async fn run_technique(
     }
     
     // Cleanup if necessary
-    if result.cleanup_required && !dry_run && technique_config.cleanup_after.unwrap_or(true) {
+    if no_cleanup {
+        println!("\n{}", "Skipping cleanup (--no-cleanup flag set)".yellow().bold());
+        if !result.artifacts.is_empty() {
+            println!("{}", "Artifacts preserved for debugging:".yellow());
+            for artifact in &result.artifacts {
+                println!("  - {artifact}");
+            }
+        }
+    } else if result.cleanup_required && !dry_run && technique_config.cleanup_after.unwrap_or(true) {
         println!("\n{}", "Cleaning up...".bold());
         if let Err(e) = technique.cleanup(&result.artifacts).await {
             warn!("Cleanup failed: {e}");
@@ -128,7 +137,7 @@ pub async fn run_technique(
 
 /// Generate telemetry for all techniques in multiple specified categories
 /// Developed by Simon Sigre for GoCortex.io
-pub async fn run_categories(categories: &[String], dry_run: bool, config_path: Option<std::path::PathBuf>) -> Result<(), String> {
+pub async fn run_categories(categories: &[String], dry_run: bool, no_cleanup: bool, config_path: Option<std::path::PathBuf>) -> Result<(), String> {
     println!("\n{}", format!("SIGNALBENCH v{} - Endpoint Telemetry Generator", env!("CARGO_PKG_VERSION")).bold().green());
     println!("{}", "Developed by GoCortex.io | https://gocortex.io".italic());
     
@@ -203,7 +212,11 @@ pub async fn run_categories(categories: &[String], dry_run: bool, config_path: O
                     }
                     
                     // Cleanup if necessary
-                    if result.cleanup_required && !dry_run && technique_config.cleanup_after.unwrap_or(true) {
+                    if no_cleanup {
+                        if !result.artifacts.is_empty() {
+                            println!("{}", "Skipping cleanup (--no-cleanup flag set)".yellow());
+                        }
+                    } else if result.cleanup_required && !dry_run && technique_config.cleanup_after.unwrap_or(true) {
                         println!("{}", "Cleaning up...".bold());
                         if let Err(e) = technique.cleanup(&result.artifacts).await {
                             warn!("Cleanup failed: {e}");

@@ -366,3 +366,186 @@ print("SignalBench by GoCortex.io - Script execution completed")
         })
     }
 }
+pub struct UncommonRemoteShellCommands {}
+
+#[async_trait]
+impl AttackTechnique for UncommonRemoteShellCommands {
+    fn info(&self) -> Technique {
+        Technique {
+            id: "T1059.004.001".to_string(),
+            name: "Uncommon Remote Shell Commands".to_string(),
+            description: "Generates telemetry for uncommon command execution patterns with suspicious command names".to_string(),
+            category: "execution".to_string(),
+            parameters: vec![
+                TechniqueParameter {
+                    name: "command_count".to_string(),
+                    description: "Number of uncommon commands to execute".to_string(),
+                    required: false,
+                    default: Some("5".to_string()),
+                },
+                TechniqueParameter {
+                    name: "log_file".to_string(),
+                    description: "File to save command execution log to".to_string(),
+                    required: false,
+                    default: Some("/tmp/signalbench_uncommon_cmds".to_string()),
+                },
+            ],
+            detection: "Monitor for execution of uncommon binaries with suspicious names indicating potential remote access tools".to_string(),
+            cleanup_support: true,
+            platforms: vec!["Linux".to_string()],
+            permissions: vec!["user".to_string()],
+        }
+    }
+
+    fn execute<'a>(
+        &'a self,
+        config: &'a TechniqueConfig,
+        dry_run: bool,
+    ) -> ExecuteFuture<'a> {
+        use rand::seq::SliceRandom;
+        
+        let command_count: usize = config
+            .parameters
+            .get("command_count")
+            .unwrap_or(&"5".to_string())
+            .parse()
+            .unwrap_or(5);
+            
+        let log_file = config
+            .parameters
+            .get("log_file")
+            .unwrap_or(&"/tmp/signalbench_uncommon_cmds".to_string())
+            .clone();
+
+        // Scary-sounding command suffixes for simulation
+        let scary_suffixes = vec![
+            "backdoor", "rootkit", "keylogger", "cryptominer", "ransomware",
+            "botnet", "exploit", "shellcode", "payload", "dropper",
+            "stealer", "trojan", "beacon", "implant", "injector",
+            "dumper", "exfiltrate", "scanner", "harvester", "persistence",
+        ];
+
+        // Generate random selections BEFORE async block
+        let mut rng = rand::thread_rng();
+        let mut command_list = Vec::new();
+        for _ in 0..command_count {
+            let suffix = scary_suffixes.choose(&mut rng).unwrap_or(&"backdoor");
+            let cmd_name = format!("signalbench_{suffix}");
+            let cmd_path = format!("/tmp/{cmd_name}");
+            command_list.push((cmd_name, cmd_path));
+        }
+
+        Box::pin(async move {
+            let mut artifacts = vec![log_file.clone()];
+
+            if dry_run {
+                let cmd_names: Vec<String> = command_list.iter()
+                    .map(|(name, _)| name.clone())
+                    .collect();
+                info!("[DRY RUN] Would execute uncommon commands: {}", cmd_names.join(", "));
+                return Ok(SimulationResult {
+                    technique_id: self.info().id,
+                    success: true,
+                    message: format!("DRY RUN: Would execute {command_count} uncommon commands"),
+                    artifacts: vec![log_file],
+                    cleanup_required: false,
+                });
+            }
+
+            // Create the log file
+            let mut log = File::create(&log_file)
+                .map_err(|e| format!("Failed to create log file: {e}"))?;
+            
+            writeln!(log, "=== SignalBench Uncommon Remote Shell Commands ===")
+                .map_err(|e| format!("Failed to write to log file: {e}"))?;
+            writeln!(log, "Time: {}", chrono::Local::now().to_rfc3339())
+                .map_err(|e| format!("Failed to write to log file: {e}"))?;
+            writeln!(log, "Command count: {command_count}")
+                .map_err(|e| format!("Failed to write to log file: {e}"))?;
+            writeln!(log)
+                .map_err(|e| format!("Failed to write to log file: {e}"))?;
+
+            // Create and execute each uncommon command
+            for (cmd_name, cmd_path) in &command_list {
+                writeln!(log, "=== Executing: {cmd_name} ===")
+                    .map_err(|e| format!("Failed to write to log file: {e}"))?;
+
+                // Create a simple shell script with the scary name
+                let script_content = format!(
+                    "#!/bin/sh\necho 'SignalBench telemetry generator - {} executed'\necho 'Timestamp: {}'\necho 'User: {}'\n",
+                    cmd_name,
+                    chrono::Local::now().to_rfc3339(),
+                    whoami::username()
+                );
+
+                let mut script_file = File::create(cmd_path)
+                    .map_err(|e| format!("Failed to create command script: {e}"))?;
+                
+                script_file.write_all(script_content.as_bytes())
+                    .map_err(|e| format!("Failed to write command script: {e}"))?;
+
+                // Make it executable
+                let _ = Command::new("chmod")
+                    .args(["+x", cmd_path])
+                    .status()
+                    .await;
+
+                // Execute the uncommon command
+                info!("Executing uncommon command: {cmd_name}");
+                let output = Command::new(cmd_path)
+                    .output()
+                    .await;
+
+                match output {
+                    Ok(output) => {
+                        writeln!(log, "Exit Code: {}", output.status.code().unwrap_or(-1))
+                            .map_err(|e| format!("Failed to write to log file: {e}"))?;
+                        writeln!(log, "Output:")
+                            .map_err(|e| format!("Failed to write to log file: {e}"))?;
+                        log.write_all(&output.stdout)
+                            .map_err(|e| format!("Failed to write to log file: {e}"))?;
+                        if !output.stderr.is_empty() {
+                            writeln!(log, "Stderr:")
+                                .map_err(|e| format!("Failed to write to log file: {e}"))?;
+                            log.write_all(&output.stderr)
+                                .map_err(|e| format!("Failed to write to log file: {e}"))?;
+                        }
+                    },
+                    Err(e) => {
+                        writeln!(log, "Error executing command: {e}")
+                            .map_err(|e| format!("Failed to write to log file: {e}"))?;
+                    }
+                }
+
+                writeln!(log)
+                    .map_err(|e| format!("Failed to write to log file: {e}"))?;
+
+                artifacts.push(cmd_path.clone());
+            }
+
+            info!("Executed {command_count} uncommon remote shell commands");
+            
+            Ok(SimulationResult {
+                technique_id: self.info().id,
+                success: true,
+                message: format!("Successfully executed {command_count} uncommon remote shell commands"),
+                artifacts,
+                cleanup_required: true,
+            })
+        })
+    }
+
+    fn cleanup<'a>(&'a self, artifacts: &'a [String]) -> CleanupFuture<'a> {
+        Box::pin(async move {
+            for artifact in artifacts {
+                if Path::new(artifact).exists() {
+                    match fs::remove_file(artifact) {
+                        Ok(_) => info!("Removed artifact: {artifact}"),
+                        Err(e) => warn!("Failed to remove artifact {artifact}: {e}"),
+                    }
+                }
+            }
+            Ok(())
+        })
+    }
+}

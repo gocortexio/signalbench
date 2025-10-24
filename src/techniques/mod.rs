@@ -20,6 +20,7 @@ pub mod persistence_system_process;
 pub mod process_injection;
 pub mod dnscat_c2;
 pub mod dns_recon;
+pub mod software;
 
 use crate::config::TechniqueConfig;
 use async_trait::async_trait;
@@ -103,12 +104,14 @@ pub fn get_all_techniques() -> Vec<Box<dyn AttackTechnique>> {
         Box::new(defense_evasion::DisableAuditLogs {}),
         Box::new(defense_evasion::ClearBashHistory {}),
         Box::new(defense_evasion::ModifyEnvironmentVariable {}),
+        Box::new(defense_evasion::MasqueradingAsCrond {}),
         
         // Credential access techniques
         Box::new(credential_access::MemoryDumping {}),
         Box::new(credential_access::KeyloggerSimulation {}),
         Box::new(credential_access::CredentialsInFiles {}),
         Box::new(credential_access::ProcFilesystemCredentialDumping {}),
+        Box::new(credential_access::HydraBruteForceSimulation {}),
         
         // Discovery techniques
         Box::new(discovery::SystemInformationDiscovery {}),
@@ -122,6 +125,7 @@ pub fn get_all_techniques() -> Vec<Box<dyn AttackTechnique>> {
         // Execution techniques
         Box::new(execution::CommandLineInterface {}),
         Box::new(execution::ScriptExecution {}),
+        Box::new(execution::UncommonRemoteShellCommands {}),
         
         // Exfiltration techniques
         Box::new(network::ExfiltrationOverAlternativeProtocol {}),
@@ -130,6 +134,7 @@ pub fn get_all_techniques() -> Vec<Box<dyn AttackTechnique>> {
         Box::new(network::NonApplicationLayerProtocol {}),
         Box::new(command_and_control::IngressToolTransfer {}),
         Box::new(command_and_control::TrafficSignaling {}),
+        Box::new(command_and_control::SuspiciousGitHubToolTransfer {}),
         
         // Advanced Command Interpreter
         Box::new(command_interpreter::AdvancedCommandExecution {}),
@@ -148,6 +153,9 @@ pub fn get_all_techniques() -> Vec<Box<dyn AttackTechnique>> {
         
         // Possible C2 via dnscat2
         Box::new(dnscat_c2::DnscatC2Test {}),
+        
+        // Software simulations
+        Box::new(software::S1109Pacemaker {}),
     ]
 }
 
