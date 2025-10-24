@@ -128,6 +128,9 @@ impl AttackTechnique for AdvancedCommandExecution {
                     .map_err(|e| format!("Failed to create output directory: {e}"))?;
             }
             
+            // Add output directory to artifacts for cleanup
+            artifacts.push(output_dir.clone());
+            
             // Create log file
             let mut log_file_handle = File::create(&log_file)
                 .map_err(|e| format!("Failed to create log file: {e}"))?;

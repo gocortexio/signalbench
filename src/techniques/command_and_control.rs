@@ -403,10 +403,10 @@ impl AttackTechnique for TrafficSignaling {
                 
             writeln!(log_file_handle, "# SignalBench Traffic Signaling Test").unwrap();
             writeln!(log_file_handle, "# MITRE ATT&CK: T1205").unwrap();
-            writeln!(log_file_handle, "# Interface: {}", interface).unwrap();
-            writeln!(log_file_handle, "# Filter Type: {}", filter_type).unwrap();
-            writeln!(log_file_handle, "# Target Port: {}", target_port).unwrap();
-            writeln!(log_file_handle, "# Cron Schedule: {}", cron_schedule).unwrap();
+            writeln!(log_file_handle, "# Interface: {interface}").unwrap();
+            writeln!(log_file_handle, "# Filter Type: {filter_type}").unwrap();
+            writeln!(log_file_handle, "# Target Port: {target_port}").unwrap();
+            writeln!(log_file_handle, "# Cron Schedule: {cron_schedule}").unwrap();
             writeln!(log_file_handle, "# Timestamp: {}", chrono::Local::now()).unwrap();
             writeln!(log_file_handle, "# --------------------------------------------------------").unwrap();
 
@@ -419,31 +419,31 @@ impl AttackTechnique for TrafficSignaling {
             match interface_check {
                 Ok(output) => {
                     if !output.status.success() {
-                        writeln!(log_file_handle, "WARNING: Interface {} not found, proceeding with simulation", interface).unwrap();
+                        writeln!(log_file_handle, "WARNING: Interface {interface} not found, proceeding with simulation").unwrap();
                     } else {
-                        writeln!(log_file_handle, "Interface {} found and available", interface).unwrap();
+                        writeln!(log_file_handle, "Interface {interface} found and available").unwrap();
                     }
                 },
                 Err(e) => {
-                    writeln!(log_file_handle, "Could not check interface: {}", e).unwrap();
+                    writeln!(log_file_handle, "Could not check interface: {e}").unwrap();
                 }
             }
 
             // Create the filter command based on type
             let filter_command = match filter_type.as_str() {
                 "iptables" => {
-                    format!("/usr/sbin/iptables -A INPUT -i {} -p tcp --dport {} -j LOG --log-prefix 'SIGNALING: ' 2>/dev/null || true", interface, target_port)
+                    format!("/usr/sbin/iptables -A INPUT -i {interface} -p tcp --dport {target_port} -j LOG --log-prefix 'SIGNALING: ' 2>/dev/null || true")
                 },
                 "tc_filter" => {
-                    format!("/usr/sbin/tc filter add dev {} protocol ip parent 1: prio 1 u32 match ip dport {} 0xffff 2>/dev/null || true", interface, target_port)
+                    format!("/usr/sbin/tc filter add dev {interface} protocol ip parent 1: prio 1 u32 match ip dport {target_port} 0xffff 2>/dev/null || true")
                 },
                 _ => {
-                    format!("/usr/sbin/iptables -A INPUT -i {} -p tcp --dport {} -j LOG --log-prefix 'SIGNALING: ' 2>/dev/null || true", interface, target_port)
+                    format!("/usr/sbin/iptables -A INPUT -i {interface} -p tcp --dport {target_port} -j LOG --log-prefix 'SIGNALING: ' 2>/dev/null || true")
                 }
             };
 
             writeln!(log_file_handle, "\n## Creating Cron Job for Traffic Signaling").unwrap();
-            writeln!(log_file_handle, "Filter command: {}", filter_command).unwrap();
+            writeln!(log_file_handle, "Filter command: {filter_command}").unwrap();
 
             // Get current crontab
             let status = Command::new("crontab")
@@ -458,7 +458,7 @@ impl AttackTechnique for TrafficSignaling {
             
             // Add our traffic signaling cron job
             crontab_content.push_str(&format!("\n# SignalBench Traffic Signaling (GoCortex.io) - {id}\n"));
-            crontab_content.push_str(&format!("{} {}\n", cron_schedule, filter_command));
+            crontab_content.push_str(&format!("{cron_schedule} {filter_command}\n"));
             
             // Write to temporary file
             let mut file = File::create(&temp_cron_file)
@@ -494,9 +494,9 @@ impl AttackTechnique for TrafficSignaling {
                     let exit_code = output.status.code().unwrap_or(-1);
                     let stderr = String::from_utf8_lossy(&output.stderr);
                     
-                    writeln!(log_file_handle, "Test execution exit code: {}", exit_code).unwrap();
+                    writeln!(log_file_handle, "Test execution exit code: {exit_code}").unwrap();
                     if !stderr.is_empty() {
-                        writeln!(log_file_handle, "Test execution stderr: {}", stderr).unwrap();
+                        writeln!(log_file_handle, "Test execution stderr: {stderr}").unwrap();
                     }
                     
                     if exit_code == 0 {
@@ -508,7 +508,7 @@ impl AttackTechnique for TrafficSignaling {
                     }
                 },
                 Err(e) => {
-                    writeln!(log_file_handle, "Failed to test filter command: {}", e).unwrap();
+                    writeln!(log_file_handle, "Failed to test filter command: {e}").unwrap();
                 }
             }
 
@@ -522,7 +522,7 @@ impl AttackTechnique for TrafficSignaling {
                     
                 if let Ok(output) = iptables_check {
                     let rules = String::from_utf8_lossy(&output.stdout);
-                    writeln!(log_file_handle, "Current iptables INPUT rules:\n{}", rules).unwrap();
+                    writeln!(log_file_handle, "Current iptables INPUT rules:\n{rules}").unwrap();
                 } else {
                     writeln!(log_file_handle, "Could not read iptables rules (may require root privileges)").unwrap();
                 }
@@ -534,18 +534,18 @@ impl AttackTechnique for TrafficSignaling {
                     
                 if let Ok(output) = tc_check {
                     let rules = String::from_utf8_lossy(&output.stdout);
-                    writeln!(log_file_handle, "Current tc filters on {}:\n{}", interface, rules).unwrap();
+                    writeln!(log_file_handle, "Current tc filters on {interface}:\n{rules}").unwrap();
                 } else {
                     writeln!(log_file_handle, "Could not read tc filters (may require root privileges)").unwrap();
                 }
             }
 
-            info!("Traffic signaling cron job installed for {}:{}", interface, target_port);
+            info!("Traffic signaling cron job installed for {interface}:{target_port}");
             
             Ok(SimulationResult {
                 technique_id: self.info().id,
                 success: true,
-                message: format!("Traffic signaling cron job installed on {}:{} using {}", interface, target_port, filter_type),
+                message: format!("Traffic signaling cron job installed on {interface}:{target_port} using {filter_type}"),
                 artifacts: vec![log_file, temp_cron_file, cron_job_id, format!("{}|{}|{}|{}", rule_artifact, filter_type, interface, target_port)],
                 cleanup_required: true,
             })
@@ -635,7 +635,7 @@ impl AttackTechnique for TrafficSignaling {
                         match filter_type {
                             "iptables" => {
                                 // Remove the specific LOG rule we added
-                                let delete_cmd = format!("/usr/sbin/iptables -D INPUT -i {} -p tcp --dport {} -j LOG --log-prefix 'SIGNALING: ' 2>/dev/null || true", interface, target_port);
+                                let delete_cmd = format!("/usr/sbin/iptables -D INPUT -i {interface} -p tcp --dport {target_port} -j LOG --log-prefix 'SIGNALING: ' 2>/dev/null || true");
                                 let delete_result = Command::new("bash")
                                     .arg("-c")
                                     .arg(&delete_cmd)
@@ -643,13 +643,13 @@ impl AttackTechnique for TrafficSignaling {
                                     .await;
                                     
                                 match delete_result {
-                                    Ok(_) => info!("Attempted to remove iptables rule for {}:{}", interface, target_port),
-                                    Err(e) => warn!("Failed to execute iptables delete command: {}", e),
+                                    Ok(_) => info!("Attempted to remove iptables rule for {interface}:{target_port}"),
+                                    Err(e) => warn!("Failed to execute iptables delete command: {e}"),
                                 }
                             },
                             "tc_filter" => {
                                 // Remove tc filter (more complex, try to find and delete matching filters)
-                                let delete_cmd = format!("/usr/sbin/tc filter del dev {} protocol ip parent 1: prio 1 2>/dev/null || true", interface);
+                                let delete_cmd = format!("/usr/sbin/tc filter del dev {interface} protocol ip parent 1: prio 1 2>/dev/null || true");
                                 let delete_result = Command::new("bash")
                                     .arg("-c")
                                     .arg(&delete_cmd)
@@ -657,12 +657,12 @@ impl AttackTechnique for TrafficSignaling {
                                     .await;
                                     
                                 match delete_result {
-                                    Ok(_) => info!("Attempted to remove tc filter for {}", interface),
-                                    Err(e) => warn!("Failed to execute tc delete command: {}", e),
+                                    Ok(_) => info!("Attempted to remove tc filter for {interface}"),
+                                    Err(e) => warn!("Failed to execute tc delete command: {e}"),
                                 }
                             },
                             _ => {
-                                warn!("Unknown filter type for cleanup: {}", filter_type);
+                                warn!("Unknown filter type for cleanup: {filter_type}");
                             }
                         }
                     }
@@ -678,6 +678,169 @@ impl AttackTechnique for TrafficSignaling {
                 }
             }
             
+            Ok(())
+        })
+    }
+}
+pub struct SuspiciousGitHubToolTransfer {}
+
+#[async_trait]
+impl AttackTechnique for SuspiciousGitHubToolTransfer {
+    fn info(&self) -> Technique {
+        Technique {
+            id: "T1105.001".to_string(),
+            name: "Suspicious GitHub Tool Transfer".to_string(),
+            description: "Generates telemetry for curl requests to suspicious fictional GitHub repositories with hacker-themed names".to_string(),
+            category: "COMMAND_AND_CONTROL".to_string(),
+            parameters: vec![
+                TechniqueParameter {
+                    name: "repo_count".to_string(),
+                    description: "Number of suspicious GitHub repos to attempt downloading from".to_string(),
+                    required: false,
+                    default: Some("5".to_string()),
+                },
+                TechniqueParameter {
+                    name: "log_file".to_string(),
+                    description: "Path to save download attempt log".to_string(),
+                    required: false,
+                    default: Some("/tmp/signalbench_github_downloads.log".to_string()),
+                },
+            ],
+            detection: "Monitor for curl/wget requests to GitHub repositories with suspicious names or patterns indicating potential tool downloads".to_string(),
+            cleanup_support: true,
+            platforms: vec!["Linux".to_string()],
+            permissions: vec!["user".to_string()],
+        }
+    }
+
+    fn execute<'a>(
+        &'a self,
+        config: &'a TechniqueConfig,
+        dry_run: bool,
+    ) -> ExecuteFuture<'a> {
+        use rand::seq::SliceRandom;
+        
+        let repo_count: usize = config
+            .parameters
+            .get("repo_count")
+            .unwrap_or(&"5".to_string())
+            .parse()
+            .unwrap_or(5);
+            
+        let log_file = config
+            .parameters
+            .get("log_file")
+            .unwrap_or(&"/tmp/signalbench_github_downloads.log".to_string())
+            .clone();
+
+        // Suspicious GitHub repository suffixes for simulation
+        let suspicious_suffixes = vec![
+            "exploit-kit", "root-shell", "payload-gen", "backdoor-tool", "credential-dumper",
+            "ransomware", "keylogger", "botnet-client", "webshell", "privesc-tools",
+            "password-cracker", "network-scanner", "c2-framework", "trojan-builder", "stealer",
+            "rat-client", "rootkit-installer", "crypto-miner", "exfil-toolkit", "persistence-engine",
+        ];
+
+        // Generate random selections BEFORE async block
+        let mut rng = rand::thread_rng();
+        let mut repo_list = Vec::new();
+        for _ in 0..repo_count {
+            let suffix = suspicious_suffixes.choose(&mut rng).unwrap_or(&"backdoor-tool");
+            let repo_url = format!("https://github.com/simonsigre/{suffix}");
+            repo_list.push((suffix.to_string(), repo_url));
+        }
+
+        Box::pin(async move {
+
+            if dry_run {
+                let repos: Vec<String> = repo_list.iter()
+                    .map(|(name, _)| name.clone())
+                    .collect();
+                info!("[DRY RUN] Would attempt to download from GitHub repos: {}", repos.join(", "));
+                return Ok(SimulationResult {
+                    technique_id: self.info().id,
+                    success: true,
+                    message: format!("DRY RUN: Would attempt {repo_count} GitHub downloads"),
+                    artifacts: vec![log_file],
+                    cleanup_required: false,
+                });
+            }
+
+            // Create the log file
+            let mut log = File::create(&log_file)
+                .map_err(|e| format!("Failed to create log file: {e}"))?;
+            
+            writeln!(log, "=== SignalBench Suspicious GitHub Tool Transfer ===")
+                .map_err(|e| format!("Failed to write to log file: {e}"))?;
+            writeln!(log, "Time: {}", chrono::Local::now().to_rfc3339())
+                .map_err(|e| format!("Failed to write to log file: {e}"))?;
+            writeln!(log, "Repository count: {repo_count}")
+                .map_err(|e| format!("Failed to write to log file: {e}"))?;
+            writeln!(log)
+                .map_err(|e| format!("Failed to write to log file: {e}"))?;
+
+            // Attempt to curl each suspicious GitHub repo
+            for (repo_name, repo_url) in &repo_list {
+                writeln!(log, "=== Attempting download: {repo_name} ===")
+                    .map_err(|e| format!("Failed to write to log file: {e}"))?;
+                writeln!(log, "URL: {repo_url}")
+                    .map_err(|e| format!("Failed to write to log file: {e}"))?;
+
+                info!("Attempting suspicious GitHub download: {repo_url}");
+                
+                // Execute curl command (will fail as these are fictional repos, but generates telemetry)
+                let output = Command::new("curl")
+                    .args(["-s", "-I", "-L", "--max-time", "5", repo_url])
+                    .output()
+                    .await;
+
+                match output {
+                    Ok(output) => {
+                        writeln!(log, "Exit Code: {}", output.status.code().unwrap_or(-1))
+                            .map_err(|e| format!("Failed to write to log file: {e}"))?;
+                        writeln!(log, "Response:")
+                            .map_err(|e| format!("Failed to write to log file: {e}"))?;
+                        log.write_all(&output.stdout)
+                            .map_err(|e| format!("Failed to write to log file: {e}"))?;
+                        if !output.stderr.is_empty() {
+                            writeln!(log, "Errors:")
+                                .map_err(|e| format!("Failed to write to log file: {e}"))?;
+                            log.write_all(&output.stderr)
+                                .map_err(|e| format!("Failed to write to log file: {e}"))?;
+                        }
+                    },
+                    Err(e) => {
+                        writeln!(log, "Error executing curl: {e}")
+                            .map_err(|e| format!("Failed to write to log file: {e}"))?;
+                    }
+                }
+
+                writeln!(log)
+                    .map_err(|e| format!("Failed to write to log file: {e}"))?;
+            }
+
+            info!("Completed {repo_count} suspicious GitHub download attempts");
+            
+            Ok(SimulationResult {
+                technique_id: self.info().id,
+                success: true,
+                message: format!("Successfully attempted {repo_count} suspicious GitHub downloads"),
+                artifacts: vec![log_file],
+                cleanup_required: true,
+            })
+        })
+    }
+
+    fn cleanup<'a>(&'a self, artifacts: &'a [String]) -> CleanupFuture<'a> {
+        Box::pin(async move {
+            for artifact in artifacts {
+                if Path::new(artifact).exists() {
+                    match fs::remove_file(artifact) {
+                        Ok(_) => info!("Removed artifact: {artifact}"),
+                        Err(e) => warn!("Failed to remove artifact {artifact}: {e}"),
+                    }
+                }
+            }
             Ok(())
         })
     }

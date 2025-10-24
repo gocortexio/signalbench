@@ -1,6 +1,6 @@
 [package]
 name = "signalbench"
-version = "1.1.1"
+version = "1.4.3"
 edition = "2021"
 authors = ["Simon Sigre <info@gocortex.io>"]
 description = "Endpoint telemetry generator for security analytics, research, and training using MITRE ATT&CK techniques"

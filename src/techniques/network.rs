@@ -217,7 +217,14 @@ impl AttackTechnique for NetworkServiceDiscovery {
         Box::pin(async move {
             for artifact in artifacts {
                 if Path::new(artifact).exists() {
-                    if let Err(e) = std::fs::remove_file(artifact) {
+                    // Check if it's a directory
+                    if Path::new(artifact).is_dir() {
+                        if let Err(e) = std::fs::remove_dir_all(artifact) {
+                            error!("Failed to remove directory {artifact}: {e}");
+                        } else {
+                            debug!("Removed directory: {artifact}");
+                        }
+                    } else if let Err(e) = std::fs::remove_file(artifact) {
                         error!("Failed to remove artifact {artifact}: {e}");
                     } else {
                         debug!("Removed artifact: {artifact}");
@@ -368,7 +375,14 @@ impl AttackTechnique for SystemNetworkConnectionsDiscovery {
         Box::pin(async move {
             for artifact in artifacts {
                 if Path::new(artifact).exists() {
-                    if let Err(e) = std::fs::remove_file(artifact) {
+                    // Check if it's a directory
+                    if Path::new(artifact).is_dir() {
+                        if let Err(e) = std::fs::remove_dir_all(artifact) {
+                            error!("Failed to remove directory {artifact}: {e}");
+                        } else {
+                            debug!("Removed directory: {artifact}");
+                        }
+                    } else if let Err(e) = std::fs::remove_file(artifact) {
                         error!("Failed to remove artifact {artifact}: {e}");
                     } else {
                         debug!("Removed artifact: {artifact}");
@@ -724,7 +738,14 @@ impl AttackTechnique for ExfiltrationOverAlternativeProtocol {
         Box::pin(async move {
             for artifact in artifacts {
                 if Path::new(artifact).exists() {
-                    if let Err(e) = std::fs::remove_file(artifact) {
+                    // Check if it's a directory
+                    if Path::new(artifact).is_dir() {
+                        if let Err(e) = std::fs::remove_dir_all(artifact) {
+                            error!("Failed to remove directory {artifact}: {e}");
+                        } else {
+                            debug!("Removed directory: {artifact}");
+                        }
+                    } else if let Err(e) = std::fs::remove_file(artifact) {
                         error!("Failed to remove artifact {artifact}: {e}");
                     } else {
                         debug!("Removed artifact: {artifact}");
@@ -1193,7 +1214,14 @@ impl AttackTechnique for NonApplicationLayerProtocol {
         Box::pin(async move {
             for artifact in artifacts {
                 if Path::new(artifact).exists() {
-                    if let Err(e) = std::fs::remove_file(artifact) {
+                    // Check if it's a directory
+                    if Path::new(artifact).is_dir() {
+                        if let Err(e) = std::fs::remove_dir_all(artifact) {
+                            error!("Failed to remove directory {artifact}: {e}");
+                        } else {
+                            debug!("Removed directory: {artifact}");
+                        }
+                    } else if let Err(e) = std::fs::remove_file(artifact) {
                         error!("Failed to remove artifact {artifact}: {e}");
                     } else {
                         debug!("Removed artifact: {artifact}");

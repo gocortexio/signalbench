@@ -240,6 +240,44 @@
         "output_file": "/tmp/custom_discovered_credentials.log"
       },
       "cleanup_after": true
+    },
+    "T1036.003": {
+      "parameters": {
+        "target_path": "/tmp/custom_crond",
+        "execute_masqueraded": "true",
+        "log_file": "/tmp/custom_masquerade.log"
+      },
+      "cleanup_after": true
+    },
+    "T1059.004.001": {
+      "parameters": {
+        "command_count": "10",
+        "log_file": "/tmp/custom_uncommon_commands.log"
+      },
+      "cleanup_after": true
+    },
+    "T1105.001": {
+      "parameters": {
+        "repo_count": "8",
+        "log_file": "/tmp/custom_github_downloads.log"
+      },
+      "cleanup_after": true
+    },
+    "T1110.002": {
+      "parameters": {
+        "hydra_path": "/tmp/custom_hydra",
+        "target_service": "ftp",
+        "log_file": "/tmp/custom_hydra_log"
+      },
+      "cleanup_after": true
+    },
+    "S1109": {
+      "parameters": {
+        "timeout": "5",
+        "memory_size": "32",
+        "scan_interval": "1"
+      },
+      "cleanup_after": true
     }
   },
   "global": {

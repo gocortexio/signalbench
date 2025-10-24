@@ -383,7 +383,7 @@ impl AttackTechnique for ProcFilesystemCredentialDumping {
         Technique {
             id: "T1003.007".to_string(),
             name: "OS Credential Dumping: Proc Filesystem".to_string(),
-            description: "Uses dd utility and /proc filesystem to analyze process memory for credential patterns".to_string(),
+            description: "Uses dd utility and /proc filesystem to analyse process memory for credential patterns".to_string(),
             category: "credential_access".to_string(),
             parameters: vec![
                 TechniqueParameter {
@@ -400,7 +400,7 @@ impl AttackTechnique for ProcFilesystemCredentialDumping {
                 },
                 TechniqueParameter {
                     name: "max_processes".to_string(),
-                    description: "Maximum number of processes to analyze".to_string(),
+                    description: "Maximum number of processes to analyse".to_string(),
                     required: false,
                     default: Some("5".to_string()),
                 },
@@ -466,14 +466,14 @@ impl AttackTechnique for ProcFilesystemCredentialDumping {
             let dump_dir = format!("/tmp/signalbench_proc_dumps_{session_id}");
             
             if dry_run {
-                info!("[DRY RUN] Would analyze /proc filesystem for credentials");
+                info!("[DRY RUN] Would analyse /proc filesystem for credentials");
                 info!("[DRY RUN] Target processes: {target_processes}");
                 info!("[DRY RUN] Memory dump size per process: {memory_dump_size} bytes");
                 info!("[DRY RUN] Would create dumps in: {dump_dir}");
                 return Ok(SimulationResult {
                     technique_id: self.info().id,
                     success: true,
-                    message: format!("DRY RUN: Would analyze /proc filesystem for {max_processes} target processes"),
+                    message: format!("DRY RUN: Would analyse /proc filesystem for {max_processes} target processes"),
                     artifacts: vec![log_file, dump_dir],
                     cleanup_required: false,
                 });
@@ -489,10 +489,10 @@ impl AttackTechnique for ProcFilesystemCredentialDumping {
                 
             writeln!(log_file_handle, "# SignalBench /proc Filesystem Credential Dumping").unwrap();
             writeln!(log_file_handle, "# MITRE ATT&CK: T1003.007").unwrap();
-            writeln!(log_file_handle, "# Target Processes: {}", target_processes).unwrap();
-            writeln!(log_file_handle, "# Memory Dump Size: {} bytes", memory_dump_size).unwrap();
-            writeln!(log_file_handle, "# Search Patterns: {}", search_patterns).unwrap();
-            writeln!(log_file_handle, "# Session ID: {}", session_id).unwrap();
+            writeln!(log_file_handle, "# Target Processes: {target_processes}").unwrap();
+            writeln!(log_file_handle, "# Memory Dump Size: {memory_dump_size} bytes").unwrap();
+            writeln!(log_file_handle, "# Search Patterns: {search_patterns}").unwrap();
+            writeln!(log_file_handle, "# Session ID: {session_id}").unwrap();
             writeln!(log_file_handle, "# Timestamp: {}", chrono::Local::now()).unwrap();
             writeln!(log_file_handle, "# --------------------------------------------------------").unwrap();
 
@@ -514,14 +514,14 @@ impl AttackTechnique for ProcFilesystemCredentialDumping {
                     if let Ok(file_name) = entry.file_name().into_string() {
                         if let Ok(pid) = file_name.parse::<u32>() {
                             // Try to read process name
-                            let comm_path = format!("/proc/{}/comm", pid);
+                            let comm_path = format!("/proc/{pid}/comm");
                             if let Ok(comm_content) = fs::read_to_string(&comm_path) {
                                 let process_name = comm_content.trim();
                                 
                                 // Check if this process is in our target list
                                 if target_process_list.iter().any(|&target| process_name.contains(target)) {
                                     found_processes.push((pid, process_name.to_string()));
-                                    writeln!(log_file_handle, "Found target process: {} (PID: {})", process_name, pid).unwrap();
+                                    writeln!(log_file_handle, "Found target process: {process_name} (PID: {pid})").unwrap();
                                 }
                             }
                         }
@@ -535,7 +535,7 @@ impl AttackTechnique for ProcFilesystemCredentialDumping {
             if found_processes.is_empty() {
                 let current_pid = std::process::id();
                 found_processes.push((current_pid, "signalbench".to_string()));
-                writeln!(log_file_handle, "No target processes found, using current process: signalbench (PID: {})", current_pid).unwrap();
+                writeln!(log_file_handle, "No target processes found, using current process: signalbench (PID: {current_pid})").unwrap();
             }
 
             let search_pattern_list: Vec<&str> = search_patterns.split(',').collect();
@@ -543,15 +543,15 @@ impl AttackTechnique for ProcFilesystemCredentialDumping {
 
             // Analyze each process
             for (pid, process_name) in &found_processes {
-                writeln!(log_file_handle, "\n## Analyzing Process: {} (PID: {})", process_name, pid).unwrap();
+                writeln!(log_file_handle, "\n## Analyzing Process: {process_name} (PID: {pid})").unwrap();
                 
                 // Read memory maps
-                let maps_path = format!("/proc/{}/maps", pid);
+                let maps_path = format!("/proc/{pid}/maps");
                 let maps_result = fs::read_to_string(&maps_path);
                 
                 match maps_result {
                     Ok(maps_content) => {
-                        writeln!(log_file_handle, "Successfully read memory maps for PID {}", pid).unwrap();
+                        writeln!(log_file_handle, "Successfully read memory maps for PID {pid}").unwrap();
                         
                         // Parse readable memory regions
                         let readable_regions: Vec<_> = maps_content
@@ -572,14 +572,14 @@ impl AttackTechnique for ProcFilesystemCredentialDumping {
                                     
                                     if let Ok(start_offset) = u64::from_str_radix(start_addr, 16) {
                                         // Use dd to copy memory segment
-                                        let mem_dump_file = format!("{}/proc_{}_region_{}.dump", dump_dir, pid, index);
+                                        let mem_dump_file = format!("{dump_dir}/proc_{pid}_region_{index}.dump");
                                         
-                                        writeln!(log_file_handle, "Attempting dd memory extraction from offset 0x{:x}", start_offset).unwrap();
+                                        writeln!(log_file_handle, "Attempting dd memory extraction from offset 0x{start_offset:x}").unwrap();
                                         
                                         let dd_command = Command::new("dd")
-                                            .arg(format!("if=/proc/{}/mem", pid))
-                                            .arg(format!("of={}", mem_dump_file))
-                                            .arg(format!("bs={}", memory_dump_size))
+                                            .arg(format!("if=/proc/{pid}/mem"))
+                                            .arg(format!("of={mem_dump_file}"))
+                                            .arg(format!("bs={memory_dump_size}"))
                                             .arg("count=1")
                                             .arg(format!("skip={}", start_offset / memory_dump_size as u64))
                                             .arg("conv=noerror")
@@ -589,7 +589,7 @@ impl AttackTechnique for ProcFilesystemCredentialDumping {
                                         match dd_command {
                                             Ok(output) => {
                                                 let exit_code = output.status.code().unwrap_or(-1);
-                                                writeln!(log_file_handle, "dd command exit code: {}", exit_code).unwrap();
+                                                writeln!(log_file_handle, "dd command exit code: {exit_code}").unwrap();
                                                 
                                                 if exit_code == 0 && Path::new(&mem_dump_file).exists() {
                                                     // Read the dumped memory and search for patterns
@@ -612,7 +612,7 @@ impl AttackTechnique for ProcFilesystemCredentialDumping {
                                                                     "auth" => "basic_auth=dGVzdDpwYXNzd29yZA==",
                                                                     _ => "credential_data=simulation_value"
                                                                 };
-                                                                writeln!(log_file_handle, "Context: {}", cred_context).unwrap();
+                                                                writeln!(log_file_handle, "Context: {cred_context}").unwrap();
                                                             }
                                                         }
                                                         
@@ -624,7 +624,7 @@ impl AttackTechnique for ProcFilesystemCredentialDumping {
                                                 }
                                             },
                                             Err(e) => {
-                                                writeln!(log_file_handle, "Failed to execute dd command: {}", e).unwrap();
+                                                writeln!(log_file_handle, "Failed to execute dd command: {e}").unwrap();
                                             }
                                         }
                                     }
@@ -633,7 +633,7 @@ impl AttackTechnique for ProcFilesystemCredentialDumping {
                         }
                     },
                     Err(e) => {
-                        writeln!(log_file_handle, "Failed to read memory maps for PID {}: {}", pid, e).unwrap();
+                        writeln!(log_file_handle, "Failed to read memory maps for PID {pid}: {e}").unwrap();
                     }
                 }
                 
@@ -643,17 +643,17 @@ impl AttackTechnique for ProcFilesystemCredentialDumping {
 
             // Generate summary
             writeln!(log_file_handle, "\n## Analysis Summary").unwrap();
-            writeln!(log_file_handle, "Processes analyzed: {}", found_processes.len()).unwrap();
-            writeln!(log_file_handle, "Total credential patterns found: {}", total_credentials_found).unwrap();
-            writeln!(log_file_handle, "Memory dumps stored in: {}", dump_dir).unwrap();
+            writeln!(log_file_handle, "Processes analysed: {}", found_processes.len()).unwrap();
+            writeln!(log_file_handle, "Total credential patterns found: {total_credentials_found}").unwrap();
+            writeln!(log_file_handle, "Memory dumps stored in: {dump_dir}").unwrap();
             writeln!(log_file_handle, "\nNOTE: All credential findings are simulated for telemetry generation").unwrap();
 
-            info!("/proc filesystem credential analysis complete. Found {} credential patterns.", total_credentials_found);
+            info!("/proc filesystem credential analysis complete. Found {total_credentials_found} credential patterns.");
             
             Ok(SimulationResult {
                 technique_id: self.info().id,
                 success: true,
-                message: format!("Successfully analyzed {} processes and found {} credential patterns using /proc filesystem", found_processes.len(), total_credentials_found),
+                message: format!("Successfully analysed {} processes and found {} credential patterns using /proc filesystem", found_processes.len(), total_credentials_found),
                 artifacts: vec![log_file, dump_dir],
                 cleanup_required: true,
             })
@@ -678,6 +678,232 @@ impl AttackTechnique for ProcFilesystemCredentialDumping {
                         } else {
                             info!("Removed artifact: {artifact}");
                         }
+                    }
+                }
+            }
+            Ok(())
+        })
+    }
+}
+
+pub struct HydraBruteForceSimulation {}
+
+#[async_trait]
+impl AttackTechnique for HydraBruteForceSimulation {
+    fn info(&self) -> Technique {
+        Technique {
+            id: "T1110.002".to_string(),
+            name: "Hydra Brute Force Tool Simulation".to_string(),
+            description: "Simulates execution of the Hydra password brute-forcing tool by downloading Wildfire ELF test file and renaming it as 'hydra'".to_string(),
+            category: "credential_access".to_string(),
+            parameters: vec![
+                TechniqueParameter {
+                    name: "hydra_path".to_string(),
+                    description: "Path where the simulated hydra binary will be saved".to_string(),
+                    required: false,
+                    default: Some("/tmp/hydra".to_string()),
+                },
+                TechniqueParameter {
+                    name: "target_service".to_string(),
+                    description: "Simulated target service (ssh, ftp, http, etc.)".to_string(),
+                    required: false,
+                    default: Some("ssh".to_string()),
+                },
+                TechniqueParameter {
+                    name: "log_file".to_string(),
+                    description: "Path to save brute force attempt log".to_string(),
+                    required: false,
+                    default: Some("/tmp/signalbench_hydra_log".to_string()),
+                },
+            ],
+            detection: "Monitor for execution of password brute-forcing tools like hydra, especially against network services. Look for repeated authentication attempts from single sources.".to_string(),
+            cleanup_support: true,
+            platforms: vec!["Linux".to_string()],
+            permissions: vec!["user".to_string()],
+        }
+    }
+
+    fn execute<'a>(
+        &'a self,
+        config: &'a TechniqueConfig,
+        dry_run: bool,
+    ) -> ExecuteFuture<'a> {
+        Box::pin(async move {
+            let hydra_path = config
+                .parameters
+                .get("hydra_path")
+                .unwrap_or(&"/tmp/hydra".to_string())
+                .clone();
+                
+            let target_service = config
+                .parameters
+                .get("target_service")
+                .unwrap_or(&"ssh".to_string())
+                .clone();
+                
+            let log_file = config
+                .parameters
+                .get("log_file")
+                .unwrap_or(&"/tmp/signalbench_hydra_log".to_string())
+                .clone();
+                
+            if dry_run {
+                info!("[DRY RUN] Would download Wildfire ELF test file and save as hydra at: {hydra_path}");
+                info!("[DRY RUN] Would simulate brute force attack against {target_service} service");
+                return Ok(SimulationResult {
+                    technique_id: self.info().id,
+                    success: true,
+                    message: format!("DRY RUN: Would simulate Hydra brute force against {target_service}"),
+                    artifacts: vec![log_file, hydra_path],
+                    cleanup_required: false,
+                });
+            }
+
+            // Create the log file
+            let mut log = File::create(&log_file)
+                .map_err(|e| format!("Failed to create log file: {e}"))?;
+            
+            writeln!(log, "=== SignalBench Hydra Brute Force Tool Simulation ===")
+                .map_err(|e| format!("Failed to write to log file: {e}"))?;
+            writeln!(log, "Time: {}", chrono::Local::now().to_rfc3339())
+                .map_err(|e| format!("Failed to write to log file: {e}"))?;
+            writeln!(log, "Hydra path: {hydra_path}")
+                .map_err(|e| format!("Failed to write to log file: {e}"))?;
+            writeln!(log, "Target service: {target_service}")
+                .map_err(|e| format!("Failed to write to log file: {e}"))?;
+            writeln!(log)
+                .map_err(|e| format!("Failed to write to log file: {e}"))?;
+
+            // Download Wildfire ELF test file
+            info!("Downloading Wildfire ELF test file to simulate hydra binary");
+            writeln!(log, "=== Downloading Wildfire ELF test file ===")
+                .map_err(|e| format!("Failed to write to log file: {e}"))?;
+            
+            let download_output = Command::new("curl")
+                .args([
+                    "-L",
+                    "-o", &hydra_path,
+                    "--max-time", "30",
+                    "https://wildfire.paloaltonetworks.com/publicapi/test/elf"
+                ])
+                .output()
+                .await
+                .map_err(|e| format!("Failed to download Wildfire test file: {e}"))?;
+
+            writeln!(log, "Download Exit Code: {}", download_output.status.code().unwrap_or(-1))
+                .map_err(|e| format!("Failed to write to log file: {e}"))?;
+            
+            if !download_output.status.success() {
+                let error_msg = String::from_utf8_lossy(&download_output.stderr);
+                writeln!(log, "Download Error: {error_msg}")
+                    .map_err(|e| format!("Failed to write to log file: {e}"))?;
+                return Err(format!("Failed to download Wildfire test file: {error_msg}"));
+            }
+
+            writeln!(log, "Successfully downloaded test file and saved as 'hydra'")
+                .map_err(|e| format!("Failed to write to log file: {e}"))?;
+
+            // Make the file executable
+            let chmod_output = Command::new("chmod")
+                .args(["+x", &hydra_path])
+                .output()
+                .await
+                .map_err(|e| format!("Failed to make hydra executable: {e}"))?;
+
+            if !chmod_output.status.success() {
+                warn!("Failed to make hydra executable, but continuing");
+            }
+
+            // Simulate hydra execution (will fail as it's not real hydra, but generates telemetry)
+            writeln!(log)
+                .map_err(|e| format!("Failed to write to log file: {e}"))?;
+            writeln!(log, "=== Simulating Hydra Execution ===")
+                .map_err(|e| format!("Failed to write to log file: {e}"))?;
+            writeln!(log, "Generated command patterns for detection telemetry:")
+                .map_err(|e| format!("Failed to write to log file: {e}"))?;
+            writeln!(log)
+                .map_err(|e| format!("Failed to write to log file: {e}"))?;
+            
+            // Pattern 1: Positional format with 'server' username
+            writeln!(log, "Pattern 1 (Positional): {hydra_path} -l server -p TestPass123 192.168.1.100 {target_service}")
+                .map_err(|e| format!("Failed to write to log file: {e}"))?;
+            
+            // Pattern 2: URL format with admin username
+            writeln!(log, "Pattern 2 (URL format): {hydra_path} -l admin -p TestPass123 {target_service}://192.168.1.100")
+                .map_err(|e| format!("Failed to write to log file: {e}"))?;
+            
+            // Pattern 3: Wordlist format with URL notation
+            writeln!(log, "Pattern 3 (Wordlist): {hydra_path} -l admin -P /tmp/passwords.txt {target_service}://192.168.1.100")
+                .map_err(|e| format!("Failed to write to log file: {e}"))?;
+            
+            writeln!(log)
+                .map_err(|e| format!("Failed to write to log file: {e}"))?;
+            
+            info!("Simulating hydra brute force execution against {target_service} service with multiple command patterns");
+            
+            // Try to execute (will likely fail, but that's expected)
+            let exec_output = Command::new(&hydra_path)
+                .args(["--help"])
+                .output()
+                .await;
+
+            match exec_output {
+                Ok(output) => {
+                    writeln!(log, "Execution Exit Code: {}", output.status.code().unwrap_or(-1))
+                        .map_err(|e| format!("Failed to write to log file: {e}"))?;
+                    if !output.stdout.is_empty() {
+                        writeln!(log, "Output:")
+                            .map_err(|e| format!("Failed to write to log file: {e}"))?;
+                        log.write_all(&output.stdout)
+                            .map_err(|e| format!("Failed to write to log file: {e}"))?;
+                    }
+                    if !output.stderr.is_empty() {
+                        writeln!(log, "Errors:")
+                            .map_err(|e| format!("Failed to write to log file: {e}"))?;
+                        log.write_all(&output.stderr)
+                            .map_err(|e| format!("Failed to write to log file: {e}"))?;
+                    }
+                },
+                Err(e) => {
+                    writeln!(log, "Execution attempt generated error (expected): {e}")
+                        .map_err(|e| format!("Failed to write to log file: {e}"))?;
+                }
+            }
+
+            writeln!(log)
+                .map_err(|e| format!("Failed to write to log file: {e}"))?;
+            writeln!(log, "=== Simulation Notes ===")
+                .map_err(|e| format!("Failed to write to log file: {e}"))?;
+            writeln!(log, "This simulation creates telemetry for:")
+                .map_err(|e| format!("Failed to write to log file: {e}"))?;
+            writeln!(log, "1. Download of a file named 'hydra' (Wildfire ELF test file)")
+                .map_err(|e| format!("Failed to write to log file: {e}"))?;
+            writeln!(log, "2. Making the file executable")
+                .map_err(|e| format!("Failed to write to log file: {e}"))?;
+            writeln!(log, "3. Execution attempt of a binary named 'hydra'")
+                .map_err(|e| format!("Failed to write to log file: {e}"))?;
+            writeln!(log, "4. Network traffic to Palo Alto Wildfire (benign test file source)")
+                .map_err(|e| format!("Failed to write to log file: {e}"))?;
+
+            info!("Successfully simulated Hydra brute force tool execution");
+            
+            Ok(SimulationResult {
+                technique_id: self.info().id,
+                success: true,
+                message: format!("Successfully simulated Hydra brute force tool against {target_service} service"),
+                artifacts: vec![log_file, hydra_path],
+                cleanup_required: true,
+            })
+        })
+    }
+
+    fn cleanup<'a>(&'a self, artifacts: &'a [String]) -> CleanupFuture<'a> {
+        Box::pin(async move {
+            for artifact in artifacts {
+                if Path::new(artifact).exists() {
+                    match fs::remove_file(artifact) {
+                        Ok(_) => info!("Removed artifact: {artifact}"),
+                        Err(e) => warn!("Failed to remove artifact {artifact}: {e}"),
                     }
                 }
             }

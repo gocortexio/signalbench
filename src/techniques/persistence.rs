@@ -2,7 +2,7 @@ use crate::config::TechniqueConfig;
 use crate::techniques::{AttackTechnique, SimulationResult, Technique, TechniqueParameter};
 use crate::techniques::{ExecuteFuture, CleanupFuture};
 use async_trait::async_trait;
-use log::{info, warn};
+use log::{debug, info, warn};
 use std::fs::{self, File};
 use std::io::Write;
 use std::path::Path;
@@ -117,6 +117,26 @@ impl AttackTechnique for StartupFolder {
                     }
                 }
             }
+            
+            // Try to remove autostart directory if it's empty
+            if let Ok(home_dir) = std::env::var("HOME") {
+                let autostart_dir = format!("{home_dir}/.config/autostart");
+                if Path::new(&autostart_dir).exists() {
+                    match std::fs::read_dir(&autostart_dir) {
+                        Ok(entries) => {
+                            if entries.count() == 0 {
+                                if let Err(e) = std::fs::remove_dir(&autostart_dir) {
+                                    debug!("Could not remove empty autostart directory: {e}");
+                                } else {
+                                    info!("Removed empty autostart directory");
+                                }
+                            }
+                        }
+                        Err(e) => debug!("Could not read autostart directory: {e}"),
+                    }
+                }
+            }
+            
             Ok(())
         })
     }
@@ -279,6 +299,16 @@ impl AttackTechnique for CronJob {
                 }
             }
             
+            // Remove the output file created by the cron job command
+            let output_file = "/tmp/signalbench_test_cron";
+            if Path::new(output_file).exists() {
+                if let Err(e) = fs::remove_file(output_file) {
+                    warn!("Failed to remove cron job output file {output_file}: {e}");
+                } else {
+                    info!("Removed cron job output file: {output_file}");
+                }
+            }
+            
             Ok(())
         })
     }
@@ -438,6 +468,24 @@ impl AttackTechnique for WebShellDeployment {
                     match fs::remove_file(artifact) {
                         Ok(_) => info!("Removed web shell artifact: {artifact}"),
                         Err(e) => warn!("Failed to remove web shell artifact {artifact}: {e}"),
+                    }
+                    
+                    // Try to remove parent directory if empty
+                    if let Some(parent) = Path::new(artifact).parent() {
+                        if parent.exists() {
+                            match std::fs::read_dir(parent) {
+                                Ok(entries) => {
+                                    if entries.count() == 0 {
+                                        if let Err(e) = std::fs::remove_dir(parent) {
+                                            debug!("Could not remove empty web root directory: {e}");
+                                        } else {
+                                            info!("Removed empty web root directory: {}", parent.display());
+                                        }
+                                    }
+                                }
+                                Err(e) => debug!("Could not read web root directory: {e}"),
+                            }
+                        }
                     }
                 }
             }

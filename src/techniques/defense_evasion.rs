@@ -353,3 +353,166 @@ impl AttackTechnique for ModifyEnvironmentVariable {
         })
     }
 }
+pub struct MasqueradingAsCrond {}
+
+#[async_trait]
+impl AttackTechnique for MasqueradingAsCrond {
+    fn info(&self) -> Technique {
+        Technique {
+            id: "T1036.003".to_string(),
+            name: "Masquerading as Linux Crond Process".to_string(),
+            description: "Generates telemetry for process masquerading by copying /bin/sh to a file named 'crond'".to_string(),
+            category: "defense_evasion".to_string(),
+            parameters: vec![
+                TechniqueParameter {
+                    name: "target_path".to_string(),
+                    description: "Path where the masquerading binary will be created".to_string(),
+                    required: false,
+                    default: Some("/tmp/crond".to_string()),
+                },
+                TechniqueParameter {
+                    name: "execute_masqueraded".to_string(),
+                    description: "Whether to execute the masqueraded binary (true/false)".to_string(),
+                    required: false,
+                    default: Some("true".to_string()),
+                },
+                TechniqueParameter {
+                    name: "log_file".to_string(),
+                    description: "File to save masquerading log to".to_string(),
+                    required: false,
+                    default: Some("/tmp/signalbench_masquerade_log".to_string()),
+                },
+            ],
+            detection: "Monitor for copying system binaries to uncommon locations with process names mimicking legitimate system services. Look for execve events with arguments like 'cp /bin/sh <path>/crond'".to_string(),
+            cleanup_support: true,
+            platforms: vec!["Linux".to_string()],
+            permissions: vec!["user".to_string()],
+        }
+    }
+
+    fn execute<'a>(
+        &'a self,
+        config: &'a TechniqueConfig,
+        dry_run: bool,
+    ) -> ExecuteFuture<'a> {
+        Box::pin(async move {
+            let target_path = config
+                .parameters
+                .get("target_path")
+                .unwrap_or(&"/tmp/crond".to_string())
+                .clone();
+                
+            let execute_masqueraded = config
+                .parameters
+                .get("execute_masqueraded")
+                .unwrap_or(&"true".to_string())
+                .to_lowercase() == "true";
+                
+            let log_file = config
+                .parameters
+                .get("log_file")
+                .unwrap_or(&"/tmp/signalbench_masquerade_log".to_string())
+                .clone();
+                
+            if dry_run {
+                info!("[DRY RUN] Would copy /bin/sh to {target_path} to masquerade as crond");
+                if execute_masqueraded {
+                    info!("[DRY RUN] Would execute the masqueraded binary");
+                }
+                return Ok(SimulationResult {
+                    technique_id: self.info().id,
+                    success: true,
+                    message: format!("DRY RUN: Would copy /bin/sh to {target_path}"),
+                    artifacts: vec![log_file, target_path],
+                    cleanup_required: false,
+                });
+            }
+
+            use tokio::process::Command;
+
+            // Create the log file
+            let mut log = File::create(&log_file)
+                .map_err(|e| format!("Failed to create log file: {e}"))?;
+            
+            writeln!(log, "=== SignalBench Masquerading as Crond ===")
+                .map_err(|e| format!("Failed to write to log file: {e}"))?;
+            writeln!(log, "Time: {}", chrono::Local::now().to_rfc3339())
+                .map_err(|e| format!("Failed to write to log file: {e}"))?;
+            writeln!(log, "Target path: {target_path}")
+                .map_err(|e| format!("Failed to write to log file: {e}"))?;
+            writeln!(log)
+                .map_err(|e| format!("Failed to write to log file: {e}"))?;
+
+            // Copy /bin/sh to target path (this generates the telemetry)
+            info!("Copying /bin/sh to {target_path} to simulate process masquerading");
+            writeln!(log, "=== Copying /bin/sh to {target_path} ===")
+                .map_err(|e| format!("Failed to write to log file: {e}"))?;
+            
+            let output = Command::new("cp")
+                .args(["/bin/sh", &target_path])
+                .output()
+                .await
+                .map_err(|e| format!("Failed to copy /bin/sh: {e}"))?;
+
+            writeln!(log, "Exit Code: {}", output.status.code().unwrap_or(-1))
+                .map_err(|e| format!("Failed to write to log file: {e}"))?;
+            
+            if !output.status.success() {
+                let error_msg = String::from_utf8_lossy(&output.stderr);
+                writeln!(log, "Error: {error_msg}")
+                    .map_err(|e| format!("Failed to write to log file: {e}"))?;
+                return Err(format!("Failed to copy /bin/sh: {error_msg}"));
+            }
+
+            writeln!(log, "Successfully created masqueraded binary")
+                .map_err(|e| format!("Failed to write to log file: {e}"))?;
+
+            // Optionally execute the masqueraded binary
+            if execute_masqueraded {
+                writeln!(log)
+                    .map_err(|e| format!("Failed to write to log file: {e}"))?;
+                writeln!(log, "=== Executing masqueraded binary ===")
+                    .map_err(|e| format!("Failed to write to log file: {e}"))?;
+                
+                info!("Executing masqueraded binary: {target_path}");
+                
+                let exec_output = Command::new(&target_path)
+                    .args(["-c", "echo 'SignalBench masqueraded process executed successfully'"])
+                    .output()
+                    .await
+                    .map_err(|e| format!("Failed to execute masqueraded binary: {e}"))?;
+
+                writeln!(log, "Execution Exit Code: {}", exec_output.status.code().unwrap_or(-1))
+                    .map_err(|e| format!("Failed to write to log file: {e}"))?;
+                writeln!(log, "Output:")
+                    .map_err(|e| format!("Failed to write to log file: {e}"))?;
+                log.write_all(&exec_output.stdout)
+                    .map_err(|e| format!("Failed to write to log file: {e}"))?;
+            }
+
+            info!("Successfully simulated masquerading as crond process");
+            
+            Ok(SimulationResult {
+                technique_id: self.info().id,
+                success: true,
+                message: format!("Successfully copied /bin/sh to {target_path} and simulated crond masquerading"),
+                artifacts: vec![log_file, target_path],
+                cleanup_required: true,
+            })
+        })
+    }
+
+    fn cleanup<'a>(&'a self, artifacts: &'a [String]) -> CleanupFuture<'a> {
+        Box::pin(async move {
+            for artifact in artifacts {
+                if Path::new(artifact).exists() {
+                    match fs::remove_file(artifact) {
+                        Ok(_) => info!("Removed artifact: {artifact}"),
+                        Err(e) => warn!("Failed to remove artifact {artifact}: {e}"),
+                    }
+                }
+            }
+            Ok(())
+        })
+    }
+}

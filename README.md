@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="assets/signalbench-logo.png" alt="SignalBench Logo" width="300"/>
+  <img src="assets/signalbench-logo.png" alt="SignalBench Logo" width="600"/>
 </div>
 
 # SignalBench
@@ -37,7 +37,8 @@ Many modern security products are simulation-aware and may not generate alerts f
 - Safe execution environment to prevent accidental harm
 - Logging of all telemetry generation activities
 - Dry-run mode to preview actions without executing them
-- Cleanup functionality to remove artifacts
+- Automatic cleanup functionality to remove all artifacts after execution
+- Optional --no-cleanup flag to preserve artifacts for debugging and analysis
 - Support for selecting techniques by exact name when multiple techniques share the same MITRE ATT&CK ID
 - Comprehensive documentation of all implemented techniques
 
@@ -50,22 +51,22 @@ SignalBench provides pre-built binaries for maximum compatibility across Linux d
 **For Universal Linux Compatibility (Recommended):**
 ```bash
 # Download static binary that works on any Linux distribution
-wget https://github.com/gocortex/signalbench/releases/download/v1.0.0/signalbench-1.0.0-linux-musl-x86_64
-chmod +x signalbench-1.0.0-linux-musl-x86_64
-sudo mv signalbench-1.0.0-linux-musl-x86_64 /usr/local/bin/signalbench
+wget https://github.com/gocortex/signalbench/releases/download/v1.4.3/signalbench-1.4.3-linux-musl-x86_64
+chmod +x signalbench-1.4.3-linux-musl-x86_64
+sudo mv signalbench-1.4.3-linux-musl-x86_64 /usr/local/bin/signalbench
 
 # For ARM64 systems (Apple Silicon, ARM servers)
-wget https://github.com/gocortex/signalbench/releases/download/v1.0.0/signalbench-1.0.0-linux-musl-aarch64
-chmod +x signalbench-1.0.0-linux-musl-aarch64
-sudo mv signalbench-1.0.0-linux-musl-aarch64 /usr/local/bin/signalbench
+wget https://github.com/gocortex/signalbench/releases/download/v1.4.3/signalbench-1.4.3-linux-musl-aarch64
+chmod +x signalbench-1.4.3-linux-musl-aarch64
+sudo mv signalbench-1.4.3-linux-musl-aarch64 /usr/local/bin/signalbench
 ```
 
 **For Specific Distributions:**
 ```bash
 # Debian 12/Ubuntu 22.04+ systems (requires GLIBC 2.36+)
-wget https://github.com/gocortex/signalbench/releases/download/v1.0.0/signalbench-1.0.0-debian12-glibc2.36-x86_64
-chmod +x signalbench-1.0.0-debian12-glibc2.36-x86_64
-sudo mv signalbench-1.0.0-debian12-glibc2.36-x86_64 /usr/local/bin/signalbench
+wget https://github.com/gocortex/signalbench/releases/download/v1.4.3/signalbench-1.4.3-debian12-glibc2.36-x86_64
+chmod +x signalbench-1.4.3-debian12-glibc2.36-x86_64
+sudo mv signalbench-1.4.3-debian12-glibc2.36-x86_64 /usr/local/bin/signalbench
 ```
 
 ### Option 2: Build from Source
@@ -85,19 +86,22 @@ cargo build --release
 signalbench list
 
 # Generate telemetry for a specific technique
-signalbench run <technique_id_or_name> [--dry-run]
+signalbench run <technique_id_or_name> [--dry-run] [--no-cleanup]
 
 # Generate telemetry for all techniques in a category
-signalbench category <category> [--dry-run]
+signalbench category <category> [--dry-run] [--no-cleanup]
 
 # Generate telemetry for multiple categories simultaneously
-signalbench category <category1> <category2> <category3> [--dry-run]
+signalbench category <category1> <category2> <category3> [--dry-run] [--no-cleanup]
 
 # Run with custom configuration
 signalbench run <technique_id_or_name> --config <config_file.json>
 
 # Generate telemetry for technique with duplicate MITRE ID using exact name
 signalbench run "Possible C2 via dnscat2" [--dry-run]
+
+# Preserve artifacts for debugging (skip cleanup)
+signalbench run <technique_id_or_name> --no-cleanup
 ```
 
 For detailed information on available techniques and implementations, refer to the comprehensive [Technical Documentation](docs/TECHNIQUES.md).

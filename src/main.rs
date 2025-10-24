@@ -53,19 +53,19 @@ async fn run_command(cli: Cli) -> Result<(), String> {
         Commands::List => {
             runner::list_techniques()
         },
-        Commands::Run { technique, dry_run, config } => {
+        Commands::Run { technique, dry_run, no_cleanup, config } => {
             // Check safety before execution
             safety::check_environment()?;
             
             // Run the specified technique
-            runner::run_technique(&technique, dry_run, config).await
+            runner::run_technique(&technique, dry_run, no_cleanup, config).await
         },
-        Commands::Category { categories, dry_run, config } => {
+        Commands::Category { categories, dry_run, no_cleanup, config } => {
             // Check safety before execution
             safety::check_environment()?;
             
             // Run all techniques in the specified categories
-            runner::run_categories(&categories, dry_run, config).await
+            runner::run_categories(&categories, dry_run, no_cleanup, config).await
         },
     }
 }
