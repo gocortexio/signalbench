@@ -111,13 +111,13 @@ pub fn get_all_techniques() -> Vec<Box<dyn AttackTechnique>> {
         Box::new(credential_access::KeyloggerSimulation {}),
         Box::new(credential_access::CredentialsInFiles {}),
         Box::new(credential_access::ProcFilesystemCredentialDumping {}),
-        Box::new(credential_access::HydraBruteForceSimulation {}),
+        Box::new(credential_access::SSHBruteForce {}),
         
         // Discovery techniques
         Box::new(discovery::SystemInformationDiscovery {}),
         Box::new(discovery::NetworkDiscovery {}),
+        Box::new(discovery::NetworkConnectionsDiscovery {}),
         Box::new(network::NetworkServiceDiscovery {}),
-        Box::new(network::SystemNetworkConnectionsDiscovery {}),
         
         // Lateral movement techniques
         Box::new(lateral_movement::SshLateralMovement {}),

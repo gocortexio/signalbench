@@ -235,7 +235,7 @@ impl AttackTechnique for CronJob {
                 technique_id: self.info().id,
                 success: true,
                 message: format!("Successfully added cron job with ID {id}"),
-                artifacts: vec![format!("cron_job_{}", id), temp_cron_file],
+                artifacts: vec![format!("cron_job_{id}"), temp_cron_file],
                 cleanup_required: true,
             })
         })

@@ -13,9 +13,130 @@ use std::fs::File;
 use std::io::Write;
 use std::path::Path;
 use tokio::process::Command;
-use tokio::time::{sleep, Duration};
-use log::{debug, error, info};
+use tokio::time::{sleep, Duration, timeout};
+use tokio::net::{TcpStream, UdpSocket};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use log::{debug, error, info, warn};
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+use std::time::Instant;
+
+// Helper function to get service name based on port number
+fn get_service_name(port: u16) -> &'static str {
+    match port {
+        22 => "SSH",
+        23 => "Telnet",
+        53 => "DNS",
+        80 => "HTTP",
+        123 => "NTP",
+        161 => "SNMP",
+        443 => "HTTPS",
+        445 => "SMB",
+        514 => "Syslog",
+        1337 => "LEET/Backdoor",
+        1433 => "MSSQL",
+        3306 => "MySQL",
+        3389 => "RDP",
+        4444 => "Metasploit",
+        5432 => "PostgreSQL",
+        5555 => "Freeciv/Backdoor",
+        5985 => "WinRM",
+        6379 => "Redis",
+        8080 => "HTTP-ALT",
+        8443 => "HTTPS-ALT",
+        8888 => "HTTP-Proxy",
+        9999 => "Backdoor",
+        27017 => "MongoDB",
+        31337 => "Elite/Backdoor",
+        _ => "Unknown",
+    }
+}
+
+// Helper function to grab banner from an open TCP connection
+async fn grab_banner(stream: &mut TcpStream, port: u16) -> Option<String> {
+    let mut buffer = vec![0u8; 2048];
+    
+    // For some protocols, we need to send a greeting first
+    let greeting = match port {
+        22 => Some(b"SSH-2.0-SignalBench_1.0\r\n".to_vec()),
+        80 | 8080 | 8888 => Some(b"GET / HTTP/1.0\r\nHost: localhost\r\nUser-Agent: SignalBench/1.0\r\n\r\n".to_vec()),
+        443 | 8443 => Some(b"GET / HTTP/1.0\r\nHost: localhost\r\n\r\n".to_vec()),
+        25 | 587 => Some(b"EHLO signalbench\r\n".to_vec()),
+        110 => Some(b"QUIT\r\n".to_vec()),
+        3306 => Some(b"\x00".to_vec()),
+        5432 => Some(b"\x00\x00\x00\x08\x04\xd2\x16\x2f".to_vec()),
+        6379 => Some(b"PING\r\n".to_vec()),
+        27017 => Some(b"\x3a\x00\x00\x00\x01\x00\x00\x00".to_vec()),
+        _ => None,
+    };
+    
+    // Send greeting if needed
+    if let Some(msg) = greeting {
+        if let Err(e) = stream.write_all(&msg).await {
+            warn!("Failed to send greeting to port {port}: {e}");
+            return None;
+        }
+    }
+    
+    // Try to read banner with timeout
+    match timeout(Duration::from_secs(2), stream.read(&mut buffer)).await {
+        Ok(Ok(n)) if n > 0 => {
+            // Convert to UTF-8, replacing invalid chars
+            let banner = String::from_utf8_lossy(&buffer[..n]).to_string();
+            // Only return if we got meaningful data
+            if !banner.trim().is_empty() {
+                Some(banner)
+            } else {
+                None
+            }
+        },
+        Ok(Ok(_)) => None, // No data received
+        Ok(Err(e)) => {
+            debug!("Error reading banner from port {port}: {e}");
+            None
+        },
+        Err(_) => {
+            debug!("Banner grab timeout for port {port}");
+            None
+        }
+    }
+}
+
+// Helper function to probe UDP port
+async fn probe_udp_port(host: &str, port: u16) -> Result<bool, String> {
+    let bind_addr = if host.contains(':') {
+        "[::]:0"  // IPv6
+    } else {
+        "0.0.0.0:0"  // IPv4
+    };
+    
+    let socket = UdpSocket::bind(bind_addr)
+        .await
+        .map_err(|e| format!("Failed to bind UDP socket: {e}"))?;
+    
+    let target_addr = format!("{host}:{port}");
+    
+    // Prepare protocol-specific probe
+    let probe = match port {
+        53 => b"\x00\x00\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00\x03www\x07example\x03com\x00\x00\x01\x00\x01".to_vec(),
+        123 => b"\x1b\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00".to_vec(),
+        161 => b"\x30\x26\x02\x01\x00\x04\x06\x70\x75\x62\x6c\x69\x63\xa0\x19\x02\x04\x00\x00\x00\x00\x02\x01\x00\x02\x01\x00\x30\x0b\x30\x09\x06\x05\x2b\x06\x01\x02\x01\x05\x00".to_vec(),
+        514 => b"<14>SignalBench test message\n".to_vec(),
+        _ => b"SignalBench UDP probe\n".to_vec(),
+    };
+    
+    // Send probe
+    match timeout(Duration::from_secs(1), socket.send_to(&probe, &target_addr)).await {
+        Ok(Ok(_)) => {
+            // Try to receive response
+            let mut buf = vec![0u8; 1024];
+            match timeout(Duration::from_secs(1), socket.recv_from(&mut buf)).await {
+                Ok(Ok(_)) => Ok(true),
+                _ => Ok(false),
+            }
+        },
+        _ => Ok(false),
+    }
+}
 
 // ======================================
 // T1046 - Network Service Discovery
@@ -28,20 +149,26 @@ impl AttackTechnique for NetworkServiceDiscovery {
         Technique {
             id: "T1046".to_string(),
             name: "Network Service Discovery".to_string(),
-            description: "Generates telemetry for network service discovery and port scanning".to_string(),
+            description: "Performs AGGRESSIVE network service discovery using TCP/UDP connection attempts and enhanced banner grabbing. Scans common ports (1-1024) plus suspicious backdoor ports (1337, 4444, 31337, etc.) across multiple localhost interfaces. Includes protocol-specific probes for SSH, HTTP, MySQL, PostgreSQL, Redis, MongoDB, and more. This generates HIGH VOLUME network traffic designed to trigger XDR/EDR detection (not simulation).".to_string(),
             category: "DISCOVERY".to_string(),
             parameters: vec![
                 TechniqueParameter {
                     name: "target_hosts".to_string(),
-                    description: "Target hosts to scan (comma-separated IPs or CIDR)".to_string(),
+                    description: "Target hosts to scan (comma-separated IPs). Default scans multiple localhost interfaces.".to_string(),
                     required: true,
-                    default: Some("127.0.0.1".to_string()),
+                    default: Some("127.0.0.1,::1".to_string()),
                 },
                 TechniqueParameter {
                     name: "ports".to_string(),
-                    description: "Ports to scan (e.g., 22,80,443 or 1-1000)".to_string(),
+                    description: "Ports to scan (e.g., 22,80,443 or 1-1024). Default is aggressive scan of 1-1024 plus backdoor ports.".to_string(),
                     required: true,
-                    default: Some("22,80,443,3306,5432,8080".to_string()),
+                    default: Some("1-1024,1337,4444,5555,8443,8888,9999,31337".to_string()),
+                },
+                TechniqueParameter {
+                    name: "enable_udp".to_string(),
+                    description: "Enable UDP scanning on ports 53,123,161,514 (true/false)".to_string(),
+                    required: false,
+                    default: Some("true".to_string()),
                 },
                 TechniqueParameter {
                     name: "output_file".to_string(),
@@ -50,7 +177,7 @@ impl AttackTechnique for NetworkServiceDiscovery {
                     default: Some("/tmp/signalbench_port_scan_results.txt".to_string()),
                 },
             ],
-            detection: "Network monitoring tools can detect port scanning activity".to_string(),
+            detection: "Network monitoring and XDR/EDR tools can detect aggressive port scanning activity via high connection rate, multiple TCP/UDP probes, and suspicious port access patterns (backdoor ports 1337, 4444, 31337). Banner grabbing generates protocol-specific traffic patterns.".to_string(),
             cleanup_support: true,
             platforms: vec!["Linux".to_string()],
             permissions: vec!["user".to_string()],
@@ -64,18 +191,24 @@ impl AttackTechnique for NetworkServiceDiscovery {
     ) -> ExecuteFuture<'a> {
         Box::pin(async move {
             let technique_info = self.info();
+            let scan_start = Instant::now();
             
             // Get parameters from config or use defaults
             let target_hosts = config
                 .parameters
                 .get("target_hosts")
-                .unwrap_or(&"127.0.0.1".to_string())
+                .unwrap_or(&"127.0.0.1,::1".to_string())
                 .clone();
             let ports = config
                 .parameters
                 .get("ports")
-                .unwrap_or(&"22,80,443,3306,5432,8080".to_string())
+                .unwrap_or(&"1-1024,1337,4444,5555,8443,8888,9999,31337".to_string())
                 .clone();
+            let enable_udp = config
+                .parameters
+                .get("enable_udp")
+                .unwrap_or(&"true".to_string())
+                .to_lowercase() == "true";
             let output_file = config
                 .parameters
                 .get("output_file")
@@ -83,288 +216,198 @@ impl AttackTechnique for NetworkServiceDiscovery {
                 .clone();
             
             if dry_run {
+                let udp_msg = if enable_udp { " with UDP scanning" } else { "" };
                 return Ok(SimulationResult {
                     technique_id: technique_info.id,
                     success: true,
-                    message: format!("Would perform port scanning on {target_hosts} for ports {ports} and save results to {output_file}"),
+                    message: format!("Would perform AGGRESSIVE TCP{udp_msg} port scanning on {target_hosts} for ports {ports} and save results to {output_file}"),
                     artifacts: vec![output_file],
                     cleanup_required: true,
                 });
             }
             
-            // Create output file
-            let mut file = File::create(&output_file)
-                .map_err(|e| format!("Failed to create output file: {e}"))?;
-                
-            // Write header
-            writeln!(file, "# SignalBench Network Service Discovery").unwrap();
-            writeln!(file, "# MITRE ATT&CK Technique: T1046").unwrap();
-            writeln!(file, "# Target hosts: {target_hosts}").unwrap();
-            writeln!(file, "# Ports: {ports}").unwrap();
-            writeln!(file, "# Timestamp: {}", chrono::Local::now()).unwrap();
-            writeln!(file, "# This is a controlled scan - limited to localhost only").unwrap();
-            writeln!(file, "# --------------------------------------------------------").unwrap();
+            // Parse target hosts (comma-separated values)
+            let hosts: Vec<String> = target_hosts.split(',').map(|s| s.trim().to_string()).collect();
             
-            // Parse target hosts (could be multiple comma-separated values)
-            let hosts: Vec<&str> = target_hosts.split(',').collect();
-            
-            // Parse ports (could be ranges like "1-1000" or single ports like "80,443")
+            // Parse ports (ranges like "1-1024" or single ports like "80,443")
             let mut port_list = Vec::new();
             for port_spec in ports.split(',') {
-                if port_spec.contains('-') {
-                    // It's a range
-                    let range: Vec<&str> = port_spec.split('-').collect();
+                let trimmed = port_spec.trim();
+                if trimmed.contains('-') {
+                    let range: Vec<&str> = trimmed.split('-').collect();
                     if range.len() == 2 {
                         if let (Ok(start), Ok(end)) = (range[0].parse::<u16>(), range[1].parse::<u16>()) {
-                            // Only add a reasonable number of ports to avoid generating huge files
-                            let end_value: u16 = std::cmp::min(end, start + 100); // Limit to 100 ports per range
-                            for port in start..=end_value {
+                            // Allow full range for aggressive scanning
+                            for port in start..=end {
                                 port_list.push(port);
                             }
                         }
                     }
-                } else {
-                    // It's a single port
-                    if let Ok(port) = port_spec.parse::<u16>() {
-                        port_list.push(port);
-                    }
+                } else if let Ok(port) = trimmed.parse::<u16>() {
+                    port_list.push(port);
                 }
             }
             
-            // Generate realistic test results
-            for host in hosts {
-                writeln!(file, "\nScan results for host: {host}").unwrap();
-                
-                // Run a real check for localhost only (safe)
-                if host == "127.0.0.1" || host == "localhost" {
-                    for port in &port_list {
-                        // Use netcat to check if port is open on localhost
-                        let status = Command::new("nc")
-                            .arg("-z")
-                            .arg("-v")
-                            .arg("-w")
-                            .arg("1") // 1 second timeout
-                            .arg(host)
-                            .arg(port.to_string())
-                            .output()
-                            .await;
-                            
-                        match status {
-                            Ok(output) => {
-                                let exit_code = output.status.code().unwrap_or(1);
-                                let is_open = exit_code == 0;
-                                let state = if is_open { "OPEN" } else { "CLOSED" };
-                                
-                                writeln!(file, "Port {:5} - {:<10} - {}", port, state, 
-                                         if is_open { "Service might be running" } else { "No service detected" })
-                                    .unwrap();
-                            },
-                            Err(e) => {
-                                writeln!(file, "Port {port:5} - ERROR    - Failed to check: {e}").unwrap();
-                            }
-                        }
-                        
-                        // Small delay to avoid overwhelming the system
-                        sleep(Duration::from_millis(50)).await;
-                    }
-                } else {
-                    // For non-localhost targets, only generate test results
-                    // Select some random ports to show as "open" for simulation
-                    // Initialize random number generator for real randomization (not needed in this simulation)
-                    for port in &port_list {
-                        // Randomly determine if port is "open" (for simulation)
-                        let is_open = match *port {
-                            22 => true,   // SSH usually open
-                            80 => true,   // HTTP usually open
-                            443 => true,  // HTTPS usually open
-                            _ => rand::random::<bool>() && rand::random::<bool>(), // 25% chance for other ports
-                        };
-                        
-                        let state = if is_open { "OPEN" } else { "CLOSED" };
-                        let service = match *port {
-                            22 => "SSH",
-                            80 => "HTTP",
-                            443 => "HTTPS",
-                            3306 => "MySQL",
-                            5432 => "PostgreSQL",
-                            8080 => "HTTP-ALT",
-                            _ => "Unknown",
-                        };
-                        
-                        writeln!(file, "Port {:5} - {:<10} - {}", port, state, 
-                                 if is_open { format!("{service} might be running") } else { "No service detected".to_string() })
-                            .unwrap();
-                    }
-                }
-            }
-            
-            // Close the file
-            drop(file);
-            
-            info!("Network service discovery simulation complete, results saved to {output_file}");
-            
-            Ok(SimulationResult {
-                technique_id: technique_info.id,
-                success: true,
-                message: format!("Network service discovery simulation completed. Results saved to {output_file}"),
-                artifacts: vec![output_file.to_string()],
-                cleanup_required: true,
-            })
-        })
-    }
-
-    fn cleanup<'a>(&'a self, artifacts: &'a [String]) -> CleanupFuture<'a> {
-        Box::pin(async move {
-            for artifact in artifacts {
-                if Path::new(artifact).exists() {
-                    // Check if it's a directory
-                    if Path::new(artifact).is_dir() {
-                        if let Err(e) = std::fs::remove_dir_all(artifact) {
-                            error!("Failed to remove directory {artifact}: {e}");
-                        } else {
-                            debug!("Removed directory: {artifact}");
-                        }
-                    } else if let Err(e) = std::fs::remove_file(artifact) {
-                        error!("Failed to remove artifact {artifact}: {e}");
-                    } else {
-                        debug!("Removed artifact: {artifact}");
-                    }
-                }
-            }
-            Ok(())
-        })
-    }
-}
-
-// ======================================
-// T1049 - System Network Connections Discovery
-// ======================================
-pub struct SystemNetworkConnectionsDiscovery {}
-
-#[async_trait]
-impl AttackTechnique for SystemNetworkConnectionsDiscovery {
-    fn info(&self) -> Technique {
-        Technique {
-            id: "T1049".to_string(),
-            name: "System Network Connections Discovery".to_string(),
-            description: "Generates telemetry for network connection discovery activities".to_string(),
-            category: "DISCOVERY".to_string(),
-            parameters: vec![
-                TechniqueParameter {
-                    name: "output_file".to_string(),
-                    description: "Path to save connection discovery results".to_string(),
-                    required: false,
-                    default: Some("/tmp/signalbench_network_connections.txt".to_string()),
-                },
-                TechniqueParameter {
-                    name: "commands".to_string(),
-                    description: "Comma-separated list of commands to run for connection discovery".to_string(),
-                    required: false,
-                    default: Some("netstat -tuln,netstat -antup,ss -tunap,lsof -i -n -P".to_string()),
-                },
-            ],
-            detection: "Process monitoring can detect network connection discovery commands".to_string(),
-            cleanup_support: true,
-            platforms: vec!["Linux".to_string()],
-            permissions: vec!["user".to_string()],
-        }
-    }
-
-    fn execute<'a>(
-        &'a self,
-        config: &'a TechniqueConfig,
-        dry_run: bool,
-    ) -> ExecuteFuture<'a> {
-        Box::pin(async move {
-            let technique_info = self.info();
-            
-            // Get parameters from config or use defaults
-            let output_file = config
-                .parameters
-                .get("output_file")
-                .unwrap_or(&"/tmp/signalbench_network_connections.txt".to_string())
-                .clone();
-            let commands = config
-                .parameters
-                .get("commands")
-                .unwrap_or(&"netstat -tuln,netstat -antup,ss -tunap,lsof -i -n -P".to_string())
-                .clone();
-            
-            if dry_run {
-                return Ok(SimulationResult {
-                    technique_id: technique_info.id,
-                    success: true,
-                    message: format!("Would perform network connection discovery using commands: {commands} and save results to {output_file}"),
-                    artifacts: vec![output_file],
-                    cleanup_required: true,
-                });
-            }
+            // Define UDP ports to scan if enabled
+            let udp_ports: Vec<u16> = if enable_udp {
+                vec![53, 123, 161, 514]
+            } else {
+                vec![]
+            };
             
             // Create output file
             let mut file = File::create(&output_file)
                 .map_err(|e| format!("Failed to create output file: {e}"))?;
                 
-            // Write header
-            writeln!(file, "# SignalBench System Network Connections Discovery").unwrap();
-            writeln!(file, "# MITRE ATT&CK Technique: T1049").unwrap();
-            writeln!(file, "# Commands: {commands}").unwrap();
-            writeln!(file, "# Timestamp: {}", chrono::Local::now()).unwrap();
-            writeln!(file, "# --------------------------------------------------------").unwrap();
+            writeln!(file, "# SignalBench AGGRESSIVE Network Service Discovery - REAL TCP/UDP Scanning").unwrap();
+            writeln!(file, "# MITRE ATT&CK Technique: T1046").unwrap();
+            writeln!(file, "# Target hosts: {target_hosts}").unwrap();
+            writeln!(file, "# TCP ports to scan: {ports} ({} total ports)", port_list.len()).unwrap();
+            if enable_udp {
+                writeln!(file, "# UDP ports to scan: 53, 123, 161, 514").unwrap();
+            }
+            writeln!(file, "# Banner grab buffer: 2048 bytes with protocol-specific probes").unwrap();
+            writeln!(file, "# Scan started: {}", chrono::Local::now()).unwrap();
+            writeln!(file, "# WARNING: This performs AGGRESSIVE TCP/UDP connection attempts").unwrap();
+            writeln!(file, "# WARNING: Designed to generate HIGH VOLUME traffic for XDR/EDR detection").unwrap();
+            writeln!(file, "# ========================================================").unwrap();
             
-            // Run each command and capture output
-            for cmd in commands.split(',') {
-                let cmd_parts: Vec<&str> = cmd.split_whitespace().collect();
+            let mut total_ports_scanned = 0;
+            let mut total_open_ports = 0;
+            let mut total_banners_grabbed = 0;
+            let mut total_udp_probes = 0;
+            let mut total_udp_responses = 0;
+            
+            // Perform real TCP scanning on all targets
+            for host in &hosts {
+                writeln!(file, "\n[*] Scanning host: {host}").unwrap();
+                writeln!(file, "[*] {} ports to scan", port_list.len()).unwrap();
                 
-                if cmd_parts.is_empty() {
-                    continue;
-                }
-                
-                writeln!(file, "\n## Command: {cmd}").unwrap();
-                writeln!(file, "## Executed at: {}", chrono::Local::now()).unwrap();
-                
-                let mut command = Command::new(cmd_parts[0]);
-                for arg in &cmd_parts[1..] {
-                    command.arg(arg);
-                }
-                
-                match command.output().await {
-                    Ok(output) => {
-                        let stdout = String::from_utf8_lossy(&output.stdout);
-                        let stderr = String::from_utf8_lossy(&output.stderr);
-                        
-                        if !stdout.is_empty() {
-                            writeln!(file, "## STDOUT:").unwrap();
-                            writeln!(file, "{stdout}").unwrap();
+                for port in &port_list {
+                    total_ports_scanned += 1;
+                    let addr = format!("{host}:{port}");
+                    
+                    // Attempt real TCP connection with 2 second timeout
+                    match timeout(Duration::from_secs(2), TcpStream::connect(&addr)).await {
+                        Ok(Ok(mut stream)) => {
+                            // Port is OPEN
+                            total_open_ports += 1;
+                            let service_name = get_service_name(*port);
+                            
+                            writeln!(file,"\nPort {port:5} - OPEN - {service_name}").unwrap();
+                            info!("Port {port} on {host} is OPEN - attempting banner grab");
+                            
+                            // Attempt banner grabbing
+                            let banner = grab_banner(&mut stream, *port).await;
+                            
+                            if let Some(banner_text) = banner {
+                                total_banners_grabbed += 1;
+                                writeln!(file, "  Banner: {}", banner_text.trim()).unwrap();
+                                debug!("Grabbed banner from {host}:{port}: {}", banner_text.trim());
+                            } else {
+                                writeln!(file, "  Banner: <no banner received>").unwrap();
+                            }
+                        },
+                        Ok(Err(e)) => {
+                            // Connection refused or other error - port is CLOSED
+                            writeln!(file,"Port {port:5} - CLOSED - {e}").unwrap();
+                            debug!("Port {port} on {host} is CLOSED: {e}");
+                        },
+                        Err(_) => {
+                            // Timeout - port is likely FILTERED or CLOSED
+                            writeln!(file,"Port {port:5} - FILTERED/TIMEOUT").unwrap();
+                            debug!("Port {port} on {host} timed out");
                         }
-                        
-                        if !stderr.is_empty() {
-                            writeln!(file, "## STDERR:").unwrap();
-                            writeln!(file, "{stderr}").unwrap();
-                        }
-                        
-                        let status = output.status.code().unwrap_or(-1);
-                        writeln!(file, "## Exit status: {status}").unwrap();
-                    },
-                    Err(e) => {
-                        writeln!(file, "## ERROR: Failed to execute command: {e}").unwrap();
                     }
+                    
+                    // Small delay to avoid overwhelming the target
+                    sleep(Duration::from_millis(10)).await;
                 }
                 
-                writeln!(file, "## --------------------------------------------------------").unwrap();
+                writeln!(file, "\n[*] TCP scan complete for {host}").unwrap();
                 
-                // Small delay between commands
-                sleep(Duration::from_millis(100)).await;
+                // Perform UDP scanning if enabled
+                if !udp_ports.is_empty() {
+                    writeln!(file, "\n[*] Starting UDP scan on {host}").unwrap();
+                    writeln!(file, "[*] UDP ports to probe: {udp_ports:?}").unwrap();
+                    writeln!(file, "[*] Note: UDP scanning is less reliable (no responses may not mean closed)").unwrap();
+                    
+                    for port in &udp_ports {
+                        total_udp_probes += 1;
+                        let service_name = get_service_name(*port);
+                        
+                        writeln!(file, "\nUDP Port {port:5} - {service_name}").unwrap();
+                        info!("Probing UDP port {port} on {host}");
+                        
+                        match probe_udp_port(host, *port).await {
+                            Ok(true) => {
+                                total_udp_responses += 1;
+                                writeln!(file, "  Status: RESPONSE RECEIVED (likely open)").unwrap();
+                                info!("UDP port {port} on {host} responded");
+                            },
+                            Ok(false) => {
+                                writeln!(file, "  Status: NO RESPONSE (open/filtered/closed)").unwrap();
+                                debug!("UDP port {port} on {host} did not respond");
+                            },
+                            Err(e) => {
+                                writeln!(file, "  Status: ERROR - {e}").unwrap();
+                                warn!("UDP probe error on {host}:{port}: {e}");
+                            }
+                        }
+                        
+                        // Small delay between UDP probes
+                        sleep(Duration::from_millis(50)).await;
+                    }
+                    
+                    writeln!(file, "\n[*] UDP scan complete for {host}").unwrap();
+                }
             }
             
-            // Close the file
+            let scan_duration = scan_start.elapsed();
+            
+            writeln!(file, "\n========================================================").unwrap();
+            writeln!(file, "# AGGRESSIVE SCAN SUMMARY").unwrap();
+            writeln!(file, "# Total TCP ports scanned: {total_ports_scanned}").unwrap();
+            writeln!(file, "# Open TCP ports found: {total_open_ports}").unwrap();
+            writeln!(file, "# Banners grabbed: {total_banners_grabbed}").unwrap();
+            if enable_udp {
+                writeln!(file, "# Total UDP probes sent: {total_udp_probes}").unwrap();
+                writeln!(file, "# UDP responses received: {total_udp_responses}").unwrap();
+            }
+            writeln!(file, "# Total network connections: {}", total_ports_scanned + total_udp_probes).unwrap();
+            writeln!(file, "# Scan duration: {:.2}s", scan_duration.as_secs_f64()).unwrap();
+            writeln!(file, "# Connection rate: {:.2} conn/sec", (total_ports_scanned + total_udp_probes) as f64 / scan_duration.as_secs_f64()).unwrap();
+            writeln!(file, "# Scan completed: {}", chrono::Local::now()).unwrap();
+            writeln!(file, "========================================================").unwrap();
+            
             drop(file);
             
-            info!("Network connections discovery simulation complete, results saved to {output_file}");
+            let summary = if enable_udp {
+                format!(
+                    "AGGRESSIVE TCP/UDP scan completed: {} TCP ports scanned ({} open, {} banners), {} UDP probes ({} responses), {:.2} conn/sec in {:.2}s",
+                    total_ports_scanned, total_open_ports, total_banners_grabbed, 
+                    total_udp_probes, total_udp_responses,
+                    (total_ports_scanned + total_udp_probes) as f64 / scan_duration.as_secs_f64(),
+                    scan_duration.as_secs_f64()
+                )
+            } else {
+                format!(
+                    "AGGRESSIVE TCP scan completed: {} ports scanned, {} open, {} banners grabbed, {:.2} conn/sec in {:.2}s",
+                    total_ports_scanned, total_open_ports, total_banners_grabbed,
+                    total_ports_scanned as f64 / scan_duration.as_secs_f64(),
+                    scan_duration.as_secs_f64()
+                )
+            };
+            
+            info!("{summary}");
+            println!("\n[T1046] {summary}");
+            println!("[T1046] Scanned {} hosts across {} interfaces", hosts.len(), if hosts.len() > 1 { "multiple" } else { "single" });
+            println!("[T1046] Detailed results saved to: {output_file}");
             
             Ok(SimulationResult {
                 technique_id: technique_info.id,
                 success: true,
-                message: format!("Network connections discovery simulation completed. Results saved to {output_file}"),
+                message: summary,
                 artifacts: vec![output_file.to_string()],
                 cleanup_required: true,
             })

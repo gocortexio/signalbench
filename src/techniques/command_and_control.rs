@@ -300,45 +300,33 @@ impl AttackTechnique for TrafficSignaling {
     fn info(&self) -> Technique {
         Technique {
             id: "T1205".to_string(),
-            name: "Traffic Signaling".to_string(),
-            description: "Uses cron to install TCP filters on network interfaces for covert signaling and C2 communications".to_string(),
+            name: "Traffic Signalling - Port Knocking".to_string(),
+            description: "ACTIVELY INSTALLS REAL IPTABLES RULES for port knock sequence detection on TCP ports 1337, 31337, 8080. Creates firewall LOG rules that generate syslog entries when SYN packets hit monitored ports. REQUIRES ELEVATED PRIVILEGES to manipulate netfilter. Network monitoring will detect these firewall rule modifications and logged connection attempts.".to_string(),
             category: "COMMAND_AND_CONTROL".to_string(),
             parameters: vec![
                 TechniqueParameter {
                     name: "interface".to_string(),
-                    description: "Network interface to install filter on".to_string(),
+                    description: "Network interface to monitor for port knocking".to_string(),
                     required: false,
                     default: Some("eth0".to_string()),
                 },
                 TechniqueParameter {
-                    name: "filter_type".to_string(),
-                    description: "Type of TCP filter (iptables, tc_filter)".to_string(),
+                    name: "knock_ports".to_string(),
+                    description: "Comma-separated port knock sequence (default: 1337,31337,8080)".to_string(),
                     required: false,
-                    default: Some("iptables".to_string()),
-                },
-                TechniqueParameter {
-                    name: "target_port".to_string(),
-                    description: "TCP port to filter for signaling".to_string(),
-                    required: false,
-                    default: Some("8443".to_string()),
-                },
-                TechniqueParameter {
-                    name: "cron_schedule".to_string(),
-                    description: "Cron expression for filter installation".to_string(),
-                    required: false,
-                    default: Some("*/15 * * * *".to_string()),
+                    default: Some("1337,31337,8080".to_string()),
                 },
                 TechniqueParameter {
                     name: "log_file".to_string(),
-                    description: "Path to save traffic signaling log".to_string(),
+                    description: "Path to save port knocking installation log".to_string(),
                     required: false,
-                    default: Some("/tmp/signalbench_traffic_signaling.log".to_string()),
+                    default: Some("/tmp/signalbench_port_knocking.log".to_string()),
                 },
             ],
-            detection: "Monitor cron job modifications, iptables/tc filter rule changes, network interface configuration changes, and unusual traffic patterns on filtered ports".to_string(),
+            detection: "Monitor iptables rule modifications, netfilter changes, syslog entries with 'PORT_KNOCK' prefix, unusual SYN packet logging, and firewall configuration changes. Detection tools: auditd, osquery, netfilter logs, syslog monitoring.".to_string(),
             cleanup_support: true,
             platforms: vec!["Linux".to_string()],
-            permissions: vec!["user".to_string()],
+            permissions: vec!["root".to_string()],
         }
     }
 
@@ -354,45 +342,32 @@ impl AttackTechnique for TrafficSignaling {
                 .unwrap_or(&"eth0".to_string())
                 .clone();
                 
-            let filter_type = config
+            let knock_ports = config
                 .parameters
-                .get("filter_type")
-                .unwrap_or(&"iptables".to_string())
-                .clone();
-                
-            let target_port = config
-                .parameters
-                .get("target_port")
-                .unwrap_or(&"8443".to_string())
-                .clone();
-                
-            let cron_schedule = config
-                .parameters
-                .get("cron_schedule")
-                .unwrap_or(&"*/15 * * * *".to_string())
+                .get("knock_ports")
+                .unwrap_or(&"1337,31337,8080".to_string())
                 .clone();
                 
             let log_file = config
                 .parameters
                 .get("log_file")
-                .unwrap_or(&"/tmp/signalbench_traffic_signaling.log".to_string())
+                .unwrap_or(&"/tmp/signalbench_port_knocking.log".to_string())
                 .clone();
 
             let id = Uuid::new_v4().to_string().split('-').next().unwrap_or("signalbench").to_string();
-            let temp_cron_file = format!("/tmp/signalbench_traffic_signal_{id}");
-            let cron_job_id = format!("traffic_signal_{id}");
-            let rule_artifact = format!("filter_rule_{id}");
+            
+            // Parse port knock sequence
+            let ports: Vec<&str> = knock_ports.split(',').map(|s| s.trim()).collect();
             
             if dry_run {
-                info!("[DRY RUN] Would install traffic signaling on interface: {interface}");
-                info!("[DRY RUN] Would create cron job: {cron_schedule}");
-                info!("[DRY RUN] Would filter TCP port: {target_port}");
-                info!("[DRY RUN] Would use filter type: {filter_type}");
+                info!("[DRY RUN] Would install iptables port knocking rules on interface: {interface}");
+                info!("[DRY RUN] Would monitor ports: {knock_ports}");
+                info!("[DRY RUN] Would create {} iptables LOG rules", ports.len());
                 return Ok(SimulationResult {
                     technique_id: self.info().id,
                     success: true,
-                    message: format!("DRY RUN: Would install {filter_type} filter on {interface}:{target_port} via cron"),
-                    artifacts: vec![log_file, temp_cron_file, cron_job_id, rule_artifact],
+                    message: format!("DRY RUN: Would install iptables port knock detection for ports {knock_ports}"),
+                    artifacts: vec![log_file],
                     cleanup_required: false,
                 });
             }
@@ -401,16 +376,18 @@ impl AttackTechnique for TrafficSignaling {
             let mut log_file_handle = File::create(&log_file)
                 .map_err(|e| format!("Failed to create log file: {e}"))?;
                 
-            writeln!(log_file_handle, "# SignalBench Traffic Signaling Test").unwrap();
-            writeln!(log_file_handle, "# MITRE ATT&CK: T1205").unwrap();
+            writeln!(log_file_handle, "# SignalBench Port Knocking Detection - REAL IPTABLES INSTALLATION").unwrap();
+            writeln!(log_file_handle, "# MITRE ATT&CK: T1205 - Traffic Signalling").unwrap();
             writeln!(log_file_handle, "# Interface: {interface}").unwrap();
-            writeln!(log_file_handle, "# Filter Type: {filter_type}").unwrap();
-            writeln!(log_file_handle, "# Target Port: {target_port}").unwrap();
-            writeln!(log_file_handle, "# Cron Schedule: {cron_schedule}").unwrap();
+            writeln!(log_file_handle, "# Port Knock Sequence: {knock_ports}").unwrap();
+            writeln!(log_file_handle, "# Session ID: {id}").unwrap();
             writeln!(log_file_handle, "# Timestamp: {}", chrono::Local::now()).unwrap();
             writeln!(log_file_handle, "# --------------------------------------------------------").unwrap();
+            writeln!(log_file_handle, "# WARNING: This technique ACTIVELY INSTALLS FIREWALL RULES").unwrap();
+            writeln!(log_file_handle, "# --------------------------------------------------------\n").unwrap();
 
             // Check if interface exists
+            writeln!(log_file_handle, "## Network Interface Validation").unwrap();
             let interface_check = Command::new("ip")
                 .args(["link", "show", &interface])
                 .output()
@@ -419,134 +396,168 @@ impl AttackTechnique for TrafficSignaling {
             match interface_check {
                 Ok(output) => {
                     if !output.status.success() {
-                        writeln!(log_file_handle, "WARNING: Interface {interface} not found, proceeding with simulation").unwrap();
+                        writeln!(log_file_handle, "⚠ WARNING: Interface {interface} not found").unwrap();
+                        writeln!(log_file_handle, "Proceeding with any available interface\n").unwrap();
                     } else {
-                        writeln!(log_file_handle, "Interface {interface} found and available").unwrap();
+                        let output_str = String::from_utf8_lossy(&output.stdout);
+                        writeln!(log_file_handle, "✓ Interface {interface} is available").unwrap();
+                        writeln!(log_file_handle, "Interface details:\n{}\n", output_str.lines().next().unwrap_or("")).unwrap();
                     }
                 },
                 Err(e) => {
-                    writeln!(log_file_handle, "Could not check interface: {e}").unwrap();
+                    writeln!(log_file_handle, "Could not verify interface: {e}\n").unwrap();
                 }
             }
 
-            // Create the filter command based on type
-            let filter_command = match filter_type.as_str() {
-                "iptables" => {
-                    format!("/usr/sbin/iptables -A INPUT -i {interface} -p tcp --dport {target_port} -j LOG --log-prefix 'SIGNALING: ' 2>/dev/null || true")
-                },
-                "tc_filter" => {
-                    format!("/usr/sbin/tc filter add dev {interface} protocol ip parent 1: prio 1 u32 match ip dport {target_port} 0xffff 2>/dev/null || true")
-                },
-                _ => {
-                    format!("/usr/sbin/iptables -A INPUT -i {interface} -p tcp --dport {target_port} -j LOG --log-prefix 'SIGNALING: ' 2>/dev/null || true")
-                }
-            };
+            // Store rule specifications for cleanup
+            let mut installed_rules = Vec::new();
+            let mut rule_numbers = Vec::new();
 
-            writeln!(log_file_handle, "\n## Creating Cron Job for Traffic Signaling").unwrap();
-            writeln!(log_file_handle, "Filter command: {filter_command}").unwrap();
-
-            // Get current crontab
-            let status = Command::new("crontab")
-                .args(["-l"])
-                .stdout(std::process::Stdio::piped())
-                .stderr(std::process::Stdio::null())
-                .output()
-                .await
-                .map_err(|e| format!("Failed to get current crontab: {e}"))?;
-            
-            let mut crontab_content = String::from_utf8_lossy(&status.stdout).to_string();
-            
-            // Add our traffic signaling cron job
-            crontab_content.push_str(&format!("\n# SignalBench Traffic Signaling (GoCortex.io) - {id}\n"));
-            crontab_content.push_str(&format!("{cron_schedule} {filter_command}\n"));
-            
-            // Write to temporary file
-            let mut file = File::create(&temp_cron_file)
-                .map_err(|e| format!("Failed to create temporary cron file: {e}"))?;
-            
-            file.write_all(crontab_content.as_bytes())
-                .map_err(|e| format!("Failed to write to temporary cron file: {e}"))?;
-            
-            // Install the new crontab
-            let status = Command::new("crontab")
-                .args([&temp_cron_file])
-                .status()
-                .await
-                .map_err(|e| format!("Failed to install crontab: {e}"))?;
-                
-            if !status.success() {
-                writeln!(log_file_handle, "ERROR: Failed to install crontab").unwrap();
-                return Err("Failed to install crontab".to_string());
-            }
-
-            writeln!(log_file_handle, "Cron job installed successfully").unwrap();
-
-            // Test the filter command once to verify it works
-            writeln!(log_file_handle, "\n## Testing Filter Installation").unwrap();
-            let test_result = Command::new("bash")
-                .arg("-c")
-                .arg(&filter_command)
+            // Get baseline rule count
+            writeln!(log_file_handle, "## Baseline Firewall State").unwrap();
+            let baseline_output = Command::new("iptables")
+                .args(["-L", "INPUT", "--line-numbers", "-n"])
                 .output()
                 .await;
                 
-            match test_result {
-                Ok(output) => {
-                    let exit_code = output.status.code().unwrap_or(-1);
-                    let stderr = String::from_utf8_lossy(&output.stderr);
+            if let Ok(output) = &baseline_output {
+                let rules_text = String::from_utf8_lossy(&output.stdout);
+                let count = rules_text.lines().filter(|line| line.chars().next().is_some_and(|c| c.is_ascii_digit())).count();
+                writeln!(log_file_handle, "Current INPUT chain rules: {count}").unwrap();
+            } else {
+                writeln!(log_file_handle, "Could not query baseline (may need elevated privileges)").unwrap();
+            }
+
+            // Install iptables rules for each port in the knock sequence
+            writeln!(log_file_handle, "\n## Installing Port Knock Detection Rules").unwrap();
+            writeln!(log_file_handle, "Installing iptables LOG rules for SYN packet detection...\n").unwrap();
+
+            for (idx, port) in ports.iter().enumerate() {
+                let port = port.trim();
+                let rule_id = format!("portkn ock_{id}_{port}");
+                
+                writeln!(log_file_handle, "### Port Knock Position {} - TCP Port {}", idx + 1, port).unwrap();
+                
+                // Build the iptables command for SYN packet logging
+                let iptables_cmd = format!(
+                    "iptables -A INPUT -p tcp --dport {port} --tcp-flags SYN SYN -j LOG --log-prefix 'PORT_KNOCK[{port}]: ' --log-level 4"
+                );
+                
+                writeln!(log_file_handle, "Rule command: {iptables_cmd}").unwrap();
+                
+                // Execute the iptables command
+                let result = Command::new("bash")
+                    .arg("-c")
+                    .arg(&iptables_cmd)
+                    .output()
+                    .await;
                     
-                    writeln!(log_file_handle, "Test execution exit code: {exit_code}").unwrap();
-                    if !stderr.is_empty() {
-                        writeln!(log_file_handle, "Test execution stderr: {stderr}").unwrap();
+                match result {
+                    Ok(output) => {
+                        let exit_code = output.status.code().unwrap_or(-1);
+                        let stderr = String::from_utf8_lossy(&output.stderr);
+                        let stdout = String::from_utf8_lossy(&output.stdout);
+                        
+                        if exit_code == 0 {
+                            writeln!(log_file_handle, "✓ Rule installed successfully").unwrap();
+                            installed_rules.push(format!("{port}|{rule_id}"));
+                            
+                            // Try to get the rule number
+                            let list_result = Command::new("iptables")
+                                .args(["-L", "INPUT", "--line-numbers", "-n"])
+                                .output()
+                                .await;
+                                
+                            if let Ok(list_output) = list_result {
+                                let rules_text = String::from_utf8_lossy(&list_output.stdout);
+                                // Count current rules to estimate our rule number
+                                let current_count = rules_text.lines().filter(|line| line.chars().next().is_some_and(|c| c.is_ascii_digit())).count();
+                                let estimated_rule_num = current_count;
+                                rule_numbers.push(estimated_rule_num);
+                                writeln!(log_file_handle, "Estimated rule number: {estimated_rule_num}").unwrap();
+                            }
+                        } else {
+                            writeln!(log_file_handle, "✗ Failed to install rule (exit code: {exit_code})").unwrap();
+                            if !stderr.is_empty() {
+                                writeln!(log_file_handle, "Error: {stderr}").unwrap();
+                            }
+                            if stderr.contains("Permission denied") || stderr.contains("Operation not permitted") {
+                                writeln!(log_file_handle, "⚠ REQUIRES ROOT/SUDO PRIVILEGES").unwrap();
+                            }
+                        }
+                        
+                        if !stdout.is_empty() {
+                            writeln!(log_file_handle, "Output: {stdout}").unwrap();
+                        }
+                    },
+                    Err(e) => {
+                        writeln!(log_file_handle, "✗ Failed to execute iptables command: {e}").unwrap();
                     }
+                }
+                writeln!(log_file_handle).unwrap();
+            }
+
+            // Display final firewall state
+            writeln!(log_file_handle, "## Final Firewall State").unwrap();
+            let final_check = Command::new("iptables")
+                .args(["-L", "INPUT", "--line-numbers", "-n", "-v"])
+                .output()
+                .await;
+                
+            match final_check {
+                Ok(output) => {
+                    let rules = String::from_utf8_lossy(&output.stdout);
+                    writeln!(log_file_handle, "Complete INPUT chain with line numbers:\n").unwrap();
+                    writeln!(log_file_handle, "{rules}").unwrap();
                     
-                    if exit_code == 0 {
-                        writeln!(log_file_handle, "Filter command executed successfully").unwrap();
-                    } else if stderr.contains("Permission denied") || stderr.contains("Operation not permitted") {
-                        writeln!(log_file_handle, "WARNING: Filter command requires root privileges - cron job may fail on execution").unwrap();
-                    } else {
-                        writeln!(log_file_handle, "Filter command may have failed - check if iptables/tc tools are available and have proper permissions").unwrap();
+                    // Highlight our rules
+                    writeln!(log_file_handle, "\n### Installed Port Knock Rules:").unwrap();
+                    for line in rules.lines() {
+                        if line.contains("PORT_KNOCK") {
+                            writeln!(log_file_handle, "→ {line}").unwrap();
+                        }
                     }
                 },
                 Err(e) => {
-                    writeln!(log_file_handle, "Failed to test filter command: {e}").unwrap();
+                    writeln!(log_file_handle, "Could not query final state: {e}").unwrap();
+                    writeln!(log_file_handle, "(This is expected if not running with elevated privileges)").unwrap();
                 }
             }
 
-            // Check current filter rules
-            writeln!(log_file_handle, "\n## Current Network Filter Status").unwrap();
-            if filter_type == "iptables" {
-                let iptables_check = Command::new("/usr/sbin/iptables")
-                    .args(["-L", "INPUT", "-n"])
-                    .output()
-                    .await;
-                    
-                if let Ok(output) = iptables_check {
-                    let rules = String::from_utf8_lossy(&output.stdout);
-                    writeln!(log_file_handle, "Current iptables INPUT rules:\n{rules}").unwrap();
-                } else {
-                    writeln!(log_file_handle, "Could not read iptables rules (may require root privileges)").unwrap();
-                }
-            } else {
-                let tc_check = Command::new("/usr/sbin/tc")
-                    .args(["filter", "show", "dev", &interface])
-                    .output()
-                    .await;
-                    
-                if let Ok(output) = tc_check {
-                    let rules = String::from_utf8_lossy(&output.stdout);
-                    writeln!(log_file_handle, "Current tc filters on {interface}:\n{rules}").unwrap();
-                } else {
-                    writeln!(log_file_handle, "Could not read tc filters (may require root privileges)").unwrap();
-                }
+            // Test with actual SYN packet attempt (informational only)
+            writeln!(log_file_handle, "\n## Port Knock Detection Test").unwrap();
+            writeln!(log_file_handle, "To test the port knock detection, execute SYN packets to ports in sequence:").unwrap();
+            for (idx, port) in ports.iter().enumerate() {
+                writeln!(log_file_handle, "  Step {}: nmap -sS -p{} <target> (or: nc -zv <target> {})", idx + 1, port, port).unwrap();
             }
+            writeln!(log_file_handle, "\nMonitor syslog for PORT_KNOCK entries:").unwrap();
+            writeln!(log_file_handle, "  tail -f /var/log/syslog | grep PORT_KNOCK").unwrap();
+            writeln!(log_file_handle, "  journalctl -f | grep PORT_KNOCK").unwrap();
 
-            info!("Traffic signaling cron job installed for {interface}:{target_port}");
+            drop(log_file_handle);
+            
+            info!("Port knocking iptables rules installed for ports: {knock_ports}");
+            info!("Installed {} iptables LOG rules", installed_rules.len());
+            
+            // Build artifacts list with rule tracking data
+            let mut artifacts = vec![log_file.clone()];
+            artifacts.push(format!("session_{id}"));
+            
+            // Add each installed rule for cleanup tracking
+            for rule_spec in &installed_rules {
+                artifacts.push(format!("ipt_rule|{rule_spec}"));
+            }
+            
+            let success_count = installed_rules.len();
+            let total_ports = ports.len();
             
             Ok(SimulationResult {
                 technique_id: self.info().id,
-                success: true,
-                message: format!("Traffic signaling cron job installed on {interface}:{target_port} using {filter_type}"),
-                artifacts: vec![log_file, temp_cron_file, cron_job_id, format!("{}|{}|{}|{}", rule_artifact, filter_type, interface, target_port)],
+                success: success_count > 0,
+                message: format!(
+                    "Port knock detection installed: {success_count}/{total_ports} iptables rules active. Ports monitored: {knock_ports}. Session ID: {id}. Check {log_file} for details."
+                ),
+                artifacts,
                 cleanup_required: true,
             })
         })
@@ -554,127 +565,157 @@ impl AttackTechnique for TrafficSignaling {
 
     fn cleanup<'a>(&'a self, artifacts: &'a [String]) -> CleanupFuture<'a> {
         Box::pin(async move {
+            let mut session_id: Option<String> = None;
+            
+            // First pass: find session ID
             for artifact in artifacts {
-                // Remove temporary cron files
-                if artifact.starts_with("/tmp/signalbench_traffic_signal_") && Path::new(artifact).exists() {
-                    if let Err(e) = fs::remove_file(artifact) {
-                        warn!("Failed to remove temporary cron file {artifact}: {e}");
-                    } else {
-                        info!("Removed temporary file: {artifact}");
-                    }
+                if artifact.starts_with("session_") {
+                    session_id = Some(artifact.trim_start_matches("session_").to_string());
+                    break;
                 }
-                
-                // Remove cron job
-                if artifact.starts_with("traffic_signal_") {
-                    let id = artifact.trim_start_matches("traffic_signal_");
+            }
+            
+            info!("Starting T1205 Port Knocking cleanup");
+            if let Some(ref id) = session_id {
+                info!("Session ID: {id}");
+            }
+            
+            // Track cleanup success
+            let mut rules_removed = 0;
+            let mut rules_failed = 0;
+            
+            for artifact in artifacts {
+                // Remove iptables rules
+                if artifact.starts_with("ipt_rule|") {
+                    let rule_data = artifact.trim_start_matches("ipt_rule|");
+                    let parts: Vec<&str> = rule_data.split('|').collect();
                     
-                    // Get current crontab
-                    let output = Command::new("crontab")
-                        .args(["-l"])
-                        .output()
-                        .await
-                        .map_err(|e| format!("Failed to get current crontab: {e}"))?;
-                    
-                    let crontab_content = String::from_utf8_lossy(&output.stdout).to_string();
-                    
-                    // Filter out our specific traffic signaling cron job by ID only
-                    let lines: Vec<&str> = crontab_content.lines().collect();
-                    let mut new_lines = Vec::new();
-                    let mut skip_next = false;
-                    
-                    for line in lines {
-                        if line.contains(&format!("SignalBench Traffic Signaling (GoCortex.io) - {id}")) {
-                            skip_next = true; // Skip the comment line and the next cron job line
-                            continue;
-                        }
-                        if skip_next {
-                            skip_next = false; // Skip the actual cron job line after the comment
-                            continue;
-                        }
-                        new_lines.push(line);
-                    }
-                    
-                    let new_crontab = new_lines.join("\n");
-                    
-                    // Write to temporary file
-                    let temp_file = format!("/tmp/signalbench_traffic_cleanup_{}", Uuid::new_v4());
-                    let mut file = File::create(&temp_file)
-                        .map_err(|e| format!("Failed to create temporary cron file: {e}"))?;
-                    
-                    file.write_all(new_crontab.as_bytes())
-                        .map_err(|e| format!("Failed to write to temporary cron file: {e}"))?;
-                    
-                    // Install the new crontab
-                    let status = Command::new("crontab")
-                        .args([&temp_file])
-                        .status()
-                        .await
-                        .map_err(|e| format!("Failed to install crontab: {e}"))?;
+                    if !parts.is_empty() {
+                        let port = parts[0];
                         
-                    if !status.success() {
-                        return Err("Failed to install crontab during cleanup".to_string());
-                    }
-                    
-                    // Cleanup temporary file
-                    if let Err(e) = fs::remove_file(&temp_file) {
-                        warn!("Failed to remove temporary cron file {temp_file}: {e}");
-                    }
-                    
-                    info!("Removed traffic signaling cron job with ID {id}");
-                }
-                
-                // Remove network filter rules
-                if artifact.starts_with("filter_rule_") && artifact.contains("|") {
-                    let parts: Vec<&str> = artifact.split('|').collect();
-                    if parts.len() >= 4 {
-                        let filter_type = parts[1];
-                        let interface = parts[2];
-                        let target_port = parts[3];
+                        info!("Removing iptables rule for port {port}");
                         
-                        // Generate delete commands to remove the actual filter rules
-                        match filter_type {
-                            "iptables" => {
-                                // Remove the specific LOG rule we added
-                                let delete_cmd = format!("/usr/sbin/iptables -D INPUT -i {interface} -p tcp --dport {target_port} -j LOG --log-prefix 'SIGNALING: ' 2>/dev/null || true");
-                                let delete_result = Command::new("bash")
-                                    .arg("-c")
-                                    .arg(&delete_cmd)
-                                    .output()
-                                    .await;
+                        // Method 1: Delete by exact specification (most reliable)
+                        let delete_cmd = format!(
+                            "iptables -D INPUT -p tcp --dport {port} --tcp-flags SYN SYN -j LOG --log-prefix 'PORT_KNOCK[{port}]: ' --log-level 4 2>/dev/null"
+                        );
+                        
+                        let delete_result = Command::new("bash")
+                            .arg("-c")
+                            .arg(&delete_cmd)
+                            .output()
+                            .await;
+                            
+                        match delete_result {
+                            Ok(output) => {
+                                let exit_code = output.status.code().unwrap_or(-1);
+                                let stderr = String::from_utf8_lossy(&output.stderr);
+                                
+                                if exit_code == 0 {
+                                    info!("✓ Successfully removed iptables rule for port {port}");
+                                    rules_removed += 1;
+                                } else {
+                                    warn!("Failed to remove iptables rule for port {port} (exit code: {exit_code})");
+                                    if !stderr.is_empty() {
+                                        warn!("Error: {stderr}");
+                                    }
                                     
-                                match delete_result {
-                                    Ok(_) => info!("Attempted to remove iptables rule for {interface}:{target_port}"),
-                                    Err(e) => warn!("Failed to execute iptables delete command: {e}"),
+                                    // Method 2: Try to find and delete by line number with PORT_KNOCK prefix
+                                    info!("Attempting alternative removal method for port {port}...");
+                                    
+                                    let list_result = Command::new("iptables")
+                                        .args(["-L", "INPUT", "--line-numbers", "-n"])
+                                        .output()
+                                        .await;
+                                        
+                                    if let Ok(list_output) = list_result {
+                                        let rules_text = String::from_utf8_lossy(&list_output.stdout);
+                                        
+                                        // Find line numbers containing our PORT_KNOCK marker for this port
+                                        let port_knock_marker = format!("PORT_KNOCK[{port}]");
+                                        let mut line_numbers_to_delete = Vec::new();
+                                        
+                                        for line in rules_text.lines() {
+                                            if line.contains(&port_knock_marker) {
+                                                // Extract line number (first token)
+                                                if let Some(line_num_str) = line.split_whitespace().next() {
+                                                    if let Ok(line_num) = line_num_str.parse::<usize>() {
+                                                        line_numbers_to_delete.push(line_num);
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        
+                                        // Delete rules by line number (in reverse order to maintain numbering)
+                                        line_numbers_to_delete.sort();
+                                        line_numbers_to_delete.reverse();
+                                        
+                                        for line_num in line_numbers_to_delete {
+                                            let delete_by_num_cmd = format!("iptables -D INPUT {line_num}");
+                                            let num_result = Command::new("bash")
+                                                .arg("-c")
+                                                .arg(&delete_by_num_cmd)
+                                                .output()
+                                                .await;
+                                                
+                                            match num_result {
+                                                Ok(num_output) => {
+                                                    if num_output.status.code().unwrap_or(-1) == 0 {
+                                                        info!("✓ Removed rule at line {line_num} for port {port}");
+                                                        rules_removed += 1;
+                                                    } else {
+                                                        warn!("Failed to remove rule at line {line_num}");
+                                                        rules_failed += 1;
+                                                    }
+                                                },
+                                                Err(e) => {
+                                                    warn!("Failed to execute delete by line number: {e}");
+                                                    rules_failed += 1;
+                                                }
+                                            }
+                                        }
+                                    } else {
+                                        warn!("Could not list iptables rules for alternative removal");
+                                        rules_failed += 1;
+                                    }
                                 }
                             },
-                            "tc_filter" => {
-                                // Remove tc filter (more complex, try to find and delete matching filters)
-                                let delete_cmd = format!("/usr/sbin/tc filter del dev {interface} protocol ip parent 1: prio 1 2>/dev/null || true");
-                                let delete_result = Command::new("bash")
-                                    .arg("-c")
-                                    .arg(&delete_cmd)
-                                    .output()
-                                    .await;
-                                    
-                                match delete_result {
-                                    Ok(_) => info!("Attempted to remove tc filter for {interface}"),
-                                    Err(e) => warn!("Failed to execute tc delete command: {e}"),
-                                }
-                            },
-                            _ => {
-                                warn!("Unknown filter type for cleanup: {filter_type}");
+                            Err(e) => {
+                                warn!("Failed to execute iptables delete command for port {port}: {e}");
+                                rules_failed += 1;
                             }
                         }
                     }
                 }
                 
                 // Remove log files
-                if artifact.ends_with("traffic_signaling.log") && Path::new(artifact).exists() {
+                if artifact.ends_with("port_knocking.log") && Path::new(artifact).exists() {
                     if let Err(e) = fs::remove_file(artifact) {
                         warn!("Failed to remove log file {artifact}: {e}");
                     } else {
                         info!("Removed log file: {artifact}");
                     }
+                }
+            }
+            
+            // Verify cleanup
+            info!("Cleanup summary: {rules_removed} rules removed, {rules_failed} failed");
+            
+            // Final verification - check if any PORT_KNOCK rules remain
+            let verify_result = Command::new("iptables")
+                .args(["-L", "INPUT", "-n"])
+                .output()
+                .await;
+                
+            if let Ok(output) = verify_result {
+                let rules = String::from_utf8_lossy(&output.stdout);
+                let remaining = rules.lines().filter(|line| line.contains("PORT_KNOCK")).count();
+                
+                if remaining > 0 {
+                    warn!("⚠ Warning: {remaining} PORT_KNOCK rules still present in iptables");
+                    warn!("Manual cleanup may be required: iptables -L INPUT -n --line-numbers | grep PORT_KNOCK");
+                } else {
+                    info!("✓ Cleanup verified: No PORT_KNOCK rules remain");
                 }
             }
             

@@ -1,6 +1,6 @@
 [package]
 name = "signalbench"
-version = "1.4.3"
+version = "1.5.13"
 edition = "2021"
 authors = ["Simon Sigre <info@gocortex.io>"]
 description = "Endpoint telemetry generator for security analytics, research, and training using MITRE ATT&CK techniques"
@@ -30,6 +30,7 @@ base64 = "0.22"
 libc = "0.2"
 hostname = "0.4"
 async-trait = "0.1"
+regex = "1.11"
 
 
 
