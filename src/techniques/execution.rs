@@ -15,7 +15,7 @@ impl AttackTechnique for CommandLineInterface {
     fn info(&self) -> Technique {
         Technique {
             id: "T1059.004".to_string(),
-            name: "Unix Shell Execution - Aggressive".to_string(),
+            name: "Unix Shell Execution".to_string(),
             description: "Executes REAL suspicious shell commands including reverse shells, encoded payloads, and process injection chains. Generates genuine EDR telemetry from actual malicious-pattern execution.".to_string(),
             category: "execution".to_string(),
             parameters: vec![
@@ -23,7 +23,7 @@ impl AttackTechnique for CommandLineInterface {
                     name: "log_file".to_string(),
                     description: "File to save detailed command execution log with timestamps".to_string(),
                     required: false,
-                    default: Some("/tmp/signalbench_aggressive_shell_log".to_string()),
+                    default: Some("/tmp/signalbench_shell_log".to_string()),
                 },
                 TechniqueParameter {
                     name: "listener_port".to_string(),
@@ -48,7 +48,7 @@ impl AttackTechnique for CommandLineInterface {
             let log_file = config
                 .parameters
                 .get("log_file")
-                .unwrap_or(&"/tmp/signalbench_aggressive_shell_log".to_string())
+                .unwrap_or(&"/tmp/signalbench_shell_log".to_string())
                 .clone();
                 
             let listener_port = config
@@ -65,7 +65,7 @@ impl AttackTechnique for CommandLineInterface {
             artifacts.push(encoded_output.clone());
                 
             if dry_run {
-                info!("[DRY RUN] Would execute aggressive shell techniques:");
+                info!("[DRY RUN] Would execute shell techniques:");
                 info!("  - Reverse shell to localhost:{listener_port}");
                 info!("  - Base64-encoded command execution");
                 info!("  - Process injection chains");
@@ -73,7 +73,7 @@ impl AttackTechnique for CommandLineInterface {
                 return Ok(SimulationResult {
                     technique_id: self.info().id,
                     success: true,
-                    message: "DRY RUN: Would execute aggressive shell techniques with REAL suspicious commands".to_string(),
+                    message: "DRY RUN: Would execute shell techniques with REAL suspicious commands".to_string(),
                     artifacts,
                     cleanup_required: false,
                 });
@@ -83,7 +83,7 @@ impl AttackTechnique for CommandLineInterface {
             let mut log = File::create(&log_file)
                 .map_err(|e| format!("Failed to create log file: {e}"))?;
             
-            writeln!(log, "=== SignalBench Aggressive Unix Shell Execution (GoCortex.io) ===")
+            writeln!(log, "=== SignalBench Unix Shell Execution (GoCortex.io) ===")
                 .map_err(|e| format!("Failed to write to log file: {e}"))?;
             writeln!(log, "Timestamp: {}", chrono::Local::now().to_rfc3339())
                 .map_err(|e| format!("Failed to write to log file: {e}"))?;
@@ -272,13 +272,13 @@ ps aux | grep -E '(bash|sh)' | head -5
             writeln!(log, "End timestamp: {}", chrono::Local::now().to_rfc3339())
                 .map_err(|e| format!("Failed to write to log file: {e}"))?;
             
-            info!("Aggressive shell execution complete - 5 suspicious commands executed");
+            info!("Shell execution complete - 5 suspicious commands executed");
             info!("Telemetry generated: reverse shells, encoded payloads, process chains, /dev/shm operations");
             
             Ok(SimulationResult {
                 technique_id: self.info().id,
                 success: true,
-                message: "Successfully executed aggressive shell techniques: reverse shell attempt, base64 payloads, process chains, /dev/shm operations".to_string(),
+                message: "Successfully executed shell techniques: reverse shell attempt, base64 payloads, process chains, /dev/shm operations".to_string(),
                 artifacts,
                 cleanup_required: true,
             })
@@ -287,7 +287,7 @@ ps aux | grep -E '(bash|sh)' | head -5
 
     fn cleanup<'a>(&'a self, artifacts: &'a [String]) -> CleanupFuture<'a> {
         Box::pin(async move {
-            info!("Cleaning up aggressive shell execution artifacts");
+            info!("Cleaning up shell execution artifacts");
             
             // Kill any spawned bash processes from our payload executions (not the parent signalbench process)
             // This specifically targets bash processes running from /dev/shm
@@ -322,7 +322,7 @@ impl AttackTechnique for ScriptExecution {
     fn info(&self) -> Technique {
         Technique {
             id: "T1059.006".to_string(),
-            name: "Python Script Execution - Aggressive Reconnaissance with Persistent Listener".to_string(),
+            name: "Python Script Execution".to_string(),
             description: "Executes REAL Python-based reconnaissance including PERSISTENT socket listener (10-30s accept loop), /proc/*/fd enumeration for open files, credential hunting in ALL process environments, file searching, memory inspection, and comprehensive /tmp reporting. Generates extensive EDR telemetry from Python exploitation patterns including file descriptor access, environment variable scraping, and network listeners.".to_string(),
             category: "execution".to_string(),
             parameters: vec![
@@ -392,9 +392,9 @@ impl AttackTechnique for ScriptExecution {
             let session_id = uuid::Uuid::new_v4().to_string().split('-').next().unwrap_or("unknown").to_string();
             let recon_report = format!("/tmp/signalbench_python_recon_{session_id}.txt");
             
-            // Create aggressive Python reconnaissance script with persistent listener and proc enumeration
+            // Create Python reconnaissance script with persistent listener and proc enumeration
             let script_content = format!(r#"#!/usr/bin/env python3
-# SignalBench by GoCortex.io - Aggressive Python Reconnaissance v1.5.13
+# SignalBench by GoCortex.io - Python Reconnaissance v1.5.13
 # WARNING: This performs REAL reconnaissance activities for EDR telemetry generation
 
 import os
@@ -801,7 +801,7 @@ def main():
         f.write(f"Hostname: {{socket.gethostname()}}\n")
         f.write(f"PID: {{os.getpid()}}\n\n")
     
-    log_message("Starting AGGRESSIVE Python reconnaissance with persistent listener...")
+    log_message("Starting Python reconnaissance with persistent listener...")
     log_message("")
     
     # Execute all reconnaissance activities in sequence
@@ -833,7 +833,7 @@ if __name__ == "__main__":
 "#);
                 
             if dry_run {
-                info!("[DRY RUN] Would execute aggressive Python reconnaissance with persistent listener:");
+                info!("[DRY RUN] Would execute Python reconnaissance with persistent listener:");
                 info!("  - Persistent socket listener with {listener_timeout}s accept() loop on 127.0.0.1:{listener_port}");
                 info!("  - /proc/*/fd enumeration for open files across all processes");
                 info!("  - Environment variable credential hunting (API_KEY, PASSWORD, TOKEN, SECRET)");
@@ -870,7 +870,7 @@ if __name__ == "__main__":
             }
             
             info!("Created Python reconnaissance script: {script_file}");
-            info!("Executing aggressive Python reconnaissance...");
+            info!("Executing Python reconnaissance...");
             
             // Execute the reconnaissance script
             let output = Command::new("python3")

@@ -6,6 +6,7 @@ use log::{info, warn};
 use std::fs::{self, File};
 use std::io::Write;
 use std::path::Path;
+use uuid::Uuid;
 
 pub struct DisableAuditLogs {}
 
@@ -15,7 +16,7 @@ impl AttackTechnique for DisableAuditLogs {
         Technique {
             id: "T1562.002".to_string(),
             name: "Disable Linux Audit Logs".to_string(),
-            description: "AGGRESSIVE audit system manipulation - combines multiple methods to disable Linux audit logging when running as root. Executes auditctl to delete ALL rules and add aggressive exclusions for /tmp and /var, optionally stops auditd service completely, and can directly modify /etc/audit/audit.rules. Uses multiple simultaneous manipulation techniques for maximum EDR detection. Requires root privileges.".to_string(),
+            description: "Audit system manipulation - combines multiple methods to disable Linux audit logging when running as root. Executes auditctl to delete ALL rules and add exclusions for /tmp and /var, optionally stops auditd service completely, and can directly modify /etc/audit/audit.rules. Uses multiple simultaneous manipulation techniques for maximum EDR detection. Requires root privileges.".to_string(),
             category: "defense_evasion".to_string(),
             parameters: vec![
                 TechniqueParameter {
@@ -32,7 +33,7 @@ impl AttackTechnique for DisableAuditLogs {
                 },
                 TechniqueParameter {
                     name: "modify_config".to_string(),
-                    description: "Directly modify /etc/audit/audit.rules file (default: false, highly aggressive)".to_string(),
+                    description: "Directly modify /etc/audit/audit.rules file (default: false, direct file modification)".to_string(),
                     required: false,
                     default: Some("false".to_string()),
                 },
@@ -157,14 +158,14 @@ impl AttackTechnique for DisableAuditLogs {
             
             manipulation_log.push('\n');
             
-            // Step 3: AGGRESSIVE Audit System Manipulation (only if root)
+            // Step 3: Audit System Manipulation (only if root)
             let mut service_was_stopped = false;
             
             if is_root {
-                manipulation_log.push_str("=== AGGRESSIVE Audit Manipulation (ROOT) ===\n");
+                manipulation_log.push_str("=== Audit Manipulation (ROOT) ===\n");
                 manipulation_log.push_str(&format!("Configuration: disable_service={disable_service}, modify_config={modify_config}\n\n"));
                 
-                // Method 1: Use auditctl to delete ALL rules and add aggressive exclusions
+                // Method 1: Use auditctl to delete ALL rules and add exclusions
                 if auditctl_exists {
                     manipulation_log.push_str("METHOD 1: Enhanced auditctl manipulation\n");
                     manipulation_log.push_str("Executing: auditctl -D (delete ALL rules)...\n");
@@ -175,8 +176,8 @@ impl AttackTechnique for DisableAuditLogs {
                                 methods_used.push("auditctl_delete_rules".to_string());
                                 manipulation_log.push_str("✓ Successfully deleted all audit rules with auditctl -D\n");
                                 
-                                // Add AGGRESSIVE exclusion rules for directories and files
-                                manipulation_log.push_str("\nAdding AGGRESSIVE exclusion rules...\n");
+                                // Add exclusion rules for directories and files
+                                manipulation_log.push_str("\nAdding exclusion rules...\n");
                                 
                                 // Rule 1: Exclude /tmp directory (common staging location)
                                 match Command::new("auditctl")
@@ -313,9 +314,9 @@ impl AttackTechnique for DisableAuditLogs {
                     }
                 }
                 
-                // Method 3: Modify audit.rules file (if enabled - HIGHLY AGGRESSIVE)
+                // Method 3: Modify audit.rules file (if enabled - direct file modification)
                 if modify_config && Path::new(audit_conf_path).exists() {
-                    manipulation_log.push_str("\nMETHOD 3: Direct modification of /etc/audit/audit.rules (HIGHLY AGGRESSIVE)\n");
+                    manipulation_log.push_str("\nMETHOD 3: Direct modification of /etc/audit/audit.rules\n");
                     manipulation_log.push_str(&format!("Modifying {audit_conf_path}...\n"));
                     
                     let disable_rules = r#"
@@ -418,7 +419,7 @@ impl AttackTechnique for DisableAuditLogs {
                 if methods_used.is_empty() {
                     format!("WARNING: No manipulation methods succeeded. Check logs. Backup saved to {backup_file}")
                 } else {
-                    format!("AGGRESSIVE audit manipulation completed using {} method(s): {}. Service stopped: {}. Backup: {backup_file}", 
+                    format!("Audit manipulation completed using {} method(s): {}. Service stopped: {}. Backup: {backup_file}", 
                             methods_used.len(), methods_used.join(", "), service_was_stopped)
                 }
             } else {
@@ -1256,30 +1257,219 @@ impl AttackTechnique for MasqueradingAsCrond {
     fn info(&self) -> Technique {
         Technique {
             id: "T1036.003".to_string(),
-            name: "Masquerading as Linux Crond Process".to_string(),
-            description: "Generates telemetry for process masquerading by copying /bin/sh to a file named 'crond'".to_string(),
+            name: "Masquerading as Linux System Process".to_string(),
+            description: "Compiles REAL C binaries with misleading names that masquerade as legitimate system processes including [kworker/0:0], systemd-journald, and crond. Uses prctl(PR_SET_NAME) for process name spoofing so processes appear as genuine system services in ps output. Each binary sleeps for 10 seconds whilst masquerading. Executes binaries, verifies spoofed names appear in ps aux output, and provides complete cleanup including process termination and binary/source removal.".to_string(),
+            category: "defense_evasion".to_string(),
+            parameters: vec![],
+            detection: "Monitor for C compilation (gcc/clang) of small binaries, execution of binaries from /tmp with system-like names, prctl() system calls for PR_SET_NAME, processes in ps output with suspicious parent processes or working directories, and binaries named after kernel workers or system daemons in unusual locations.".to_string(),
+            cleanup_support: true,
+            platforms: vec!["Linux".to_string()],
+            permissions: vec!["user".to_string()],
+        }
+    }
+
+    fn execute<'a>(
+        &'a self,
+        _config: &'a TechniqueConfig,
+        dry_run: bool,
+    ) -> ExecuteFuture<'a> {
+        Box::pin(async move {
+            use tokio::process::Command;
+            
+            let id = Uuid::new_v4().simple().to_string();
+            let work_dir = format!("/tmp/signalbench_masquerade_{id}");
+            
+            if dry_run {
+                info!("[DRY RUN] Would compile REAL C binaries with process name spoofing:");
+                info!("[DRY RUN]   - [kworker/0:0] (kernel worker spoofing)");
+                info!("[DRY RUN]   - systemd-journald (systemd service spoofing)");
+                info!("[DRY RUN]   - crond (cron daemon spoofing)");
+                info!("[DRY RUN]   - Uses prctl(PR_SET_NAME) for process name manipulation");
+                return Ok(SimulationResult {
+                    technique_id: self.info().id,
+                    success: true,
+                    message: "DRY RUN: Would compile and execute REAL masquerading binaries".to_string(),
+                    artifacts: vec![work_dir],
+                    cleanup_required: false,
+                });
+            }
+
+            info!("Creating process masquerading binaries in {work_dir}");
+            
+            fs::create_dir_all(&work_dir)
+                .map_err(|e| format!("Failed to create work directory: {e}"))?;
+
+            let mut artifacts = vec![work_dir.clone()];
+            let mut binaries_created = Vec::new();
+            let mut running_pids = Vec::new();
+
+            let c_source_template = |process_name: &str| -> String {
+                format!("#include <stdio.h>\n\
+                    #include <stdlib.h>\n\
+                    #include <unistd.h>\n\
+                    #include <sys/prctl.h>\n\
+                    #include <string.h>\n\
+                    \n\
+                    int main() {{\n\
+                        prctl(PR_SET_NAME, \"{process_name}\", 0, 0, 0);\n\
+                        \n\
+                        printf(\"SignalBench: Masquerading as {process_name}\\n\");\n\
+                        printf(\"PID: %d\\n\", getpid());\n\
+                        \n\
+                        sleep(10);\n\
+                        \n\
+                        return 0;\n\
+                    }}\n"
+                )
+            };
+
+            let binaries = vec![
+                ("[kworker/0:0]", "kworker"),
+                ("systemd-journald", "systemd_journald"),
+                ("crond", "crond"),
+            ];
+
+            info!("Compiling {} C binaries with process name spoofing", binaries.len());
+
+            for (spoof_name, safe_filename) in &binaries {
+                let source_file = format!("{work_dir}/{safe_filename}.c");
+                let binary_file = format!("{work_dir}/{safe_filename}");
+                
+                let source_code = c_source_template(spoof_name);
+                fs::write(&source_file, source_code.as_bytes())
+                    .map_err(|e| format!("Failed to write C source for {spoof_name}: {e}"))?;
+                artifacts.push(source_file.clone());
+                
+                info!("Compiling {spoof_name} binary with gcc");
+                let compile_output = Command::new("gcc")
+                    .args([
+                        &source_file,
+                        "-o",
+                        &binary_file,
+                        "-std=c99",
+                    ])
+                    .output()
+                    .await
+                    .map_err(|e| format!("Failed to compile {spoof_name}: {e}"))?;
+                
+                if !compile_output.status.success() {
+                    let stderr = String::from_utf8_lossy(&compile_output.stderr);
+                    return Err(format!("Compilation failed for {spoof_name}: {stderr}"));
+                }
+                
+                artifacts.push(binary_file.clone());
+                binaries_created.push(format!("{safe_filename} -> {spoof_name}"));
+                
+                info!("Executing masquerading binary: {safe_filename} (will appear as {spoof_name})");
+                let child = Command::new(&binary_file)
+                    .spawn()
+                    .map_err(|e| format!("Failed to execute {spoof_name}: {e}"))?;
+                
+                let pid = child.id().ok_or("Failed to get PID")?;
+                running_pids.push(pid);
+                artifacts.push(format!("pid_{pid}"));
+                
+                info!("✓ Binary running with PID {pid}, spoofing as {spoof_name}");
+                
+                tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+            }
+
+            info!("Verifying process masquerading in ps output");
+            let ps_output = Command::new("ps")
+                .args(["aux"])
+                .output()
+                .await
+                .map_err(|e| format!("Failed to run ps: {e}"))?;
+            
+            let ps_text = String::from_utf8_lossy(&ps_output.stdout);
+            let mut verified_count = 0;
+            
+            for (spoof_name, _) in &binaries {
+                if ps_text.contains(spoof_name) {
+                    info!("✓ Verified: '{spoof_name}' appears in ps output");
+                    verified_count += 1;
+                } else {
+                    warn!("⚠ Warning: '{spoof_name}' not found in ps output");
+                }
+            }
+            
+            info!("Masquerading complete: {} binaries running, {} verified in ps", running_pids.len(), verified_count);
+            
+            Ok(SimulationResult {
+                technique_id: self.info().id,
+                success: true,
+                message: format!("Successfully created and executed {} masquerading binaries ({} verified): {} (session: {})", binaries_created.len(), verified_count, binaries_created.join(", "), id),
+                artifacts,
+                cleanup_required: true,
+            })
+        })
+    }
+
+    fn cleanup<'a>(&'a self, artifacts: &'a [String]) -> CleanupFuture<'a> {
+        Box::pin(async move {
+            use tokio::process::Command;
+            
+            for artifact in artifacts {
+                if artifact.starts_with("pid_") {
+                    let pid_str = artifact.trim_start_matches("pid_");
+                    if let Ok(pid) = pid_str.parse::<u32>() {
+                        info!("Terminating masquerading process PID {pid}");
+                        Command::new("kill")
+                            .args(["-9", &pid.to_string()])
+                            .output()
+                            .await
+                            .ok();
+                        
+                        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+                    }
+                } else if Path::new(artifact).is_dir() {
+                    match fs::remove_dir_all(artifact) {
+                        Ok(_) => info!("Removed masquerading directory: {artifact}"),
+                        Err(e) => warn!("Failed to remove directory {artifact}: {e}"),
+                    }
+                } else if Path::new(artifact).exists() {
+                    match fs::remove_file(artifact) {
+                        Ok(_) => info!("Removed artifact: {artifact}"),
+                        Err(e) => warn!("Failed to remove artifact {artifact}: {e}"),
+                    }
+                }
+            }
+            Ok(())
+        })
+    }
+}
+
+pub struct FileDeletion {}
+
+#[async_trait]
+impl AttackTechnique for FileDeletion {
+    fn info(&self) -> Technique {
+        Technique {
+            id: "T1070.004".to_string(),
+            name: "File Deletion".to_string(),
+            description: "Creates test files in /tmp/signalbench_deletion_test/, backs them up to /tmp/signalbench_deletion_backup/ BEFORE deletion, then demonstrates multiple secure deletion methods including shred -uvz -n 3 (3 overwrite passes), rm -f, and wipe (if available). Simulates log tampering by creating and deleting entries in test log files. Demonstrates anti-forensics metadata clearing techniques. FULLY REVERSIBLE with complete restoration from backups and cleanup of all test files.".to_string(),
             category: "defense_evasion".to_string(),
             parameters: vec![
                 TechniqueParameter {
-                    name: "target_path".to_string(),
-                    description: "Path where the masquerading binary will be created".to_string(),
+                    name: "test_files_count".to_string(),
+                    description: "Number of test files to create for deletion testing (default: 10)".to_string(),
                     required: false,
-                    default: Some("/tmp/crond".to_string()),
+                    default: Some("10".to_string()),
                 },
                 TechniqueParameter {
-                    name: "execute_masqueraded".to_string(),
-                    description: "Whether to execute the masqueraded binary (true/false)".to_string(),
+                    name: "use_shred".to_string(),
+                    description: "Use shred for secure deletion (default: true)".to_string(),
                     required: false,
                     default: Some("true".to_string()),
                 },
                 TechniqueParameter {
-                    name: "log_file".to_string(),
-                    description: "File to save masquerading log to".to_string(),
+                    name: "simulate_log_tampering".to_string(),
+                    description: "Create and delete test log files (default: true)".to_string(),
                     required: false,
-                    default: Some("/tmp/signalbench_masquerade_log".to_string()),
+                    default: Some("true".to_string()),
                 },
             ],
-            detection: "Monitor for copying system binaries to uncommon locations with process names mimicking legitimate system services. Look for execve events with arguments like 'cp /bin/sh <path>/crond'".to_string(),
+            detection: "Monitor for shred command execution, unusual deletion of log files, metadata manipulation operations, rapid file creation/deletion patterns, access to /var/log/ with write permissions, and systematic file destruction patterns. Watch for tools that overwrite files before deletion.".to_string(),
             cleanup_support: true,
             platforms: vec!["Linux".to_string()],
             permissions: vec!["user".to_string()],
@@ -1292,107 +1482,305 @@ impl AttackTechnique for MasqueradingAsCrond {
         dry_run: bool,
     ) -> ExecuteFuture<'a> {
         Box::pin(async move {
-            let target_path = config
+            use tokio::process::Command;
+            
+            let test_files_count = config
                 .parameters
-                .get("target_path")
-                .unwrap_or(&"/tmp/crond".to_string())
-                .clone();
-                
-            let execute_masqueraded = config
+                .get("test_files_count")
+                .unwrap_or(&"10".to_string())
+                .parse::<usize>()
+                .unwrap_or(10)
+                .min(50);
+            
+            let use_shred = config
                 .parameters
-                .get("execute_masqueraded")
+                .get("use_shred")
                 .unwrap_or(&"true".to_string())
                 .to_lowercase() == "true";
-                
-            let log_file = config
+            
+            let simulate_log_tampering = config
                 .parameters
-                .get("log_file")
-                .unwrap_or(&"/tmp/signalbench_masquerade_log".to_string())
-                .clone();
-                
+                .get("simulate_log_tampering")
+                .unwrap_or(&"true".to_string())
+                .to_lowercase() == "true";
+            
+            let session_id = Uuid::new_v4().to_string().replace("-", "");
+            let test_dir = format!("/tmp/signalbench_deletion_test_{session_id}");
+            let backup_dir = format!("/tmp/signalbench_deletion_backup_{session_id}");
+            let log_file = format!("/tmp/signalbench_deletion_{session_id}.log");
+            
             if dry_run {
-                info!("[DRY RUN] Would copy /bin/sh to {target_path} to masquerade as crond");
-                if execute_masqueraded {
-                    info!("[DRY RUN] Would execute the masqueraded binary");
-                }
+                info!("[DRY RUN] Would demonstrate file deletion techniques:");
+                info!("[DRY RUN]   Test files: {test_files_count}");
+                info!("[DRY RUN]   Use shred: {use_shred}");
+                info!("[DRY RUN]   Log tampering: {simulate_log_tampering}");
+                info!("[DRY RUN]   Test directory: {test_dir}");
+                info!("[DRY RUN]   Backup directory: {backup_dir}");
                 return Ok(SimulationResult {
                     technique_id: self.info().id,
                     success: true,
-                    message: format!("DRY RUN: Would copy /bin/sh to {target_path}"),
-                    artifacts: vec![log_file, target_path],
+                    message: "DRY RUN: Would demonstrate secure file deletion with shred, rm, and log tampering".to_string(),
+                    artifacts: vec![test_dir, backup_dir, log_file],
                     cleanup_required: false,
                 });
             }
 
-            use tokio::process::Command;
-
-            // Create the log file
+            info!("Starting file deletion demonstration (Session: {session_id})...");
+            
             let mut log = File::create(&log_file)
                 .map_err(|e| format!("Failed to create log file: {e}"))?;
             
-            writeln!(log, "=== SignalBench Masquerading as Crond ===")
-                .map_err(|e| format!("Failed to write to log file: {e}"))?;
-            writeln!(log, "Time: {}", chrono::Local::now().to_rfc3339())
-                .map_err(|e| format!("Failed to write to log file: {e}"))?;
-            writeln!(log, "Target path: {target_path}")
-                .map_err(|e| format!("Failed to write to log file: {e}"))?;
-            writeln!(log)
-                .map_err(|e| format!("Failed to write to log file: {e}"))?;
-
-            // Copy /bin/sh to target path (this generates the telemetry)
-            info!("Copying /bin/sh to {target_path} to simulate process masquerading");
-            writeln!(log, "=== Copying /bin/sh to {target_path} ===")
-                .map_err(|e| format!("Failed to write to log file: {e}"))?;
+            writeln!(log, "=== SignalBench File Deletion Demonstration ===").unwrap();
+            writeln!(log, "Session ID: {session_id}").unwrap();
+            writeln!(log, "Timestamp: {}", chrono::Local::now()).unwrap();
+            writeln!(log).unwrap();
             
-            let output = Command::new("cp")
-                .args(["/bin/sh", &target_path])
+            let artifacts = vec![test_dir.clone(), backup_dir.clone(), log_file.clone()];
+            
+            // Create test directory and backup directory
+            info!("Creating test directory: {test_dir}");
+            fs::create_dir_all(&test_dir)
+                .map_err(|e| format!("Failed to create test directory: {e}"))?;
+            
+            fs::create_dir_all(&backup_dir)
+                .map_err(|e| format!("Failed to create backup directory: {e}"))?;
+            
+            // Phase 1: Create test files with sensitive-looking names
+            info!("Phase 1: Creating {test_files_count} test files...");
+            writeln!(log, "=== Phase 1: Test File Creation ===").unwrap();
+            
+            let sensitive_names = ["credentials.txt",
+                "passwords.db",
+                "secret_key.pem",
+                "api_tokens.conf",
+                "sensitive_data.sql",
+                "user_passwords.txt",
+                "ssh_private_key",
+                "database_backup.sql",
+                "company_secrets.txt",
+                "access_tokens.json"];
+            
+            let mut created_files = Vec::new();
+            for i in 0..test_files_count {
+                let file_name = if i < sensitive_names.len() {
+                    sensitive_names[i]
+                } else {
+                    &format!("sensitive_file_{i}.txt")
+                };
+                
+                let file_path = format!("{test_dir}/{file_name}");
+                let content = format!(
+                    "SENSITIVE TEST DATA - Session {}\nFile: {}\nCreated: {}\nThis is test data for file deletion demonstration.\nPassword: test_password_{}\nAPI_KEY: FAKE_KEY_{}\n",
+                    session_id,
+                    file_name,
+                    chrono::Local::now(),
+                    i,
+                    i
+                );
+                
+                fs::write(&file_path, content.as_bytes())
+                    .map_err(|e| format!("Failed to create test file: {e}"))?;
+                
+                created_files.push(file_path.clone());
+                writeln!(log, "Created: {file_name}").unwrap();
+            }
+            
+            info!("Created {} test files", created_files.len());
+            writeln!(log, "Total files created: {}", created_files.len()).unwrap();
+            writeln!(log).unwrap();
+            
+            // Phase 2: Backup test files BEFORE deletion
+            info!("Phase 2: Backing up test files to {backup_dir}...");
+            writeln!(log, "=== Phase 2: File Backup ===").unwrap();
+            
+            for file_path in &created_files {
+                let file_name = Path::new(file_path).file_name().unwrap().to_str().unwrap();
+                let backup_path = format!("{backup_dir}/{file_name}");
+                
+                fs::copy(file_path, &backup_path)
+                    .map_err(|e| format!("Failed to backup file: {e}"))?;
+                
+                writeln!(log, "Backed up: {file_name} -> {backup_path}").unwrap();
+            }
+            
+            info!("Backed up {} files", created_files.len());
+            writeln!(log).unwrap();
+            
+            // Phase 3: Demonstrate deletion methods
+            info!("Phase 3: Demonstrating file deletion methods...");
+            writeln!(log, "=== Phase 3: File Deletion Methods ===").unwrap();
+            
+            let mut deletion_results = Vec::new();
+            
+            // Check if shred is available
+            let shred_available = Command::new("which")
+                .arg("shred")
                 .output()
                 .await
-                .map_err(|e| format!("Failed to copy /bin/sh: {e}"))?;
-
-            writeln!(log, "Exit Code: {}", output.status.code().unwrap_or(-1))
-                .map_err(|e| format!("Failed to write to log file: {e}"))?;
+                .map(|o| o.status.success())
+                .unwrap_or(false);
             
-            if !output.status.success() {
-                let error_msg = String::from_utf8_lossy(&output.stderr);
-                writeln!(log, "Error: {error_msg}")
-                    .map_err(|e| format!("Failed to write to log file: {e}"))?;
-                return Err(format!("Failed to copy /bin/sh: {error_msg}"));
-            }
-
-            writeln!(log, "Successfully created masqueraded binary")
-                .map_err(|e| format!("Failed to write to log file: {e}"))?;
-
-            // Optionally execute the masqueraded binary
-            if execute_masqueraded {
-                writeln!(log)
-                    .map_err(|e| format!("Failed to write to log file: {e}"))?;
-                writeln!(log, "=== Executing masqueraded binary ===")
-                    .map_err(|e| format!("Failed to write to log file: {e}"))?;
+            writeln!(log, "shred available: {shred_available}").unwrap();
+            
+            // Check if wipe is available
+            let wipe_available = Command::new("which")
+                .arg("wipe")
+                .output()
+                .await
+                .map(|o| o.status.success())
+                .unwrap_or(false);
+            
+            writeln!(log, "wipe available: {wipe_available}").unwrap();
+            writeln!(log).unwrap();
+            
+            // Delete files using different methods
+            for (idx, file_path) in created_files.iter().enumerate() {
+                let file_name = Path::new(file_path).file_name().unwrap().to_str().unwrap();
                 
-                info!("Executing masqueraded binary: {target_path}");
-                
-                let exec_output = Command::new(&target_path)
-                    .args(["-c", "echo 'SignalBench masqueraded process executed successfully'"])
-                    .output()
-                    .await
-                    .map_err(|e| format!("Failed to execute masqueraded binary: {e}"))?;
-
-                writeln!(log, "Execution Exit Code: {}", exec_output.status.code().unwrap_or(-1))
-                    .map_err(|e| format!("Failed to write to log file: {e}"))?;
-                writeln!(log, "Output:")
-                    .map_err(|e| format!("Failed to write to log file: {e}"))?;
-                log.write_all(&exec_output.stdout)
-                    .map_err(|e| format!("Failed to write to log file: {e}"))?;
+                if idx % 3 == 0 && use_shred && shred_available {
+                    // Method 1: shred with 3 overwrite passes
+                    info!("Shredding file: {file_name} (3 passes)");
+                    writeln!(log, "Deleting {file_name} using shred -uvz -n 3").unwrap();
+                    
+                    let shred_output = Command::new("shred")
+                        .args(["-uvz", "-n", "3", file_path])
+                        .output()
+                        .await;
+                    
+                    match shred_output {
+                        Ok(output) if output.status.success() => {
+                            deletion_results.push((file_name.to_string(), "shred -n 3".to_string(), true));
+                            writeln!(log, "✓ Successfully shredded: {file_name}").unwrap();
+                        }
+                        Ok(output) => {
+                            let stderr = String::from_utf8_lossy(&output.stderr);
+                            writeln!(log, "✗ shred failed for {file_name}: {stderr}").unwrap();
+                            deletion_results.push((file_name.to_string(), "shred -n 3".to_string(), false));
+                        }
+                        Err(e) => {
+                            writeln!(log, "✗ Failed to execute shred for {file_name}: {e}").unwrap();
+                            deletion_results.push((file_name.to_string(), "shred -n 3".to_string(), false));
+                        }
+                    }
+                } else if idx % 3 == 1 && wipe_available {
+                    // Method 2: wipe (if available)
+                    info!("Wiping file: {file_name}");
+                    writeln!(log, "Deleting {file_name} using wipe -f").unwrap();
+                    
+                    let wipe_output = Command::new("wipe")
+                        .args(["-f", file_path])
+                        .output()
+                        .await;
+                    
+                    match wipe_output {
+                        Ok(output) if output.status.success() => {
+                            deletion_results.push((file_name.to_string(), "wipe -f".to_string(), true));
+                            writeln!(log, "✓ Successfully wiped: {file_name}").unwrap();
+                        }
+                        Ok(_) => {
+                            deletion_results.push((file_name.to_string(), "wipe -f".to_string(), false));
+                            writeln!(log, "✗ wipe failed for {file_name}").unwrap();
+                        }
+                        Err(e) => {
+                            writeln!(log, "✗ Failed to execute wipe for {file_name}: {e}").unwrap();
+                            deletion_results.push((file_name.to_string(), "wipe -f".to_string(), false));
+                        }
+                    }
+                } else {
+                    // Method 3: Simple rm -f
+                    info!("Removing file: {file_name} (rm -f)");
+                    writeln!(log, "Deleting {file_name} using rm -f").unwrap();
+                    
+                    match fs::remove_file(file_path) {
+                        Ok(_) => {
+                            deletion_results.push((file_name.to_string(), "rm -f".to_string(), true));
+                            writeln!(log, "✓ Successfully removed: {file_name}").unwrap();
+                        }
+                        Err(e) => {
+                            writeln!(log, "✗ rm failed for {file_name}: {e}").unwrap();
+                            deletion_results.push((file_name.to_string(), "rm -f".to_string(), false));
+                        }
+                    }
+                }
             }
-
-            info!("Successfully simulated masquerading as crond process");
+            
+            writeln!(log).unwrap();
+            
+            // Phase 4: Log tampering simulation (if enabled)
+            if simulate_log_tampering {
+                info!("Phase 4: Simulating log tampering...");
+                writeln!(log, "=== Phase 4: Log Tampering Simulation ===").unwrap();
+                
+                let fake_log_dir = format!("{test_dir}/fake_logs");
+                fs::create_dir_all(&fake_log_dir)
+                    .map_err(|e| format!("Failed to create fake log directory: {e}"))?;
+                
+                // Create fake log files
+                let log_files = vec!["auth.log", "syslog", "secure.log", "access.log"];
+                
+                for log_name in &log_files {
+                    let log_path = format!("{fake_log_dir}/{log_name}");
+                    let fake_content = "Nov  5 12:34:56 testhost systemd[1]: Started session.\n\
+                         Nov  5 12:35:01 testhost CRON[12345]: pam_unix(cron:session): session opened\n\
+                         Nov  5 12:35:02 testhost sudo: attacker : TTY=pts/0 ; PWD=/tmp ; USER=root ; COMMAND=/bin/bash\n\
+                         Nov  5 12:35:03 testhost EVIDENCE_OF_ATTACK: Suspicious activity detected\n\
+                         Nov  5 12:35:04 testhost systemd[1]: Session closed.\n".to_string();
+                    
+                    fs::write(&log_path, fake_content.as_bytes())
+                        .map_err(|e| format!("Failed to create fake log: {e}"))?;
+                    
+                    writeln!(log, "Created fake log: {log_name}").unwrap();
+                }
+                
+                info!("Created {} fake log files, now deleting them to simulate tampering...", log_files.len());
+                
+                // Delete the fake logs to simulate tampering
+                for log_name in &log_files {
+                    let log_path = format!("{fake_log_dir}/{log_name}");
+                    
+                    if shred_available && use_shred {
+                        Command::new("shred")
+                            .args(["-uvz", "-n", "3", &log_path])
+                            .output()
+                            .await
+                            .ok();
+                        writeln!(log, "Shredded fake log: {log_name}").unwrap();
+                    } else {
+                        fs::remove_file(&log_path).ok();
+                        writeln!(log, "Deleted fake log: {log_name}").unwrap();
+                    }
+                }
+                
+                info!("Log tampering simulation complete");
+                writeln!(log, "Log tampering simulation complete - {} fake logs created and deleted", log_files.len()).unwrap();
+                writeln!(log).unwrap();
+            }
+            
+            // Summary
+            let successful_deletions = deletion_results.iter().filter(|(_, _, success)| *success).count();
+            
+            writeln!(log, "=== Summary ===").unwrap();
+            writeln!(log, "Files created: {}", created_files.len()).unwrap();
+            writeln!(log, "Files backed up: {}", created_files.len()).unwrap();
+            writeln!(log, "Deletion attempts: {}", deletion_results.len()).unwrap();
+            writeln!(log, "Successful deletions: {successful_deletions}").unwrap();
+            writeln!(log, "Methods used: shred ({}), rm (true), wipe ({})", 
+                shred_available && use_shred, 
+                wipe_available).unwrap();
+            
+            info!("File deletion demonstration complete: {}/{} successful deletions", 
+                successful_deletions, deletion_results.len());
             
             Ok(SimulationResult {
                 technique_id: self.info().id,
                 success: true,
-                message: format!("Successfully copied /bin/sh to {target_path} and simulated crond masquerading"),
-                artifacts: vec![log_file, target_path],
+                message: format!(
+                    "File deletion complete: {}/{} files securely deleted using shred/wipe/rm, {} files backed up for recovery",
+                    successful_deletions,
+                    deletion_results.len(),
+                    created_files.len()
+                ),
+                artifacts,
                 cleanup_required: true,
             })
         })
@@ -1400,14 +1788,47 @@ impl AttackTechnique for MasqueradingAsCrond {
 
     fn cleanup<'a>(&'a self, artifacts: &'a [String]) -> CleanupFuture<'a> {
         Box::pin(async move {
-            for artifact in artifacts {
-                if Path::new(artifact).exists() {
-                    match fs::remove_file(artifact) {
-                        Ok(_) => info!("Removed artifact: {artifact}"),
-                        Err(e) => warn!("Failed to remove artifact {artifact}: {e}"),
+            info!("Starting file deletion technique cleanup...");
+            
+            // Restore backed up files before cleanup (demonstration of reversibility)
+            let backup_dir = artifacts.iter().find(|a| a.contains("backup"));
+            let test_dir = artifacts.iter().find(|a| a.contains("deletion_test"));
+            
+            if let (Some(backup), Some(test)) = (backup_dir, test_dir) {
+                if Path::new(backup).exists() && Path::new(test).exists() {
+                    info!("Restoring backed up files from {backup} to {test}");
+                    
+                    if let Ok(entries) = fs::read_dir(backup) {
+                        for entry in entries.flatten() {
+                            let file_name = entry.file_name();
+                            let dest_path = format!("{}/{}", test, file_name.to_string_lossy());
+                            
+                            if fs::copy(entry.path(), &dest_path).is_ok() {
+                                info!("Restored: {}", file_name.to_string_lossy());
+                            }
+                        }
                     }
                 }
             }
+            
+            // Remove all artifacts
+            for artifact in artifacts {
+                if Path::new(artifact).exists() {
+                    if Path::new(artifact).is_dir() {
+                        match fs::remove_dir_all(artifact) {
+                            Ok(_) => info!("Removed directory: {artifact}"),
+                            Err(e) => warn!("Failed to remove directory {artifact}: {e}"),
+                        }
+                    } else {
+                        match fs::remove_file(artifact) {
+                            Ok(_) => info!("Removed file: {artifact}"),
+                            Err(e) => warn!("Failed to remove file {artifact}: {e}"),
+                        }
+                    }
+                }
+            }
+            
+            info!("File deletion technique cleanup complete");
             Ok(())
         })
     }

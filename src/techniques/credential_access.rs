@@ -20,7 +20,7 @@ impl AttackTechnique for MemoryDumping {
         Technique {
             id: "T1003.001".to_string(),
             name: "Memory Dumping".to_string(),
-            description: "AGGRESSIVE: Performs REAL memory dumping of running processes using gcore or /proc/[pid]/mem to extract credential patterns. Requires appropriate privileges and generates detectable telemetry.".to_string(),
+            description: "Performs REAL memory dumping of running processes using gcore or /proc/[pid]/mem to extract credential patterns. Requires appropriate privileges and generates detectable telemetry.".to_string(),
             category: "credential_access".to_string(),
             parameters: vec![
                 TechniqueParameter {
@@ -372,7 +372,7 @@ impl AttackTechnique for KeyloggerSimulation {
         Technique {
             id: "T1056.001".to_string(),
             name: "Keylogging".to_string(),
-            description: "HIGHLY AGGRESSIVE v1.5.13: Performs exhaustive keystroke capture attempts from ALL /dev/input/event0-15 devices when running as root (5s per device), AND comprehensive historical keystroke analysis from bash_history, lesshst, auth.log, mysql_history, psql_history, sqlite_history, redis_history, and node_repl_history. Extracts credentials, authentication attempts, usernames, and sudo usage patterns. Designed to generate maximum EDR/XDR detection telemetry.".to_string(),
+            description: "Performs exhaustive keystroke capture attempts from ALL /dev/input/event0-15 devices when running as root (5s per device), AND comprehensive historical keystroke analysis from bash_history, lesshst, auth.log, mysql_history, psql_history, sqlite_history, redis_history, and node_repl_history. Extracts credentials, authentication attempts, usernames, and sudo usage patterns. Designed to generate maximum EDR/XDR detection telemetry.".to_string(),
             category: "credential_access".to_string(),
             parameters: vec![
                 TechniqueParameter {
@@ -388,7 +388,7 @@ impl AttackTechnique for KeyloggerSimulation {
                     default: Some("5".to_string()),
                 },
             ],
-            detection: "Monitor for AGGRESSIVE enumeration of ALL /dev/input/event* devices (event0-15), sequential read attempts with permission denied errors, excessive access to bash_history, lesshst, auth.log, mysql_history, psql_history, sqlite_history, redis_history, node_repl_history, and suspicious credential pattern extraction. This technique generates HIGH-VOLUME file access telemetry.".to_string(),
+            detection: "Monitor for enumeration of ALL /dev/input/event* devices (event0-15), sequential read attempts with permission denied errors, excessive access to bash_history, lesshst, auth.log, mysql_history, psql_history, sqlite_history, redis_history, node_repl_history, and suspicious credential pattern extraction. This technique generates HIGH-VOLUME file access telemetry.".to_string(),
             cleanup_support: true,
             platforms: vec!["Linux".to_string()],
             permissions: vec!["user (historical analysis) or root (real device capture)".to_string()],
@@ -438,7 +438,7 @@ impl AttackTechnique for KeyloggerSimulation {
                 .map_err(|e| format!("Failed to create keylogger log file: {e}"))?;
             
             // Write header
-            writeln!(file, "=== SignalBench AGGRESSIVE Keylogger ===").unwrap();
+            writeln!(file, "=== SignalBench Keylogger ===").unwrap();
             writeln!(file, "Timestamp: {}", chrono::Local::now()).unwrap();
             writeln!(file,"Running as root: {is_root}").unwrap();
             writeln!(file).unwrap();
@@ -448,16 +448,16 @@ impl AttackTechnique for KeyloggerSimulation {
             let mut potential_credentials = Vec::new();
             let mut artifacts = vec![log_file.clone()];
             
-            // Attempt REAL device capture if root - AGGRESSIVE v1.5.13
+            // Attempt REAL device capture if root
             if is_root {
-                info!("Running as root - attempting AGGRESSIVE keystroke capture from ALL /dev/input/event0-15 devices");
-                writeln!(file, "## AGGRESSIVE REAL Device Keystroke Capture (v1.5.13)").unwrap();
+                info!("Running as root - attempting keystroke capture from ALL /dev/input/event0-15 devices");
+                writeln!(file, "## REAL Device Keystroke Capture").unwrap();
                 writeln!(file,"Capture duration: {capture_duration} seconds PER DEVICE").unwrap();
                 writeln!(file).unwrap();
                 
-                // AGGRESSIVE: Try ALL event0-15 devices explicitly
+                // Try ALL event0-15 devices explicitly
                 writeln!(file, "### Enumerating /dev/input/event0-15 devices").unwrap();
-                info!("Aggressively enumerating /dev/input/event0-15...");
+                info!("Enumerating /dev/input/event0-15...");
                 
                 let mut accessible_devices = Vec::new();
                 let mut permission_denied_devices = Vec::new();
@@ -564,7 +564,7 @@ impl AttackTechnique for KeyloggerSimulation {
                     
                     events_captured = total_bytes_captured as usize;
                     if successful_captures > 0 {
-                        capture_method = format!("AGGRESSIVE device capture from {} devices ({} successful)", 
+                        capture_method = format!("Device capture from {} devices ({} successful)", 
                             accessible_devices.len(), successful_captures);
                         
                         writeln!(file, "REAL device capture summary:").unwrap();
@@ -987,7 +987,7 @@ impl AttackTechnique for CredentialsInFiles {
         Technique {
             id: "T1552.001".to_string(),
             name: "Credentials in Files".to_string(),
-            description: "HIGHLY AGGRESSIVE v1.5.13: Performs exhaustive REAL filesystem credential harvesting across extensive locations including user homes (.ssh/, .aws/, .env, .netrc, .git-credentials, .docker/, .kube/, .pgpass, .my.cnf, .s3cfg), web servers (/var/www for .htpasswd, wp-config.php), application directories (/opt, /srv for application.properties, appsettings.json, database.yml), system data (/var/lib for Docker, databases), local configs (/usr/local/etc), system files (/etc/shadow when root, /root/.ssh when root), and database dump files (*.sql, *.dump, *.backup containing credentials). Extracts passwords, API keys, tokens, private keys, connection strings (jdbc:, mongodb+srv:), and email credentials. Designed to generate maximum EDR/XDR detection telemetry through aggressive filesystem access.".to_string(),
+            description: "Performs exhaustive REAL filesystem credential harvesting across extensive locations including user homes (.ssh/, .aws/, .env, .netrc, .git-credentials, .docker/, .kube/, .pgpass, .my.cnf, .s3cfg), web servers (/var/www for .htpasswd, wp-config.php), application directories (/opt, /srv for application.properties, appsettings.json, database.yml), system data (/var/lib for Docker, databases), local configs (/usr/local/etc), system files (/etc/shadow when root, /root/.ssh when root), and database dump files (*.sql, *.dump, *.backup containing credentials). Extracts passwords, API keys, tokens, private keys, connection strings (jdbc:, mongodb+srv:), and email credentials. Designed to generate maximum EDR/XDR detection telemetry through comprehensive filesystem access.".to_string(),
             category: "credential_access".to_string(),
             parameters: vec![
                 TechniqueParameter {
@@ -997,7 +997,7 @@ impl AttackTechnique for CredentialsInFiles {
                     default: Some("/tmp/signalbench_discovered_credentials.log".to_string()),
                 },
             ],
-            detection: "Monitor for AGGRESSIVE enumeration patterns including excessive file access across /var/www, /opt, /srv, /var/lib, /usr/local/etc, /root/.ssh (when root), sequential reading of .pgpass, .my.cnf, .s3cfg, wp-config.php, application.properties, appsettings.json, database.yml, SSH keys, AWS credentials, .env files, .netrc, git credentials, Docker/Kubernetes configs, /etc/shadow access, database dump file enumeration (*.sql, *.dump, *.backup), connection string extraction (jdbc:, mongodb+srv:), email credential parsing, and .htpasswd file access. This technique generates HIGH-VOLUME filesystem access telemetry across critical system and application directories.".to_string(),
+            detection: "Monitor for enumeration patterns including excessive file access across /var/www, /opt, /srv, /var/lib, /usr/local/etc, /root/.ssh (when root), sequential reading of .pgpass, .my.cnf, .s3cfg, wp-config.php, application.properties, appsettings.json, database.yml, SSH keys, AWS credentials, .env files, .netrc, git credentials, Docker/Kubernetes configs, /etc/shadow access, database dump file enumeration (*.sql, *.dump, *.backup), connection string extraction (jdbc:, mongodb+srv:), email credential parsing, and .htpasswd file access. This technique generates HIGH-VOLUME filesystem access telemetry across critical system and application directories.".to_string(),
             cleanup_support: true,
             platforms: vec!["Linux".to_string()],
             permissions: vec!["user (partial) or root (full with /etc/shadow, /root/.ssh, /var/lib access)".to_string()],
@@ -2105,7 +2105,7 @@ impl AttackTechnique for ProcFilesystemCredentialDumping {
         Technique {
             id: "T1003.007".to_string(),
             name: "OS Credential Dumping: Proc Filesystem".to_string(),
-            description: "AGGRESSIVE: Performs REAL memory analysis by reading /proc/[pid]/mem and /proc/[pid]/maps to extract and parse credential patterns from running processes. Uses dd utility for memory extraction and regex pattern matching for SSH keys, API tokens, passwords, and connection strings.".to_string(),
+            description: "Performs REAL memory analysis by reading /proc/[pid]/mem and /proc/[pid]/maps to extract and parse credential patterns from running processes. Uses dd utility for memory extraction and regex pattern matching for SSH keys, API tokens, passwords, and connection strings.".to_string(),
             category: "credential_access".to_string(),
             parameters: vec![
                 TechniqueParameter {
@@ -2527,7 +2527,7 @@ impl AttackTechnique for SSHBruteForce {
         Technique {
             id: "T1110.002".to_string(),
             name: "SSH Brute Force".to_string(),
-            description: "AGGRESSIVE: Performs REAL SSH brute force authentication attempts against localhost:22. When running as root, creates a temporary test user and attempts authentication with 5-10 different incorrect passwords, generating REAL failed authentication entries in /var/log/auth.log. Measures response timing for each attempt to simulate timing attacks. Requires SSH service running on localhost and root privileges for full functionality.".to_string(),
+            description: "Performs REAL SSH brute force authentication attempts against localhost:22. When running as root, creates a temporary test user and attempts authentication with 5-10 different incorrect passwords, generating REAL failed authentication entries in /var/log/auth.log. Measures response timing for each attempt to simulate timing attacks. Requires SSH service running on localhost and root privileges for full functionality.".to_string(),
             category: "credential_access".to_string(),
             parameters: vec![
                 TechniqueParameter {
@@ -2610,7 +2610,7 @@ impl AttackTechnique for SSHBruteForce {
             let mut log = File::create(&log_file)
                 .map_err(|e| format!("Failed to create log file: {e}"))?;
             
-            writeln!(log, "=== SignalBench AGGRESSIVE SSH Brute Force ===").unwrap();
+            writeln!(log, "=== SignalBench SSH Brute Force ===").unwrap();
             writeln!(log, "Timestamp: {}", chrono::Local::now()).unwrap();
             writeln!(log, "Session ID: {session_id}").unwrap();
             writeln!(log, "Target: {target_host}:{target_port}").unwrap();
@@ -2969,6 +2969,316 @@ impl AttackTechnique for SSHBruteForce {
             }
             
             info!("SSH brute force cleanup complete");
+            Ok(())
+        })
+    }
+}
+
+pub struct EtcPasswdShadow {}
+
+#[async_trait]
+impl AttackTechnique for EtcPasswdShadow {
+    fn info(&self) -> Technique {
+        Technique {
+            id: "T1003.008".to_string(),
+            name: "/etc/passwd and /etc/shadow".to_string(),
+            description: "Completely reads and parses /etc/passwd extracting ALL user account information (usernames, UIDs, GIDs, home directories, shells). Attempts to read /etc/shadow (requires root) to extract password hashes and ageing information. Identifies privileged accounts (UID 0, sudo group members), service accounts, and human users. Generates comprehensive user enumeration report in JSON format. READ-ONLY technique that does NOT modify any system files - purely reconnaissance. Cleanup removes output files only.".to_string(),
+            category: "credential_access".to_string(),
+            parameters: vec![
+                TechniqueParameter {
+                    name: "output_file".to_string(),
+                    description: "Path to save user enumeration report".to_string(),
+                    required: false,
+                    default: Some("/tmp/signalbench_passwd_shadow_report.json".to_string()),
+                },
+                TechniqueParameter {
+                    name: "detailed_report".to_string(),
+                    description: "Generate detailed report with group memberships (default: true)".to_string(),
+                    required: false,
+                    default: Some("true".to_string()),
+                },
+            ],
+            detection: "Monitor for reads of /etc/passwd and /etc/shadow files, especially by non-root users attempting shadow access, user enumeration patterns, group membership queries via getent or /etc/group access, and processes extracting user account information. Watch for tools parsing password files and exporting user data.".to_string(),
+            cleanup_support: true,
+            platforms: vec!["Linux".to_string()],
+            permissions: vec!["user (root for shadow)".to_string()],
+        }
+    }
+
+    fn execute<'a>(
+        &'a self,
+        config: &'a TechniqueConfig,
+        dry_run: bool,
+    ) -> ExecuteFuture<'a> {
+        Box::pin(async move {
+            use tokio::process::Command;
+            
+            let output_file = config
+                .parameters
+                .get("output_file")
+                .unwrap_or(&"/tmp/signalbench_passwd_shadow_report.json".to_string())
+                .clone();
+            
+            let detailed_report = config
+                .parameters
+                .get("detailed_report")
+                .unwrap_or(&"true".to_string())
+                .to_lowercase() == "true";
+            
+            let session_id = Uuid::new_v4().to_string().replace("-", "");
+            let is_root = unsafe { libc::geteuid() == 0 };
+            
+            if dry_run {
+                info!("[DRY RUN] Would perform /etc/passwd and /etc/shadow enumeration:");
+                info!("[DRY RUN]   Running as root: {is_root}");
+                info!("[DRY RUN]   Output file: {output_file}");
+                info!("[DRY RUN]   Detailed report: {detailed_report}");
+                return Ok(SimulationResult {
+                    technique_id: self.info().id,
+                    success: true,
+                    message: format!("DRY RUN: Would enumerate user accounts from /etc/passwd{}", 
+                        if is_root { " and /etc/shadow" } else { "" }),
+                    artifacts: vec![output_file],
+                    cleanup_required: false,
+                });
+            }
+
+            info!("Starting user account enumeration (Session: {session_id})...");
+            info!("Running as root: {is_root}");
+            
+            let mut report = serde_json::json!({
+                "technique_id": "T1003.008",
+                "technique_name": "/etc/passwd and /etc/shadow",
+                "session_id": session_id,
+                "timestamp": chrono::Local::now().to_rfc3339(),
+                "is_root": is_root,
+                "users": [],
+                "summary": {},
+            });
+            
+            // Phase 1: Parse /etc/passwd
+            info!("Phase 1: Reading and parsing /etc/passwd...");
+            
+            let passwd_content = fs::read_to_string("/etc/passwd")
+                .map_err(|e| format!("Failed to read /etc/passwd: {e}"))?;
+            
+            let mut users_data = Vec::new();
+            let mut privileged_users = Vec::new();
+            let mut service_accounts = Vec::new();
+            let mut human_users = Vec::new();
+            
+            for line in passwd_content.lines() {
+                if line.trim().is_empty() || line.starts_with('#') {
+                    continue;
+                }
+                
+                let parts: Vec<&str> = line.split(':').collect();
+                if parts.len() < 7 {
+                    continue;
+                }
+                
+                let username = parts[0];
+                let uid = parts[2].parse::<u32>().unwrap_or(0);
+                let gid = parts[3].parse::<u32>().unwrap_or(0);
+                let gecos = parts[4];
+                let home_dir = parts[5];
+                let shell = parts[6];
+                
+                let mut user_info = serde_json::json!({
+                    "username": username,
+                    "uid": uid,
+                    "gid": gid,
+                    "gecos": gecos,
+                    "home_directory": home_dir,
+                    "shell": shell,
+                    "is_privileged": uid == 0,
+                    "is_service_account": uid < 1000 && uid != 0,
+                    "is_human_user": uid >= 1000,
+                });
+                
+                // Categorise users
+                if uid == 0 {
+                    privileged_users.push(username.to_string());
+                } else if uid < 1000 {
+                    service_accounts.push(username.to_string());
+                } else {
+                    human_users.push(username.to_string());
+                }
+                
+                // Get group memberships if detailed report
+                if detailed_report {
+                    let groups_output = Command::new("groups")
+                        .arg(username)
+                        .output()
+                        .await;
+                    
+                    if let Ok(output) = groups_output {
+                        if output.status.success() {
+                            let groups_str = String::from_utf8_lossy(&output.stdout);
+                            let groups: Vec<&str> = groups_str
+                                .split_whitespace()
+                                .skip(2)
+                                .collect();
+                            user_info["groups"] = serde_json::json!(groups);
+                            
+                            // Check if user is in sudo/wheel/admin groups
+                            let privileged_groups = ["sudo", "wheel", "admin", "root"];
+                            let has_privileged_group = groups.iter()
+                                .any(|g| privileged_groups.contains(g));
+                            
+                            if has_privileged_group {
+                                user_info["has_sudo_access"] = serde_json::json!(true);
+                                if uid != 0 {
+                                    privileged_users.push(username.to_string());
+                                }
+                            }
+                        }
+                    }
+                }
+                
+                users_data.push(user_info);
+            }
+            
+            info!("Parsed {} users from /etc/passwd", users_data.len());
+            info!("  - Privileged users (UID 0 or sudo): {}", privileged_users.len());
+            info!("  - Service accounts (UID < 1000): {}", service_accounts.len());
+            info!("  - Human users (UID >= 1000): {}", human_users.len());
+            
+            // Phase 2: Attempt to read /etc/shadow (requires root)
+            let mut shadow_accessible = false;
+            let mut shadow_data = serde_json::Map::new();
+            
+            if is_root {
+                info!("Phase 2: Reading and parsing /etc/shadow (root access)...");
+                
+                match fs::read_to_string("/etc/shadow") {
+                    Ok(shadow_content) => {
+                        shadow_accessible = true;
+                        
+                        for line in shadow_content.lines() {
+                            if line.trim().is_empty() || line.starts_with('#') {
+                                continue;
+                            }
+                            
+                            let parts: Vec<&str> = line.split(':').collect();
+                            if parts.len() < 9 {
+                                continue;
+                            }
+                            
+                            let username = parts[0];
+                            let password_hash = parts[1];
+                            let last_changed = parts[2];
+                            let min_age = parts[3];
+                            let max_age = parts[4];
+                            let warn_period = parts[5];
+                            let inactivity_period = parts[6];
+                            let expiration_date = parts[7];
+                            
+                            let shadow_info = serde_json::json!({
+                                "password_hash": if password_hash.is_empty() || password_hash == "*" || password_hash == "!" {
+                                    "locked/disabled"
+                                } else if password_hash.starts_with("$") {
+                                    "hashed"
+                                } else {
+                                    "other"
+                                },
+                                "last_password_change": last_changed,
+                                "minimum_password_age": min_age,
+                                "maximum_password_age": max_age,
+                                "password_warning_period": warn_period,
+                                "password_inactivity_period": inactivity_period,
+                                "account_expiration_date": expiration_date,
+                                "has_password": !password_hash.is_empty() && password_hash != "*" && password_hash != "!",
+                            });
+                            
+                            shadow_data.insert(username.to_string(), shadow_info);
+                        }
+                        
+                        info!("Successfully parsed {} shadow entries", shadow_data.len());
+                        
+                        // Merge shadow data into users_data
+                        for user in users_data.iter_mut() {
+                            if let Some(username) = user.get("username").and_then(|u| u.as_str()) {
+                                if let Some(shadow_info) = shadow_data.get(username) {
+                                    user["shadow_info"] = shadow_info.clone();
+                                }
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        warn!("Failed to read /etc/shadow (even with root): {e}");
+                    }
+                }
+            } else {
+                info!("Phase 2: Skipping /etc/shadow (not root)");
+                info!("Attempting to read /etc/shadow without root privileges...");
+                
+                match fs::read_to_string("/etc/shadow") {
+                    Ok(_) => {
+                        warn!("Unexpectedly able to read /etc/shadow without root!");
+                        shadow_accessible = true;
+                    }
+                    Err(e) => {
+                        info!("Cannot read /etc/shadow (expected): {e}");
+                    }
+                }
+            }
+            
+            // Phase 3: Generate comprehensive report
+            info!("Phase 3: Generating user enumeration report...");
+            
+            report["users"] = serde_json::json!(users_data);
+            report["summary"] = serde_json::json!({
+                "total_users": users_data.len(),
+                "privileged_users": privileged_users.len(),
+                "service_accounts": service_accounts.len(),
+                "human_users": human_users.len(),
+                "shadow_accessible": shadow_accessible,
+                "privileged_user_list": privileged_users,
+                "service_account_list": service_accounts,
+                "human_user_list": human_users,
+            });
+            
+            // Write report to file
+            let report_json = serde_json::to_string_pretty(&report)
+                .map_err(|e| format!("Failed to serialise report: {e}"))?;
+            
+            fs::write(&output_file, report_json.as_bytes())
+                .map_err(|e| format!("Failed to write report file: {e}"))?;
+            
+            info!("User enumeration report saved to: {output_file}");
+            
+            Ok(SimulationResult {
+                technique_id: self.info().id,
+                success: true,
+                message: format!(
+                    "Successfully enumerated {} users from /etc/passwd{}: {} privileged, {} service accounts, {} human users",
+                    users_data.len(),
+                    if shadow_accessible { " and /etc/shadow" } else { "" },
+                    privileged_users.len(),
+                    service_accounts.len(),
+                    human_users.len()
+                ),
+                artifacts: vec![output_file],
+                cleanup_required: true,
+            })
+        })
+    }
+
+    fn cleanup<'a>(&'a self, artifacts: &'a [String]) -> CleanupFuture<'a> {
+        Box::pin(async move {
+            info!("Starting /etc/passwd and /etc/shadow enumeration cleanup...");
+            
+            for artifact in artifacts {
+                if Path::new(artifact).exists() {
+                    match fs::remove_file(artifact) {
+                        Ok(_) => info!("Removed report file: {artifact}"),
+                        Err(e) => warn!("Failed to remove report file {artifact}: {e}"),
+                    }
+                }
+            }
+            
+            info!("/etc/passwd and /etc/shadow enumeration cleanup complete");
             Ok(())
         })
     }

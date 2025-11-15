@@ -75,6 +75,8 @@ pub fn get_available_categories() -> Vec<&'static str> {
         "execution",
         "exfiltration",
         "command_and_control",
+        "collection",
+        "impact",
         "software"
     ]
 }

@@ -105,7 +105,7 @@ Creates and executes a benign DNS reconnaissance script to simulate enumeration 
 1. Creates a Python script named "signalbench-dnsrecon.py" in the /tmp directory
 2. The script performs DNS lookups on common subdomains for a target domain
 3. Results are logged to a file showing discovered DNS records
-4. This is a simulated technique that doesn't use aggressive scanning tools
+4. This is a simulated technique that doesn't use comprehensive scanning tools
 
 **Parameters:**
 - `target_domain`: Domain to target for reconnaissance (default: example.com)
@@ -299,6 +299,56 @@ Simulates execution of the Hydra password brute-forcing tool by downloading a te
 - chmod operations on files with suspicious names
 - Repeated authentication attempts from single sources (if real hydra were used)
 
+### T1003.008 - /etc/passwd and /etc/shadow
+
+**Description:**  
+Performs REAL extraction and analysis of /etc/passwd and /etc/shadow files to harvest user account information and password hashes. This supersized technique reads actual system files and attempts password hash cracking whilst remaining 100% safe and non-destructive.
+
+**How it works:**
+1. Reads REAL /etc/passwd file to enumerate all user accounts
+2. Attempts to read /etc/shadow (requires root or sudo) to extract password hashes
+3. Parses user account entries to extract:
+   - Usernames
+   - User IDs (UIDs)
+   - Group IDs (GIDs)
+   - Home directories
+   - Login shells
+   - GECOS fields (full names, contact info)
+4. Identifies privileged accounts (UID 0, sudo group members)
+5. Extracts password hashes from /etc/shadow for analysis:
+   - SHA-512 hashes ($6$)
+   - SHA-256 hashes ($5$)
+   - MD5 hashes ($1$)
+   - Blowfish hashes ($2a$, $2y$)
+6. Simulates password cracking attempts using john or hashcat against extracted hashes
+7. Creates comprehensive user enumeration reports
+8. Identifies accounts with empty passwords or no passwords set
+9. Maps users to their group memberships via /etc/group
+10. Generates statistics on password hash algorithms and strengths
+
+**Parameters:**
+- `attempt_shadow_read`: Whether to attempt reading /etc/shadow (default: true)
+- `crack_hashes`: Whether to simulate password cracking (default: true)
+- `wordlist`: Path to wordlist for password cracking simulation (default: common passwords)
+- `output_format`: Output format for results - text, json, csv (default: text)
+- `enumerate_groups`: Whether to enumerate group memberships (default: true)
+
+**Artefacts:**
+- User enumeration report file (cleaned up automatically after execution)
+- Extracted password hashes file (cleaned up automatically)
+- Password cracking results (cleaned up automatically)
+- Group membership mapping file (cleaned up automatically)
+
+**Detection opportunities:**
+- Monitor access to /etc/passwd and /etc/shadow files
+- Detect reading of /etc/shadow by non-root processes
+- Watch for grep/awk/sed commands parsing passwd/shadow files
+- Monitor execution of password cracking tools (john, hashcat)
+- Detect attempts to copy /etc/shadow to temporary directories
+- File access patterns indicating user enumeration
+- Unusual processes reading authentication-related files
+- Sudo commands attempting to access /etc/shadow
+
 ## DEFENSE_EVASION Techniques
 
 ### T1027 - Obfuscated Files or Information
@@ -430,32 +480,82 @@ Simulates path interception by modifying environment variables to control which 
 - Unusual modifications to PATH or LD_LIBRARY_PATH
 - Creation of executable files in non-standard locations
 
-### T1036.003 - Masquerading as Linux Crond Process
+### T1036.003 - Masquerading
 
 **Description:**  
-Simulates process masquerading by copying a system binary (/bin/sh) to a file named 'crond' to evade detection by mimicking a legitimate system daemon.
+Performs REAL process masquerading by copying system binaries and executing them with spoofed names to evade detection by mimicking legitimate system daemons. This supersized technique creates actual processes with misleading names and manipulated command-line arguments.
 
 **How it works:**
-1. Copies /bin/sh to a temporary location with the name 'crond'
-2. Optionally executes the masqueraded binary to generate process execution telemetry
-3. Creates telemetry matching the Sigma detection rule for crond masquerading
-4. Logs all copying and execution activities
+1. Copies REAL system binaries (/bin/sh, /bin/bash) to temporary locations with legitimate daemon names (crond, systemd, sshd)
+2. Sets executable permissions on masqueraded binaries
+3. EXECUTES the masqueraded binaries to generate authentic process execution telemetry
+4. Manipulates process names using exec -a for command-line spoofing
+5. Creates multiple masquerading variants to test different detection scenarios
+6. Generates realistic process trees with spoofed parent-child relationships
+7. Logs all copying, execution, and process manipulation activities
 
 **Parameters:**
-- `target_path`: Path where the masquerading binary will be created (default: /tmp/crond)
-- `execute_masqueraded`: Whether to execute the masqueraded binary (true/false) (default: true)
+- `daemon_names`: Comma-separated list of daemon names to masquerade as (default: crond,systemd,sshd)
+- `target_dir`: Directory where masqueraded binaries will be created (default: /tmp)
+- `execute_all`: Whether to execute all masqueraded binaries (default: true)
 - `log_file`: Path to save masquerading log (default: /tmp/signalbench_masquerade_log)
 
 **Artefacts:**
-- Masqueraded binary file (/tmp/crond) (cleaned up automatically after execution)
-- Masquerading activity log file (cleaned up automatically after execution)
+- Masqueraded binary files (cleaned up automatically after execution)
+- Process execution logs with spoofed command lines (cleaned up automatically)
+- Masquerading activity log file (cleaned up automatically)
 
 **Detection opportunities:**
 - Monitor for copying system binaries to uncommon locations
 - Look for execve events with arguments like 'cp /bin/sh <path>/crond'
-- Detect processes named 'crond' running from non-standard paths (not /usr/sbin)
-- Watch for legitimate system daemon names in temporary directories
-- Process name mismatches with expected execution paths
+- Detect processes named 'crond', 'systemd', 'sshd' running from non-standard paths
+- Watch for legitimate system daemon names in /tmp or other temporary directories
+- Process name mismatches with expected execution paths and binary hashes
+- Command-line manipulation patterns using exec -a
+
+### T1070.004 - File Deletion
+
+**Description:**  
+Performs REAL secure file deletion using multiple overwriting techniques to simulate evidence destruction and anti-forensics activities. This supersized technique uses actual deletion tools (shred, wipe, srm) whilst maintaining 100% safety by only deleting test files.
+
+**How it works:**
+1. Creates test files with realistic sensitive content (credentials, logs, database dumps)
+2. Implements REAL secure deletion using multiple methods:
+   - shred -vfz -n 10 (10-pass overwrite with zeros)
+   - wipe -rf (Gutmann 35-pass secure deletion)
+   - srm -v (OpenBSD secure rm implementation)
+   - dd if=/dev/urandom of=<file> bs=1M (random data overwriting)
+3. Tests deletion permanence by attempting file recovery
+4. Removes file system metadata using sync and directory cache clearing
+5. Performs multi-pass overwrites with different patterns:
+   - Random data (from /dev/urandom)
+   - Zeros (0x00)
+   - Ones (0xFF)
+   - DOD 5220.22-M standard patterns
+6. Verifies secure deletion by checking file inode status
+7. Tests different file types: text logs, binary databases, archive files
+8. Simulates timeline manipulation by touching files before deletion
+
+**Parameters:**
+- `deletion_method`: Secure deletion tool to use - shred, wipe, srm, dd (default: shred)
+- `overwrite_passes`: Number of overwrite passes (default: 10)
+- `test_file_count`: Number of test files to create and delete (default: 5)
+- `file_sizes`: Comma-separated list of file sizes in MB (default: 1,5,10)
+- `verify_deletion`: Whether to attempt file recovery verification (default: true)
+
+**Artefacts:**
+- Test files created for deletion testing (cleaned up through secure deletion)
+- Deletion operation logs (cleaned up automatically after execution)
+- Overwrite verification files (cleaned up automatically)
+
+**Detection opportunities:**
+- Monitor execution of secure deletion tools (shred, wipe, srm, secure-delete)
+- Detect multiple write operations to same file (overwrite patterns)
+- Watch for dd commands with /dev/urandom or /dev/zero as input
+- Unusual file I/O patterns (repeated writes to same file location)
+- Process behaviour indicating anti-forensics activities
+- File deletion operations on sensitive file types (logs, databases, archives)
+- Timeline manipulation attempts (touch, utimes system calls)
 
 ## EXECUTION Techniques
 
@@ -625,47 +725,72 @@ Simulates attempts to move laterally through a network using SSH.
 ### T1547.002 - Startup Folder
 
 **Description:**  
-Generates telemetry for Linux desktop autostart persistence using proper .desktop files.
+Establishes REAL persistence by creating fully functional .desktop files in the user's XDG autostart directory that will execute commands automatically at user login. This supersized technique creates authentic persistence mechanisms that survive reboots.
 
 **How it works:**
-1. Creates a .desktop file in the user's autostart directory (~/.config/autostart/)
-2. Uses proper desktop entry format that Linux desktop environments recognise
-3. Configures the application to execute a specified command at user login
-4. Generates realistic persistence telemetry that EDR systems can detect
+1. Creates the ~/.config/autostart directory if it doesn't exist
+2. Generates a REAL .desktop file with proper XDG Desktop Entry specification format
+3. Configures Type=Application with valid Exec, Name, and Comment fields
+4. Sets the command to execute automatically when the user logs into their desktop environment
+5. Supports both simple commands and complex shell scripts wrapped with /bin/sh -c
+6. Creates multiple persistence entries with different application names for comprehensive testing
+7. Validates .desktop file syntax to ensure it will be recognised by GNOME, KDE, XFCE environments
+8. Tests autostart functionality by verifying file permissions and directory structure
 
 **Parameters:**
 - `app_name`: Name of the desktop application entry (default: SignalBench Persistence)
-- `command`: Command to execute at startup (shell features automatically wrapped with /bin/sh -c) (default: echo 'SignalBench startup executed' >> /tmp/signalbench_startup.log)
+- `command`: Command to execute at startup (default: echo 'SignalBench startup executed' >> /tmp/signalbench_startup.log)
+- `create_multiple`: Whether to create multiple autostart entries with different names (default: false)
+- `hidden`: Whether to set Hidden=true to make entry invisible in autostart managers (default: false)
 
 **Artefacts:**
-- .desktop file in ~/.config/autostart directory (cleaned up automatically after execution)
+- .desktop files in ~/.config/autostart directory (cleaned up automatically after execution)
+- Autostart directory structure (cleaned up if created by technique)
 
 **Detection opportunities:**
 - Monitor .desktop file creation in ~/.config/autostart directory
 - Desktop entry modifications with suspicious Exec commands
-- Autostart persistence mechanisms in Linux environments
+- XDG autostart persistence mechanisms in Linux desktop environments
+- Hidden desktop entries (Hidden=true flag)
+- Unusual application names in autostart directory
+- Shell command wrappers in Exec fields (/bin/sh -c patterns)
 
 ### T1053.003 - Cron Job
 
 **Description:**  
-Simulates creating a cron job for persistence.
+Creates REAL scheduled persistence by installing actual cron jobs that execute commands at specified intervals. This supersized technique modifies the user's live crontab to establish authentic time-based persistence mechanisms.
 
 **How it works:**
-1. Gets the current user's crontab
-2. Adds a new cron job entry with a scheduled command
-3. Installs the modified crontab
+1. Backs up the current user's crontab using crontab -l
+2. Generates a new cron job entry with realistic scheduling (every 5 minutes, hourly, daily, etc.)
+3. INSTALLS the modified crontab using crontab - to make changes live
+4. Creates multiple cron job variants:
+   - Frequent execution jobs (*/5 * * * * - every 5 minutes)
+   - Stealthy daily jobs (0 3 * * * - 3 AM daily)
+   - Boot-time jobs (@reboot)
+5. Supports both simple commands and complex shell scripts
+6. Validates cron syntax before installation
+7. Tests job installation by querying crontab -l
+8. Creates job output redirection to simulate covert execution (>/dev/null 2>&1)
 
 **Parameters:**
-- `cron_expression`: Cron expression for scheduling
-- `command`: Command to execute in cron job
+- `cron_expression`: Cron expression for scheduling (default: */5 * * * *)
+- `command`: Command to execute in cron job (default: /tmp/signalbench_persistence.sh)
+- `create_multiple`: Whether to create multiple jobs with different schedules (default: false)
+- `stealth_mode`: Whether to redirect output to /dev/null (default: true)
 
 **Artefacts:**
-- Temporary crontab file (cleaned up automatically after execution)
-- Cron job entry (removed during cleanup)
+- Modified user crontab (restored automatically during cleanup)
+- Crontab backup file (cleaned up automatically after execution)
+- Cron job entries (removed during cleanup via crontab restoration)
 
 **Detection opportunities:**
-- Modifications to crontab files
-- Unusual or suspicious cron job entries
+- Monitor crontab command execution (crontab -, crontab -e)
+- Modifications to user crontab files (/var/spool/cron/crontabs/*)
+- Unusual or suspicious cron job entries with frequent execution intervals
+- Commands redirecting output to /dev/null (stealth indicator)
+- Cron jobs executing scripts from /tmp or other writable directories
+- @reboot cron jobs for boot persistence
 
 ### T1543 - Create or Modify System Process
 
@@ -703,26 +828,85 @@ Creates or modifies system services and processes to establish persistence on th
 ### T1505.003 - Web Shell Deployment
 
 **Description:**  
-Deploys malicious web shells on Linux-based web servers (PHP, JSP, or custom backdoors) for long-term access.
+Deploys REAL, functional web shells that can handle HTTP requests and execute commands on Linux-based web servers. This supersized technique creates authentic PHP, JSP, and Python backdoors with actual remote command execution capabilities for comprehensive testing.
 
 **How it works:**
-1. Creates realistic web shell files in specified directories
-2. Supports multiple web shell types (PHP, JSP, ASPX)
-3. Includes proper web shell functionality for testing
-4. Creates files that would trigger web application security scanners
+1. Creates web root directory structure (/tmp/www for safe testing)
+2. Deploys REAL PHP web shells with $_GET, $_POST, and $_REQUEST handlers
+3. Implements functional command execution using shell_exec(), system(), and passthru()
+4. Creates JSP web shells with Runtime.getRuntime().exec() for Java environments
+5. Builds Python Flask-based web shells for WSGI applications
+6. Implements multiple web shell variants:
+   - Simple one-liner shells (<?php system($_GET['cmd']); ?>)
+   - Obfuscated shells with base64 encoding
+   - Feature-rich shells with file upload, download, and directory browsing
+7. Sets proper file permissions (644 or 755) to make shells executable by web server
+8. Tests web shell functionality by invoking commands
+9. Creates realistic file names (config.php, admin.php, upload.jsp) to evade detection
 
 **Parameters:**
-- `web_root`: Web server document root directory
-- `shell_type`: Type of web shell (php, jsp, aspx)
-- `shell_name`: Filename for the web shell
+- `web_root`: Web server document root directory (default: /tmp/www)
+- `shell_type`: Type of web shell to deploy - php, jsp, python (default: php)
+- `shell_name`: Filename for the web shell (default: config.php)
+- `create_multiple`: Whether to deploy multiple shell variants (default: true)
+- `obfuscate`: Whether to use obfuscation techniques (default: false)
 
 **Artefacts:**
-- Web shell files (cleaned up automatically after execution)
+- Web shell files (PHP, JSP, Python) (cleaned up automatically after execution)
+- Web root directory structure (cleaned up automatically)
+- Test command output files (cleaned up automatically)
 
 **Detection opportunities:**
-- Monitor web directories for suspicious script files
-- Unexpected file creation in web directories
-- Unusual web server process behaviour
+- Monitor web directories (/var/www, /usr/share/nginx, /tmp/www) for suspicious script files
+- File creation in web document roots with common web shell names (shell.php, cmd.php, admin.jsp)
+- PHP files containing dangerous functions (shell_exec, system, passthru, eval)
+- JSP files with Runtime.getRuntime().exec() patterns
+- Unusual web server child processes executing system commands
+- Web application firewall (WAF) detection of command execution patterns
+- File permission changes in web directories
+
+### T1098 - Account Manipulation
+
+**Description:**  
+Performs REAL account manipulation by modifying user account properties, adding SSH keys, and changing group memberships to establish persistent access. This supersized technique makes actual changes to user accounts whilst maintaining 100% safety and reversibility.
+
+**How it works:**
+1. Creates test user accounts using useradd for manipulation testing
+2. MODIFIES /etc/passwd entries to change user shells and home directories
+3. Injects SSH public keys into authorized_keys files for key-based authentication
+4. Adds users to privileged groups (sudo, wheel, adm) using usermod -aG
+5. Modifies /etc/group directly to add users to multiple groups simultaneously
+6. Changes user account attributes (comment field, UID, GID) for stealth
+7. Creates .ssh directories with proper permissions (700 for directory, 600 for authorized_keys)
+8. Tests SSH key injection by verifying authorized_keys file content
+9. Backs up all modified files before changes for complete restoration
+10. Implements multiple manipulation techniques:
+    - Direct file editing (/etc/passwd, /etc/group, /etc/shadow)
+    - System commands (usermod, gpasswd, chsh)
+    - SSH configuration changes
+
+**Parameters:**
+- `target_user`: Username to manipulate (default: creates test user signalbench_test)
+- `ssh_key_inject`: Whether to inject SSH public key (default: true)
+- `add_to_groups`: Comma-separated list of groups to add user to (default: sudo,adm)
+- `modify_shell`: New shell to set for user (default: /bin/bash)
+- `backup_files`: Whether to backup files before modification (default: true)
+
+**Artefacts:**
+- Modified /etc/passwd entries (restored automatically during cleanup)
+- Modified /etc/group entries (restored automatically)
+- Injected SSH keys in ~/.ssh/authorized_keys (cleaned up automatically)
+- Test user accounts created (removed automatically during cleanup)
+- Backup files of modified system files (cleaned up automatically)
+
+**Detection opportunities:**
+- Monitor usermod, gpasswd, chsh command execution
+- Watch for modifications to /etc/passwd, /etc/group, /etc/shadow files
+- Detect SSH authorized_keys file modifications
+- Monitor user additions to privileged groups (sudo, wheel, root)
+- Track changes to user account attributes (UID, GID, shell, home directory)
+- File integrity monitoring (FIM) alerts on critical system files
+- Unusual .ssh directory creation in user home directories
 
 ## PRIVILEGE_ESCALATION Techniques
 
@@ -990,6 +1174,130 @@ Generates telemetry for curl requests to fictional GitHub repositories with hack
 - URL/domain baseline anomaly detection for github.com/*/exploit-kit, github.com/*/backdoor-tool patterns
 - Repository names containing keywords: exploit, backdoor, credential, ransomware, keylogger, botnet, webshell, rootkit, stealer, trojan
 - HTTP 404 responses from GitHub repositories (fictional repos)
+
+## COLLECTION Techniques
+
+### T1119 - Automated Collection
+
+**Description:**  
+Performs REAL automated data collection by recursively enumerating and harvesting files from target directories. This supersized technique creates actual file archives containing collected data whilst maintaining 100% safety by only accessing non-sensitive test locations.
+
+**How it works:**
+1. Performs REAL recursive directory enumeration using find and ls -R
+2. Searches for files matching collection criteria:
+   - Document files (.pdf, .doc, .docx, .txt, .odt)
+   - Spreadsheets (.xls, .xlsx, .csv, .ods)
+   - Configuration files (.conf, .cfg, .ini, .yaml, .json)
+   - Database files (.db, .sqlite, .sql)
+   - Archive files (.zip, .tar, .gz, .7z)
+   - Script files (.sh, .py, .rb, .pl)
+3. Creates REAL compressed archives using tar and zip
+4. Implements file staging in /tmp collection directory
+5. Calculates file hashes (MD5, SHA256) for collected files
+6. Generates collection manifests with file metadata:
+   - File paths
+   - File sizes
+   - Modification timestamps
+   - File permissions
+   - Owner/group information
+7. Performs content-based searches using grep for sensitive keywords
+8. Tests multiple collection techniques:
+   - Recursive find with -name patterns
+   - grep -r for content matching
+   - locate database searches
+9. Simulates data staging for exfiltration preparation
+10. Creates realistic collection statistics and reports
+
+**Parameters:**
+- `target_dirs`: Comma-separated list of directories to collect from (default: /tmp,/var/tmp)
+- `file_patterns`: Comma-separated list of file extensions to collect (default: txt,pdf,doc,xls,csv)
+- `create_archive`: Whether to create compressed archive of collected files (default: true)
+- `archive_format`: Archive format to use - tar, zip, 7z (default: tar)
+- `calculate_hashes`: Whether to calculate file hashes (default: true)
+- `content_search`: Whether to search file contents for keywords (default: true)
+- `search_keywords`: Comma-separated keywords to search for (default: password,secret,key,token)
+
+**Artefacts:**
+- Collection staging directory /tmp/signalbench_collection_<timestamp> (cleaned up automatically)
+- Compressed archives of collected files (cleaned up automatically)
+- Collection manifest files with metadata (cleaned up automatically)
+- File hash databases (cleaned up automatically)
+- Content search results (cleaned up automatically)
+
+**Detection opportunities:**
+- Monitor recursive directory enumeration (find, ls -R commands)
+- Detect archive creation operations (tar, zip, 7z execution)
+- Watch for file access patterns indicating systematic collection
+- Monitor creation of staging directories in /tmp
+- Detect file hash calculation operations
+- Track grep -r operations searching for sensitive keywords
+- Monitor file access to multiple document/database files in short time periods
+- Unusual archive file creation with large file counts
+
+## IMPACT Techniques
+
+### T1496 - Resource Hijacking
+
+**Description:**  
+Performs REAL resource hijacking by consuming CPU, memory, and disk I/O to simulate cryptomining or resource exhaustion attacks. This supersized technique uses actual system stress tools whilst maintaining 100% safety through controlled execution and automatic cleanup.
+
+**How it works:**
+1. Implements REAL CPU consumption using stress-ng or custom CPU burners
+2. Creates CPU-intensive operations:
+   - Spawns multiple worker threads (one per CPU core)
+   - Executes infinite loops with mathematical operations
+   - Simulates cryptographic hashing (SHA-256, MD5)
+3. Performs REAL memory consumption:
+   - Allocates large memory blocks
+   - Fills memory with data to trigger swapping
+   - Creates memory pressure conditions
+4. Executes REAL disk I/O saturation:
+   - Writes large files to disk repeatedly
+   - Performs random read/write operations
+   - Stresses disk throughput with dd operations
+5. Simulates cryptocurrency mining behaviour:
+   - Creates processes named similar to miners (xmrig, ethminer, cpuminer)
+   - Connects to mining pool addresses (simulated)
+   - Generates realistic mining process telemetry
+6. Implements resource monitoring:
+   - Tracks CPU usage percentages
+   - Monitors memory consumption
+   - Measures disk I/O rates
+7. Uses multiple stress tools:
+   - stress-ng (comprehensive system stress)
+   - cpulimit (CPU throttling)
+   - Custom bash/python stress scripts
+8. Creates realistic resource hijacking indicators:
+   - High sustained CPU usage (80-100%)
+   - Memory exhaustion patterns
+   - Disk thrashing behaviour
+
+**Parameters:**
+- `stress_type`: Type of resource to stress - cpu, memory, disk, all (default: cpu)
+- `cpu_workers`: Number of CPU worker threads (default: number of CPU cores)
+- `duration`: Duration in seconds to run stress test (default: 30)
+- `memory_size`: Amount of memory to consume in MB (default: 512)
+- `disk_write_size`: Size of disk writes in MB (default: 100)
+- `simulate_miner`: Whether to simulate cryptocurrency miner behaviour (default: true)
+- `miner_name`: Name to use for simulated miner process (default: xmrig)
+
+**Artefacts:**
+- Stress test processes (terminated automatically after duration)
+- Large temporary files for disk I/O testing (cleaned up automatically)
+- Memory allocation buffers (freed automatically)
+- Simulated miner processes (killed automatically)
+- Resource consumption logs (cleaned up automatically)
+
+**Detection opportunities:**
+- Monitor sustained high CPU usage (>80% for extended periods)
+- Detect process names matching known cryptocurrency miners
+- Watch for unusual memory consumption patterns
+- Monitor disk I/O saturation and thrashing
+- Detect stress-ng, cpulimit, or similar tool execution
+- Track processes consuming disproportionate system resources
+- Monitor network connections to known mining pool addresses
+- Detect mathematical operations indicative of mining (cryptographic hashing)
+- Process tree analysis showing suspicious resource-intensive children
 
 ## SOFTWARE Simulations
 

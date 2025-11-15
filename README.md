@@ -25,19 +25,38 @@ SignalBench **executes actual OS commands** that emulate technique-aligned activ
 
 Many modern security products are simulation-aware and may not generate alerts for research tools by design. This tool is intended for controlled lab environments, analytics development, and training scenarios - not as a comparative benchmark of security products.
 
-### v1.5.13 Maximum XDR Detection Release
+### v1.5.22 The Ultimate Supersized Release
 
-SignalBench v1.5.13 dramatically expands aggressive telemetry coverage to **27 of 37 techniques (73%)** with 13 new or enhanced implementations driven by real-world Cortex XDR testing that showed 50% detection on v1.5.0. This release maximises EDR/XDR detection whilst maintaining 100% safety and reversibility:
+SignalBench v1.5.22 represents the pinnacle of realistic telemetry generation with **42 total techniques** and **36 supersized (86% coverage)**. This release adds 9 powerful new techniques (4 upgrades + 5 brand new) including the COLLECTION and IMPACT categories, bringing comprehensive coverage across the MITRE ATT&CK framework whilst maintaining 100% safety and reversibility:
+
+**4 UPGRADED SUPERSIZED TECHNIQUES:**
+- **T1053.003 Cron Job**: Creates REAL system-wide and user cron jobs in /etc/cron.d/ and via crontab, executes benign commands, full backup/restore
+- **T1547.002 Startup Folder**: Actually modifies /etc/profile.d/, ~/.bashrc, ~/.bash_profile with persistence commands, comprehensive backup/restoration
+- **T1036.003 Masquerading**: Compiles REAL C binaries with misleading names ([kworker/0:0], systemd-journald, crond), uses prctl() for process name spoofing
+- **T1505.003 Web Shell**: Deploys REAL malicious PHP and Python web shells with eval(), system(), exec() backdoor patterns, multiple variants
+
+**5 BRAND NEW SUPERSIZED TECHNIQUES:**
+- **T1119 Automated Collection**: Recursively collects sensitive files from /home/, /var/, /opt/, creates tar archives, generates comprehensive JSON reports
+- **T1070.004 File Deletion**: Anti-forensics with shred -uvz, secure file wiping, log tampering simulation, all with backup/restore
+- **T1003.008 /etc/passwd and /etc/shadow**: Comprehensive user enumeration, shadow file parsing (if root), password hash extraction
+- **T1098 Account Manipulation**: Modifies user accounts, injects SSH keys into authorized_keys, changes shells, group manipulation (requires root)
+- **T1496 Resource Hijacking**: Controlled CPU stress (crypto-mining simulation), memory allocation, disk I/O stress with safety limits
+
+All 36 supersized techniques generate high-volume, realistic telemetry designed for detection by security products whilst remaining 100% safe and reversible through comprehensive artifact tracking and cleanup verification.
+
+### v1.5.13 The Supersized Menu
+
+SignalBench v1.5.13 dramatically expands realistic telemetry coverage to **27 of 37 techniques (73%)** with 13 new or enhanced implementations driven by real-world security product testing that showed 50% detection on v1.5.0. This release maximises detection whilst maintaining 100% safety and reversibility:
 
 **6 NEW SUPERSIZED TECHNIQUES:**
 - **T1110.002 SSH Brute Force**: Creates temporary test user, performs REAL failed SSH authentication attempts against localhost:22, generates auth.log entries, measures timing patterns
 - **T1021.004 SSH Lateral Movement**: Generates SSH keys, modifies authorized_keys, executes REAL SSH connections with port forwarding attempts
-- **T1049 Network Connections**: Aggressive enumeration via netstat/ss/lsof, parses active connections, listening ports, process-to-socket mappings
+- **T1049 Network Connections**: Comprehensive enumeration via netstat/ss/lsof, parses active connections, listening ports, process-to-socket mappings
 - **T1070.003 Clear Command History**: Actually backs up and modifies shell history files (.bash_history, .zsh_history, etc.), removes suspicious patterns, full restoration
 - **T1548.003 Sudoers Modification**: Creates REAL sudoers files with NOPASSWD rules, validates with visudo, comprehensive backup/restore
 - **T1548.001 SUID Binary**: Compiles C wrapper, sets SUID bit, attempts privileged operations, complete cleanup
 
-**7 ENHANCED v1.5.0 TECHNIQUES FOR HIGHER XDR DETECTION:**
+**7 ENHANCED v1.5.0 TECHNIQUES FOR IMPROVED DETECTION:**
 - **T1056.001 Keylogging**: Expanded to enumerate ALL /dev/input/event0-15 (16 devices), added 5 new history files (.sqlite_history, .redis_history, .node_repl_history), enhanced auth.log parsing
 - **T1552.001 Credentials in Files**: Added 8 new search directories (/var/www, /opt, /srv, /var/lib, /root/.ssh, /usr/local/etc), database dump file analysis, expanded credential patterns
 - **T1046 Port Scanning**: Increased from 10 ports to 1,032 TCP ports (1-1024 + backdoor ports), added UDP scanning (DNS, NTP, SNMP), scans both IPv4/IPv6 localhost
@@ -46,15 +65,15 @@ SignalBench v1.5.13 dramatically expands aggressive telemetry coverage to **27 o
 - **T1562.002 Disable Audit**: Added systemctl service manipulation, /etc/audit/audit.rules modification option, multi-method approach
 - **T1068 Privilege Escalation**: Attempts actual exploitation - creates systemd test services, tests Docker operations, executes sudo -l vulnerabilities
 
-All 27 supersized techniques generate HIGH-VOLUME, AGGRESSIVE telemetry designed for maximum EDR/XDR detection whilst remaining 100% safe and reversible through comprehensive artifact tracking and cleanup verification.
+All 27 supersized techniques generate high-volume, realistic telemetry designed for maximum detection by security products whilst remaining 100% safe and reversible through comprehensive artifact tracking and cleanup verification.
 
-### v1.5.0 Aggressive Telemetry Upgrade
+### v1.5.0 Realistic Telemetry Upgrade
 
-SignalBench v1.5.0 introduces a major upgrade from simulations to REAL, aggressive attack behaviours across 14 core techniques:
+SignalBench v1.5.0 introduces a major upgrade from simulations to REAL attack behaviours across 14 core techniques:
 
 **CREDENTIAL ACCESS**: Real memory dumping (gcore, /proc/mem), actual keystroke capture from /dev/input devices, genuine filesystem credential harvesting, live process memory parsing
 
-**DISCOVERY**: Comprehensive system enumeration with security tool detection, aggressive network reconnaissance including ARP/VPN/VLAN discovery, real TCP port scanning with banner grabbing
+**DISCOVERY**: Comprehensive system enumeration with security tool detection, comprehensive network reconnaissance including ARP/VPN/VLAN discovery, real TCP port scanning with banner grabbing
 
 **EXECUTION**: Actual reverse shell execution to localhost, real Python-based reconnaissance with socket listeners, genuine command injection patterns
 
@@ -64,7 +83,7 @@ SignalBench v1.5.0 introduces a major upgrade from simulations to REAL, aggressi
 
 **COMMAND & CONTROL**: Actual iptables rule installation for port knocking, real network traffic signalling
 
-All techniques remain 100% safe and reversible with comprehensive cleanup, but now generate authentic EDR/XDR telemetry that security products will actually detect. Many techniques require elevated privileges for full functionality.
+All techniques remain 100% safe and reversible with comprehensive cleanup, but now generate authentic telemetry that security products will actually detect. Many techniques require elevated privileges for full functionality.
 
 ## Features
 
@@ -92,22 +111,22 @@ SignalBench provides pre-built binaries for maximum compatibility across Linux d
 **For Universal Linux Compatibility (Recommended):**
 ```bash
 # Download static binary that works on any Linux distribution
-wget https://github.com/gocortex/signalbench/releases/download/v1.5.13/signalbench-1.5.13-linux-musl-x86_64
-chmod +x signalbench-1.5.13-linux-musl-x86_64
-sudo mv signalbench-1.5.13-linux-musl-x86_64 /usr/local/bin/signalbench
+wget https://github.com/gocortex/signalbench/releases/download/v1.5.22/signalbench-1.5.22-linux-musl-x86_64
+chmod +x signalbench-1.5.22-linux-musl-x86_64
+sudo mv signalbench-1.5.22-linux-musl-x86_64 /usr/local/bin/signalbench
 
 # For ARM64 systems (Apple Silicon, ARM servers)
-wget https://github.com/gocortex/signalbench/releases/download/v1.5.13/signalbench-1.5.13-linux-musl-aarch64
-chmod +x signalbench-1.5.13-linux-musl-aarch64
-sudo mv signalbench-1.5.13-linux-musl-aarch64 /usr/local/bin/signalbench
+wget https://github.com/gocortex/signalbench/releases/download/v1.5.22/signalbench-1.5.22-linux-musl-aarch64
+chmod +x signalbench-1.5.22-linux-musl-aarch64
+sudo mv signalbench-1.5.22-linux-musl-aarch64 /usr/local/bin/signalbench
 ```
 
 **For Specific Distributions:**
 ```bash
 # Debian 12/Ubuntu 22.04+ systems (requires GLIBC 2.36+)
-wget https://github.com/gocortex/signalbench/releases/download/v1.5.13/signalbench-1.5.13-debian12-glibc2.36-x86_64
-chmod +x signalbench-1.5.13-debian12-glibc2.36-x86_64
-sudo mv signalbench-1.5.13-debian12-glibc2.36-x86_64 /usr/local/bin/signalbench
+wget https://github.com/gocortex/signalbench/releases/download/v1.5.22/signalbench-1.5.22-debian12-glibc2.36-x86_64
+chmod +x signalbench-1.5.22-debian12-glibc2.36-x86_64
+sudo mv signalbench-1.5.22-debian12-glibc2.36-x86_64 /usr/local/bin/signalbench
 ```
 
 ### Option 2: Build from Source

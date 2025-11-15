@@ -21,6 +21,8 @@ pub mod process_injection;
 pub mod dnscat_c2;
 pub mod dns_recon;
 pub mod software;
+pub mod collection;
+pub mod impact;
 
 use crate::config::TechniqueConfig;
 use async_trait::async_trait;
@@ -92,6 +94,7 @@ pub fn get_all_techniques() -> Vec<Box<dyn AttackTechnique>> {
         Box::new(persistence::StartupFolder {}),
         Box::new(persistence::CronJob {}),
         Box::new(persistence::WebShellDeployment {}),
+        Box::new(persistence::AccountManipulation {}),
         
         // Privilege escalation techniques
         Box::new(privilege_escalation::SudoersModification {}),
@@ -105,6 +108,7 @@ pub fn get_all_techniques() -> Vec<Box<dyn AttackTechnique>> {
         Box::new(defense_evasion::ClearBashHistory {}),
         Box::new(defense_evasion::ModifyEnvironmentVariable {}),
         Box::new(defense_evasion::MasqueradingAsCrond {}),
+        Box::new(defense_evasion::FileDeletion {}),
         
         // Credential access techniques
         Box::new(credential_access::MemoryDumping {}),
@@ -112,6 +116,7 @@ pub fn get_all_techniques() -> Vec<Box<dyn AttackTechnique>> {
         Box::new(credential_access::CredentialsInFiles {}),
         Box::new(credential_access::ProcFilesystemCredentialDumping {}),
         Box::new(credential_access::SSHBruteForce {}),
+        Box::new(credential_access::EtcPasswdShadow {}),
         
         // Discovery techniques
         Box::new(discovery::SystemInformationDiscovery {}),
@@ -156,6 +161,12 @@ pub fn get_all_techniques() -> Vec<Box<dyn AttackTechnique>> {
         
         // Software simulations
         Box::new(software::S1109Pacemaker {}),
+        
+        // Collection techniques
+        Box::new(collection::AutomatedCollection {}),
+        
+        // Impact techniques
+        Box::new(impact::ResourceHijacking {}),
     ]
 }
 

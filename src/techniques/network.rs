@@ -149,7 +149,7 @@ impl AttackTechnique for NetworkServiceDiscovery {
         Technique {
             id: "T1046".to_string(),
             name: "Network Service Discovery".to_string(),
-            description: "Performs AGGRESSIVE network service discovery using TCP/UDP connection attempts and enhanced banner grabbing. Scans common ports (1-1024) plus suspicious backdoor ports (1337, 4444, 31337, etc.) across multiple localhost interfaces. Includes protocol-specific probes for SSH, HTTP, MySQL, PostgreSQL, Redis, MongoDB, and more. This generates HIGH VOLUME network traffic designed to trigger XDR/EDR detection (not simulation).".to_string(),
+            description: "Performs comprehensive network service discovery using TCP/UDP connection attempts and enhanced banner grabbing. Scans common ports (1-1024) plus suspicious backdoor ports (1337, 4444, 31337, etc.) across multiple localhost interfaces. Includes protocol-specific probes for SSH, HTTP, MySQL, PostgreSQL, Redis, MongoDB, and more. This generates high volume network traffic designed to trigger XDR/EDR detection (not simulation).".to_string(),
             category: "DISCOVERY".to_string(),
             parameters: vec![
                 TechniqueParameter {
@@ -160,7 +160,7 @@ impl AttackTechnique for NetworkServiceDiscovery {
                 },
                 TechniqueParameter {
                     name: "ports".to_string(),
-                    description: "Ports to scan (e.g., 22,80,443 or 1-1024). Default is aggressive scan of 1-1024 plus backdoor ports.".to_string(),
+                    description: "Ports to scan (e.g., 22,80,443 or 1-1024). Default is comprehensive scan of 1-1024 plus backdoor ports.".to_string(),
                     required: true,
                     default: Some("1-1024,1337,4444,5555,8443,8888,9999,31337".to_string()),
                 },
@@ -177,7 +177,7 @@ impl AttackTechnique for NetworkServiceDiscovery {
                     default: Some("/tmp/signalbench_port_scan_results.txt".to_string()),
                 },
             ],
-            detection: "Network monitoring and XDR/EDR tools can detect aggressive port scanning activity via high connection rate, multiple TCP/UDP probes, and suspicious port access patterns (backdoor ports 1337, 4444, 31337). Banner grabbing generates protocol-specific traffic patterns.".to_string(),
+            detection: "Network monitoring and XDR/EDR tools can detect port scanning activity via high connection rate, multiple TCP/UDP probes, and suspicious port access patterns (backdoor ports 1337, 4444, 31337). Banner grabbing generates protocol-specific traffic patterns.".to_string(),
             cleanup_support: true,
             platforms: vec!["Linux".to_string()],
             permissions: vec!["user".to_string()],
@@ -220,7 +220,7 @@ impl AttackTechnique for NetworkServiceDiscovery {
                 return Ok(SimulationResult {
                     technique_id: technique_info.id,
                     success: true,
-                    message: format!("Would perform AGGRESSIVE TCP{udp_msg} port scanning on {target_hosts} for ports {ports} and save results to {output_file}"),
+                    message: format!("Would perform comprehensive TCP{udp_msg} port scanning on {target_hosts} for ports {ports} and save results to {output_file}"),
                     artifacts: vec![output_file],
                     cleanup_required: true,
                 });
@@ -237,7 +237,7 @@ impl AttackTechnique for NetworkServiceDiscovery {
                     let range: Vec<&str> = trimmed.split('-').collect();
                     if range.len() == 2 {
                         if let (Ok(start), Ok(end)) = (range[0].parse::<u16>(), range[1].parse::<u16>()) {
-                            // Allow full range for aggressive scanning
+                            // Allow full range for comprehensive scanning
                             for port in start..=end {
                                 port_list.push(port);
                             }
@@ -259,7 +259,7 @@ impl AttackTechnique for NetworkServiceDiscovery {
             let mut file = File::create(&output_file)
                 .map_err(|e| format!("Failed to create output file: {e}"))?;
                 
-            writeln!(file, "# SignalBench AGGRESSIVE Network Service Discovery - REAL TCP/UDP Scanning").unwrap();
+            writeln!(file, "# SignalBench Network Service Discovery - REAL TCP/UDP Scanning").unwrap();
             writeln!(file, "# MITRE ATT&CK Technique: T1046").unwrap();
             writeln!(file, "# Target hosts: {target_hosts}").unwrap();
             writeln!(file, "# TCP ports to scan: {ports} ({} total ports)", port_list.len()).unwrap();
@@ -268,8 +268,8 @@ impl AttackTechnique for NetworkServiceDiscovery {
             }
             writeln!(file, "# Banner grab buffer: 2048 bytes with protocol-specific probes").unwrap();
             writeln!(file, "# Scan started: {}", chrono::Local::now()).unwrap();
-            writeln!(file, "# WARNING: This performs AGGRESSIVE TCP/UDP connection attempts").unwrap();
-            writeln!(file, "# WARNING: Designed to generate HIGH VOLUME traffic for XDR/EDR detection").unwrap();
+            writeln!(file, "# WARNING: This performs comprehensive TCP/UDP connection attempts").unwrap();
+            writeln!(file, "# WARNING: Designed to generate high volume traffic for XDR/EDR detection").unwrap();
             writeln!(file, "# ========================================================").unwrap();
             
             let mut total_ports_scanned = 0;
@@ -366,7 +366,7 @@ impl AttackTechnique for NetworkServiceDiscovery {
             let scan_duration = scan_start.elapsed();
             
             writeln!(file, "\n========================================================").unwrap();
-            writeln!(file, "# AGGRESSIVE SCAN SUMMARY").unwrap();
+            writeln!(file, "# SCAN SUMMARY").unwrap();
             writeln!(file, "# Total TCP ports scanned: {total_ports_scanned}").unwrap();
             writeln!(file, "# Open TCP ports found: {total_open_ports}").unwrap();
             writeln!(file, "# Banners grabbed: {total_banners_grabbed}").unwrap();
@@ -384,7 +384,7 @@ impl AttackTechnique for NetworkServiceDiscovery {
             
             let summary = if enable_udp {
                 format!(
-                    "AGGRESSIVE TCP/UDP scan completed: {} TCP ports scanned ({} open, {} banners), {} UDP probes ({} responses), {:.2} conn/sec in {:.2}s",
+                    "Comprehensive TCP/UDP scan completed: {} TCP ports scanned ({} open, {} banners), {} UDP probes ({} responses), {:.2} conn/sec in {:.2}s",
                     total_ports_scanned, total_open_ports, total_banners_grabbed, 
                     total_udp_probes, total_udp_responses,
                     (total_ports_scanned + total_udp_probes) as f64 / scan_duration.as_secs_f64(),
@@ -392,7 +392,7 @@ impl AttackTechnique for NetworkServiceDiscovery {
                 )
             } else {
                 format!(
-                    "AGGRESSIVE TCP scan completed: {} ports scanned, {} open, {} banners grabbed, {:.2} conn/sec in {:.2}s",
+                    "Comprehensive TCP scan completed: {} ports scanned, {} open, {} banners grabbed, {:.2} conn/sec in {:.2}s",
                     total_ports_scanned, total_open_ports, total_banners_grabbed,
                     total_ports_scanned as f64 / scan_duration.as_secs_f64(),
                     scan_duration.as_secs_f64()

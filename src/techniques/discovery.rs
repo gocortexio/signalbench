@@ -16,7 +16,7 @@ impl AttackTechnique for NetworkDiscovery {
         Technique {
             id: "T1016".to_string(),
             name: "System Network Configuration Discovery".to_string(),
-            description: "Performs AGGRESSIVE network reconnaissance including ARP table enumeration, VPN detection, VLAN identification, routing table analysis, network bridge discovery, and firewall rule enumeration".to_string(),
+            description: "Performs comprehensive network reconnaissance including ARP table enumeration, VPN detection, VLAN identification, routing table analysis, network bridge discovery, and firewall rule enumeration".to_string(),
             category: "discovery".to_string(),
             parameters: vec![
                 TechniqueParameter {
@@ -60,11 +60,11 @@ impl AttackTechnique for NetworkDiscovery {
             let commands: Vec<&str> = commands_str.split(',').collect();
             
             if dry_run {
-                info!("[DRY RUN] Would perform aggressive network reconnaissance: ARP enumeration, VPN detection, VLAN identification, routing analysis, bridge discovery, firewall rules");
+                info!("[DRY RUN] Would perform comprehensive network reconnaissance: ARP enumeration, VPN detection, VLAN identification, routing analysis, bridge discovery, firewall rules");
                 return Ok(SimulationResult {
                     technique_id: self.info().id,
                     success: true,
-                    message: "DRY RUN: Would perform aggressive network reconnaissance".to_string(),
+                    message: "DRY RUN: Would perform comprehensive network reconnaissance".to_string(),
                     artifacts: vec![output_file],
                     cleanup_required: false,
                 });
@@ -81,14 +81,14 @@ impl AttackTechnique for NetworkDiscovery {
                 .map_err(|e| format!("Failed to create output file: {e}"))?;
             
             // Write header to file
-            writeln!(file, "=== SignalBench AGGRESSIVE Network Configuration Discovery ===")
+            writeln!(file, "=== SignalBench Comprehensive Network Configuration Discovery ===")
                 .map_err(|e| format!("Failed to write to output file: {e}"))?;
             writeln!(file, "Time: {}", chrono::Local::now().to_rfc3339())
                 .map_err(|e| format!("Failed to write to output file: {e}"))?;
             writeln!(file)
                 .map_err(|e| format!("Failed to write to output file: {e}"))?;
             
-            // AGGRESSIVE ENUMERATION: Network interfaces with detailed information
+            // Network interfaces with detailed information
             info!("Enumerating network interfaces with detailed information");
             writeln!(file, "=== Network Interface Enumeration (ip link show) ===")
                 .map_err(|e| format!("Failed to write to output file: {e}"))?;
@@ -110,7 +110,7 @@ impl AttackTechnique for NetworkDiscovery {
             writeln!(file)
                 .map_err(|e| format!("Failed to write to output file: {e}"))?;
             
-            // AGGRESSIVE ENUMERATION: ARP table enumeration using ip neigh
+            // ARP table enumeration using ip neigh
             info!("Enumerating ARP table using ip neigh");
             writeln!(file, "=== ARP Table Enumeration (ip neigh) ===")
                 .map_err(|e| format!("Failed to write to output file: {e}"))?;
@@ -129,7 +129,7 @@ impl AttackTechnique for NetworkDiscovery {
             writeln!(file)
                 .map_err(|e| format!("Failed to write to output file: {e}"))?;
             
-            // AGGRESSIVE ENUMERATION: ARP table enumeration using arp -a
+            // ARP table enumeration using arp -a
             info!("Enumerating ARP table using arp -a");
             writeln!(file, "=== ARP Table Enumeration (arp -a) ===")
                 .map_err(|e| format!("Failed to write to output file: {e}"))?;
@@ -146,7 +146,7 @@ impl AttackTechnique for NetworkDiscovery {
             writeln!(file)
                 .map_err(|e| format!("Failed to write to output file: {e}"))?;
             
-            // AGGRESSIVE ENUMERATION: Routing table analysis with default gateway identification
+            // Routing table analysis with default gateway identification
             info!("Parsing routing table to identify default gateways");
             writeln!(file, "=== Routing Table Analysis with Default Gateway Identification ===")
                 .map_err(|e| format!("Failed to write to output file: {e}"))?;
@@ -174,7 +174,7 @@ impl AttackTechnique for NetworkDiscovery {
             writeln!(file)
                 .map_err(|e| format!("Failed to write to output file: {e}"))?;
             
-            // AGGRESSIVE ENUMERATION: VPN configuration detection
+            // VPN configuration detection
             info!("Detecting VPN configurations in /etc/openvpn/ and /etc/wireguard/");
             writeln!(file, "=== VPN Configuration Detection ===")
                 .map_err(|e| format!("Failed to write to output file: {e}"))?;
@@ -241,7 +241,7 @@ impl AttackTechnique for NetworkDiscovery {
             writeln!(file)
                 .map_err(|e| format!("Failed to write to output file: {e}"))?;
             
-            // AGGRESSIVE ENUMERATION: VLAN configuration detection
+            // VLAN configuration detection
             info!("Detecting VLAN configurations in /proc/net/vlan/ and network interfaces");
             writeln!(file, "=== VLAN Configuration Detection ===")
                 .map_err(|e| format!("Failed to write to output file: {e}"))?;
@@ -313,7 +313,7 @@ impl AttackTechnique for NetworkDiscovery {
             writeln!(file)
                 .map_err(|e| format!("Failed to write to output file: {e}"))?;
             
-            // AGGRESSIVE ENUMERATION: Network bridge detection
+            // Network bridge detection
             info!("Detecting network bridges");
             writeln!(file, "=== Network Bridge Detection ===")
                 .map_err(|e| format!("Failed to write to output file: {e}"))?;
@@ -351,7 +351,7 @@ impl AttackTechnique for NetworkDiscovery {
             writeln!(file)
                 .map_err(|e| format!("Failed to write to output file: {e}"))?;
             
-            // AGGRESSIVE ENUMERATION: iptables/nftables firewall rules
+            // iptables/nftables firewall rules
             info!("Enumerating iptables/nftables firewall rules");
             writeln!(file, "=== Firewall Rule Enumeration ===")
                 .map_err(|e| format!("Failed to write to output file: {e}"))?;
@@ -440,7 +440,7 @@ impl AttackTechnique for NetworkDiscovery {
                     .map_err(|e| format!("Failed to write to output file: {e}"))?;
             }
             
-            info!("AGGRESSIVE network reconnaissance complete - Interfaces: {}, ARP entries: {}, VPN configs: {}, VLANs: {}", 
+            info!("Comprehensive network reconnaissance complete - Interfaces: {}, ARP entries: {}, VPN configs: {}, VLANs: {}", 
                   interface_count, arp_entries, vpn_configs_detected.len(), vlans_detected.len());
             
             let vpn_msg = if vpn_configs_detected.is_empty() {
@@ -458,7 +458,7 @@ impl AttackTechnique for NetworkDiscovery {
             Ok(SimulationResult {
                 technique_id: self.info().id,
                 success: true,
-                message: format!("Aggressive network reconnaissance: {interface_count} interfaces, {arp_entries} ARP entries, VPN configs: {vpn_msg}, VLANs: {vlan_msg}"),
+                message: format!("Comprehensive network reconnaissance: {interface_count} interfaces, {arp_entries} ARP entries, VPN configs: {vpn_msg}, VLANs: {vlan_msg}"),
                 artifacts: vec![output_file],
                 cleanup_required: true,
             })
@@ -489,7 +489,7 @@ impl AttackTechnique for SystemInformationDiscovery {
         Technique {
             id: "T1082".to_string(),
             name: "System Information Discovery".to_string(),
-            description: "Performs AGGRESSIVE system enumeration including user account parsing, package enumeration, security tool detection, and comprehensive system reconnaissance".to_string(),
+            description: "Performs comprehensive system enumeration including user account parsing, package enumeration, security tool detection, and comprehensive system reconnaissance".to_string(),
             category: "discovery".to_string(),
             parameters: vec![
                 TechniqueParameter {
@@ -533,11 +533,11 @@ impl AttackTechnique for SystemInformationDiscovery {
             let commands: Vec<&str> = commands_str.split(',').collect();
             
             if dry_run {
-                info!("[DRY RUN] Would perform aggressive system enumeration: user accounts, packages, security tools, CPU/memory details, kernel modules, containerisation checks");
+                info!("[DRY RUN] Would perform comprehensive system enumeration: user accounts, packages, security tools, CPU/memory details, kernel modules, containerisation checks");
                 return Ok(SimulationResult {
                     technique_id: self.info().id,
                     success: true,
-                    message: "DRY RUN: Would perform aggressive system enumeration".to_string(),
+                    message: "DRY RUN: Would perform comprehensive system enumeration".to_string(),
                     artifacts: vec![output_file],
                     cleanup_required: false,
                 });
@@ -553,7 +553,7 @@ impl AttackTechnique for SystemInformationDiscovery {
                 .map_err(|e| format!("Failed to create output file: {e}"))?;
             
             // Write header to file
-            writeln!(file, "=== SignalBench AGGRESSIVE System Information Discovery ===")
+            writeln!(file, "=== SignalBench Comprehensive System Information Discovery ===")
                 .map_err(|e| format!("Failed to write to output file: {e}"))?;
             writeln!(file, "Time: {}", chrono::Local::now().to_rfc3339())
                 .map_err(|e| format!("Failed to write to output file: {e}"))?;
@@ -576,7 +576,7 @@ impl AttackTechnique for SystemInformationDiscovery {
             writeln!(file)
                 .map_err(|e| format!("Failed to write to output file: {e}"))?;
             
-            // AGGRESSIVE ENUMERATION: Parse /etc/passwd for user accounts
+            // Parse /etc/passwd for user accounts
             info!("Parsing /etc/passwd for user account enumeration");
             writeln!(file, "=== User Account Enumeration (/etc/passwd) ===")
                 .map_err(|e| format!("Failed to write to output file: {e}"))?;
@@ -602,7 +602,7 @@ impl AttackTechnique for SystemInformationDiscovery {
             writeln!(file)
                 .map_err(|e| format!("Failed to write to output file: {e}"))?;
             
-            // AGGRESSIVE ENUMERATION: Package enumeration
+            // Package enumeration
             info!("Enumerating installed packages");
             writeln!(file, "=== Installed Package Enumeration ===")
                 .map_err(|e| format!("Failed to write to output file: {e}"))?;
@@ -645,7 +645,7 @@ impl AttackTechnique for SystemInformationDiscovery {
             writeln!(file)
                 .map_err(|e| format!("Failed to write to output file: {e}"))?;
             
-            // AGGRESSIVE ENUMERATION: Security tool detection
+            // Security tool detection
             info!("Detecting security tools");
             writeln!(file, "=== Security Tool Detection ===")
                 .map_err(|e| format!("Failed to write to output file: {e}"))?;
@@ -695,7 +695,7 @@ impl AttackTechnique for SystemInformationDiscovery {
             writeln!(file)
                 .map_err(|e| format!("Failed to write to output file: {e}"))?;
             
-            // AGGRESSIVE ENUMERATION: CPU information from /proc/cpuinfo
+            // CPU information from /proc/cpuinfo
             info!("Reading detailed CPU information from /proc/cpuinfo");
             writeln!(file, "=== Detailed CPU Information (/proc/cpuinfo) ===")
                 .map_err(|e| format!("Failed to write to output file: {e}"))?;
@@ -710,7 +710,7 @@ impl AttackTechnique for SystemInformationDiscovery {
             writeln!(file)
                 .map_err(|e| format!("Failed to write to output file: {e}"))?;
             
-            // AGGRESSIVE ENUMERATION: Memory information from /proc/meminfo
+            // Memory information from /proc/meminfo
             info!("Reading detailed memory information from /proc/meminfo");
             writeln!(file, "=== Detailed Memory Information (/proc/meminfo) ===")
                 .map_err(|e| format!("Failed to write to output file: {e}"))?;
@@ -725,7 +725,7 @@ impl AttackTechnique for SystemInformationDiscovery {
             writeln!(file)
                 .map_err(|e| format!("Failed to write to output file: {e}"))?;
             
-            // AGGRESSIVE ENUMERATION: Kernel modules
+            // Kernel modules
             info!("Enumerating loaded kernel modules");
             writeln!(file, "=== Loaded Kernel Modules (lsmod) ===")
                 .map_err(|e| format!("Failed to write to output file: {e}"))?;
@@ -740,7 +740,7 @@ impl AttackTechnique for SystemInformationDiscovery {
             writeln!(file)
                 .map_err(|e| format!("Failed to write to output file: {e}"))?;
             
-            // AGGRESSIVE ENUMERATION: Containerisation detection
+            // Containerisation detection
             info!("Checking for containerisation markers");
             writeln!(file, "=== Containerisation Detection (/proc/1/cgroup) ===")
                 .map_err(|e| format!("Failed to write to output file: {e}"))?;
@@ -812,7 +812,7 @@ impl AttackTechnique for SystemInformationDiscovery {
                     .map_err(|e| format!("Failed to write to output file: {e}"))?;
             }
             
-            info!("AGGRESSIVE system enumeration complete - Users: {}, Packages: {}, Security tools detected: {}", 
+            info!("Comprehensive system enumeration complete - Users: {}, Packages: {}, Security tools detected: {}", 
                   user_count, package_count, security_tools_detected.len());
             
             let security_tools_msg = if security_tools_detected.is_empty() {
@@ -824,7 +824,7 @@ impl AttackTechnique for SystemInformationDiscovery {
             Ok(SimulationResult {
                 technique_id: self.info().id,
                 success: true,
-                message: format!("Aggressive system enumeration: {user_count} user accounts, {package_count} packages, security tools detected: {security_tools_msg}"),
+                message: format!("Comprehensive system enumeration: {user_count} user accounts, {package_count} packages, security tools detected: {security_tools_msg}"),
                 artifacts: vec![output_file],
                 cleanup_required: true,
             })
@@ -853,7 +853,7 @@ impl AttackTechnique for NetworkConnectionsDiscovery {
         Technique {
             id: "T1049".to_string(),
             name: "System Network Connections Discovery".to_string(),
-            description: "Executes REAL aggressive network connection enumeration via netstat, ss, and lsof to discover active TCP/UDP connections, listening ports, process-to-socket mappings, and foreign addresses. Generates significant process execution telemetry detectable by EDRs.".to_string(),
+            description: "Executes real-time network connection enumeration via netstat, ss, and lsof to discover active TCP/UDP connections, listening ports, process-to-socket mappings, and foreign addresses. Generates significant process execution telemetry detectable by EDRs.".to_string(),
             category: "discovery".to_string(),
             parameters: vec![],
             detection: "Monitor for execution of netstat -antp, ss -tulpn, lsof -i, and other network enumeration commands. Detect abnormal process execution patterns for network reconnaissance. Watch for rapid sequential network tool invocations.".to_string(),
@@ -874,11 +874,11 @@ impl AttackTechnique for NetworkConnectionsDiscovery {
             let output_file = format!("/tmp/signalbench_network_connections_{session_id}.log");
             
             if dry_run {
-                info!("[DRY RUN] Would execute REAL network connection enumeration: netstat -antp, ss -tulpn, lsof -i -n -P, netstat -rn");
+                info!("[DRY RUN] Would execute real-time network connection enumeration: netstat -antp, ss -tulpn, lsof -i -n -P, netstat -rn");
                 return Ok(SimulationResult {
                     technique_id: self.info().id,
                     success: true,
-                    message: "DRY RUN: Would execute REAL aggressive network connection discovery".to_string(),
+                    message: "DRY RUN: Would execute real-time network connection discovery".to_string(),
                     artifacts: vec![output_file],
                     cleanup_required: false,
                 });
@@ -895,7 +895,7 @@ impl AttackTechnique for NetworkConnectionsDiscovery {
                 .map_err(|e| format!("Failed to create output file: {e}"))?;
             
             // Write header to file
-            writeln!(file, "=== SignalBench AGGRESSIVE Network Connections Discovery (T1049) ===")
+            writeln!(file, "=== SignalBench Real-time Network Connections Discovery (T1049) ===")
                 .map_err(|e| format!("Failed to write to output file: {e}"))?;
             writeln!(file, "Session ID: {session_id}")
                 .map_err(|e| format!("Failed to write to output file: {e}"))?;
@@ -1160,7 +1160,7 @@ impl AttackTechnique for NetworkConnectionsDiscovery {
             writeln!(file, "Suspicious Patterns: {}", suspicious_patterns.len())
                 .map_err(|e| format!("Failed to write to output file: {e}"))?;
             
-            info!("REAL network connection discovery complete - Total: {}, Listening: {}, Established: {}, Suspicious: {}", 
+            info!("Network connection discovery complete - Total: {}, Listening: {}, Established: {}, Suspicious: {}", 
                   total_connections, listening_ports, established_connections, suspicious_patterns.len());
             
             Ok(SimulationResult {

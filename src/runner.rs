@@ -26,17 +26,17 @@ pub fn list_techniques() -> Result<(), String> {
     let mut categories: Vec<_> = techniques_by_category.keys().collect();
     categories.sort();
     
-    // Print techniques by category
+    // Print techniques by category (grep-friendly format)
     for category in categories {
-        println!("\n{}", category.to_uppercase().bold().green());
-        println!("{}", "-".repeat(category.len()));
+        println!("\n{}", format!("CATEGORY: {}", category.to_uppercase()).bold().green());
         
         let techniques = techniques_by_category.get(category).unwrap();
         for technique in techniques {
             let info = technique.info();
-            println!("  {} | {}", info.id.yellow(), info.name);
-            println!("    {}", info.description);
-            println!("    {}", format!("Platforms: {}", info.platforms.join(", ")).dimmed());
+            println!("  {} | {} | Platforms: {}", 
+                info.id.yellow(), 
+                info.name,
+                info.platforms.join(", "));
         }
     }
     

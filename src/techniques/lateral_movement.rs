@@ -16,8 +16,8 @@ impl AttackTechnique for SshLateralMovement {
     fn info(&self) -> Technique {
         Technique {
             id: "T1021.004".to_string(),
-            name: "SSH Lateral Movement - AGGRESSIVE".to_string(),
-            description: "AGGRESSIVE: Performs REAL SSH lateral movement by generating an RSA key pair, modifying ~/.ssh/authorized_keys, and executing genuine SSH connections to localhost (127.0.0.1). Executes multiple commands via SSH including whoami, uname, hostname, env, and id. Attempts SSH port forwarding (-L) and dynamic tunnelling (-D) to simulate advanced lateral movement tactics. Generates authentic SSH connection logs and authorized_keys modifications detectable by EDR/XDR systems. Includes comprehensive backup and restore of authorized_keys.".to_string(),
+            name: "SSH Lateral Movement".to_string(),
+            description: "Performs REAL SSH lateral movement by generating an RSA key pair, modifying ~/.ssh/authorized_keys, and executing genuine SSH connections to localhost (127.0.0.1). Executes multiple commands via SSH including whoami, uname, hostname, env, and id. Attempts SSH port forwarding (-L) and dynamic tunnelling (-D) to simulate advanced lateral movement tactics. Generates authentic SSH connection logs and authorized_keys modifications detectable by EDR/XDR systems. Includes comprehensive backup and restore of authorized_keys.".to_string(),
             category: "lateral_movement".to_string(),
             parameters: vec![
                 TechniqueParameter {
@@ -85,13 +85,13 @@ impl AttackTechnique for SshLateralMovement {
                 });
             }
 
-            info!("Starting AGGRESSIVE SSH lateral movement technique...");
+            info!("Starting SSH lateral movement technique...");
             info!("Session ID: {session_id}");
             
             let mut log = File::create(&log_file)
                 .map_err(|e| format!("Failed to create log file: {e}"))?;
             
-            writeln!(log, "=== SignalBench AGGRESSIVE SSH Lateral Movement ===").unwrap();
+            writeln!(log, "=== SignalBench SSH Lateral Movement ===").unwrap();
             writeln!(log, "Session ID: {session_id}").unwrap();
             writeln!(log, "Timestamp: {}", chrono::Local::now()).unwrap();
             writeln!(log, "Target User: {current_user}@127.0.0.1").unwrap();
@@ -288,7 +288,7 @@ impl AttackTechnique for SshLateralMovement {
                 technique_id: self.info().id,
                 success: true,
                 message: format!(
-                    "Successfully executed AGGRESSIVE SSH lateral movement: generated key pair, modified authorized_keys, executed {} commands via SSH ({} successful), attempted port forwarding and tunnelling",
+                    "Successfully executed SSH lateral movement: generated key pair, modified authorized_keys, executed {} commands via SSH ({} successful), attempted port forwarding and tunnelling",
                     commands.len(), successful_connections
                 ),
                 artifacts,
