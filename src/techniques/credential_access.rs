@@ -40,6 +40,7 @@ impl AttackTechnique for MemoryDumping {
             cleanup_support: true,
             platforms: vec!["Linux".to_string()],
             permissions: vec!["root or process owner".to_string()],
+            voltron_only: false,
         }
     }
 
@@ -392,6 +393,7 @@ impl AttackTechnique for KeyloggerSimulation {
             cleanup_support: true,
             platforms: vec!["Linux".to_string()],
             permissions: vec!["user (historical analysis) or root (real device capture)".to_string()],
+            voltron_only: false,
         }
     }
 
@@ -1001,6 +1003,7 @@ impl AttackTechnique for CredentialsInFiles {
             cleanup_support: true,
             platforms: vec!["Linux".to_string()],
             permissions: vec!["user (partial) or root (full with /etc/shadow, /root/.ssh, /var/lib access)".to_string()],
+            voltron_only: false,
         }
     }
 
@@ -1228,7 +1231,7 @@ impl AttackTechnique for CredentialsInFiles {
                                 if found {
                                     credential_files_found += 1;
                                     total_patterns_found += count;
-                                    writeln!(log, "✓ Credential file: {} ({} patterns)", path.display(), count).unwrap();
+                                    writeln!(log, "[OK] Credential file: {} ({} patterns)", path.display(), count).unwrap();
                                     
                                     findings.push(CredentialFinding {
                                         file_path: path.display().to_string(),
@@ -1259,7 +1262,7 @@ impl AttackTechnique for CredentialsInFiles {
                         if found {
                             credential_files_found += 1;
                             total_patterns_found += count;
-                            writeln!(log, "✓ Credential file: {} ({} patterns)", aws_creds.display(), count).unwrap();
+                            writeln!(log, "[OK] Credential file: {} ({} patterns)", aws_creds.display(), count).unwrap();
                             
                             findings.push(CredentialFinding {
                                 file_path: aws_creds.display().to_string(),
@@ -1288,7 +1291,7 @@ impl AttackTechnique for CredentialsInFiles {
                         if found || content.contains("password") || content.contains("login") {
                             credential_files_found += 1;
                             total_patterns_found += count;
-                            writeln!(log, "✓ Credential file: {} ({} patterns)", netrc.display(), count).unwrap();
+                            writeln!(log, "[OK] Credential file: {} ({} patterns)", netrc.display(), count).unwrap();
                             
                             findings.push(CredentialFinding {
                                 file_path: netrc.display().to_string(),
@@ -1317,7 +1320,7 @@ impl AttackTechnique for CredentialsInFiles {
                         if found || content.contains("://") {
                             credential_files_found += 1;
                             total_patterns_found += count;
-                            writeln!(log, "✓ Credential file: {} ({} patterns)", git_creds.display(), count).unwrap();
+                            writeln!(log, "[OK] Credential file: {} ({} patterns)", git_creds.display(), count).unwrap();
                             
                             findings.push(CredentialFinding {
                                 file_path: git_creds.display().to_string(),
@@ -1362,7 +1365,7 @@ impl AttackTechnique for CredentialsInFiles {
                             if found {
                                 credential_files_found += 1;
                                 total_patterns_found += count;
-                                writeln!(log,"✓ Credential file: {env_file_path} ({count} patterns)").unwrap();
+                                writeln!(log,"[OK] Credential file: {env_file_path} ({count} patterns)").unwrap();
                                 
                                 findings.push(CredentialFinding {
                                     file_path: env_file_path.to_string(),
@@ -1392,7 +1395,7 @@ impl AttackTechnique for CredentialsInFiles {
                         if found || content.contains("auth") || content.contains("auths") {
                             credential_files_found += 1;
                             total_patterns_found += count;
-                            writeln!(log, "✓ Credential file: {} ({} patterns)", docker_config.display(), count).unwrap();
+                            writeln!(log, "[OK] Credential file: {} ({} patterns)", docker_config.display(), count).unwrap();
                             
                             findings.push(CredentialFinding {
                                 file_path: docker_config.display().to_string(),
@@ -1421,7 +1424,7 @@ impl AttackTechnique for CredentialsInFiles {
                         if found || content.contains("token") || content.contains("certificate-authority-data") {
                             credential_files_found += 1;
                             total_patterns_found += count;
-                            writeln!(log, "✓ Credential file: {} ({} patterns)", kube_config.display(), count).unwrap();
+                            writeln!(log, "[OK] Credential file: {} ({} patterns)", kube_config.display(), count).unwrap();
                             
                             findings.push(CredentialFinding {
                                 file_path: kube_config.display().to_string(),
@@ -1452,7 +1455,7 @@ impl AttackTechnique for CredentialsInFiles {
                         if hash_count > 0 {
                             credential_files_found += 1;
                             total_patterns_found += hash_count;
-                            writeln!(log, "✓ Credential file: {} ({} password hashes)", shadow_path.display(), hash_count).unwrap();
+                            writeln!(log, "[OK] Credential file: {} ({} password hashes)", shadow_path.display(), hash_count).unwrap();
                             writeln!(log,"  [PASSWORD HASH] Found {hash_count} user password hashes").unwrap();
                             
                             findings.push(CredentialFinding {
@@ -1483,7 +1486,7 @@ impl AttackTechnique for CredentialsInFiles {
                         if found || content.contains(":") {
                             credential_files_found += 1;
                             total_patterns_found += count.max(content.lines().filter(|l| l.contains(":")).count());
-                            writeln!(log, "✓ Credential file: {} ({} patterns)", pgpass.display(), count).unwrap();
+                            writeln!(log, "[OK] Credential file: {} ({} patterns)", pgpass.display(), count).unwrap();
                             
                             findings.push(CredentialFinding {
                                 file_path: pgpass.display().to_string(),
@@ -1506,7 +1509,7 @@ impl AttackTechnique for CredentialsInFiles {
                         if found || content.contains("password") {
                             credential_files_found += 1;
                             total_patterns_found += count;
-                            writeln!(log, "✓ Credential file: {} ({} patterns)", my_cnf.display(), count).unwrap();
+                            writeln!(log, "[OK] Credential file: {} ({} patterns)", my_cnf.display(), count).unwrap();
                             
                             findings.push(CredentialFinding {
                                 file_path: my_cnf.display().to_string(),
@@ -1529,7 +1532,7 @@ impl AttackTechnique for CredentialsInFiles {
                         if found || content.contains("access_key") || content.contains("secret_key") {
                             credential_files_found += 1;
                             total_patterns_found += count;
-                            writeln!(log, "✓ Credential file: {} ({} patterns)", s3cfg.display(), count).unwrap();
+                            writeln!(log, "[OK] Credential file: {} ({} patterns)", s3cfg.display(), count).unwrap();
                             
                             findings.push(CredentialFinding {
                                 file_path: s3cfg.display().to_string(),
@@ -1575,7 +1578,7 @@ impl AttackTechnique for CredentialsInFiles {
                             if found || content.contains("DB_PASSWORD") || content.contains("DB_USER") {
                                 credential_files_found += 1;
                                 total_patterns_found += count;
-                                writeln!(log, "✓ Credential file: {wp_config_path} ({count} patterns)").unwrap();
+                                writeln!(log, "[OK] Credential file: {wp_config_path} ({count} patterns)").unwrap();
                                 
                                 findings.push(CredentialFinding {
                                     file_path: wp_config_path.to_string(),
@@ -1614,7 +1617,7 @@ impl AttackTechnique for CredentialsInFiles {
                             if hash_count > 0 {
                                 credential_files_found += 1;
                                 total_patterns_found += hash_count;
-                                writeln!(log, "✓ Credential file: {htpasswd_path} ({hash_count} password hashes)").unwrap();
+                                writeln!(log, "[OK] Credential file: {htpasswd_path} ({hash_count} password hashes)").unwrap();
                                 writeln!(log, "  [HTPASSWD] Found {hash_count} HTTP auth hashes").unwrap();
                                 
                                 findings.push(CredentialFinding {
@@ -1664,7 +1667,7 @@ impl AttackTechnique for CredentialsInFiles {
                             if found {
                                 credential_files_found += 1;
                                 total_patterns_found += count;
-                                writeln!(log, "✓ Credential file: {props_path} ({count} patterns)").unwrap();
+                                writeln!(log, "[OK] Credential file: {props_path} ({count} patterns)").unwrap();
                                 
                                 findings.push(CredentialFinding {
                                     file_path: props_path.to_string(),
@@ -1704,7 +1707,7 @@ impl AttackTechnique for CredentialsInFiles {
                             if found {
                                 credential_files_found += 1;
                                 total_patterns_found += count;
-                                writeln!(log, "✓ Credential file: {settings_path} ({count} patterns)").unwrap();
+                                writeln!(log, "[OK] Credential file: {settings_path} ({count} patterns)").unwrap();
                                 
                                 findings.push(CredentialFinding {
                                     file_path: settings_path.to_string(),
@@ -1744,7 +1747,7 @@ impl AttackTechnique for CredentialsInFiles {
                             if found {
                                 credential_files_found += 1;
                                 total_patterns_found += count;
-                                writeln!(log, "✓ Credential file: {yml_path} ({count} patterns)").unwrap();
+                                writeln!(log, "[OK] Credential file: {yml_path} ({count} patterns)").unwrap();
                                 
                                 findings.push(CredentialFinding {
                                     file_path: yml_path.to_string(),
@@ -1794,7 +1797,7 @@ impl AttackTechnique for CredentialsInFiles {
                                 if found {
                                     credential_files_found += 1;
                                     total_patterns_found += count;
-                                    writeln!(log, "✓ Credential file: {config_path} ({count} patterns)").unwrap();
+                                    writeln!(log, "[OK] Credential file: {config_path} ({count} patterns)").unwrap();
                                     
                                     findings.push(CredentialFinding {
                                         file_path: config_path.to_string(),
@@ -1847,7 +1850,7 @@ impl AttackTechnique for CredentialsInFiles {
                                     if found {
                                         credential_files_found += 1;
                                         total_patterns_found += count;
-                                        writeln!(log, "✓ Credential file: {docker_path} ({count} patterns)").unwrap();
+                                        writeln!(log, "[OK] Credential file: {docker_path} ({count} patterns)").unwrap();
                                         
                                         findings.push(CredentialFinding {
                                             file_path: docker_path.to_string(),
@@ -1894,7 +1897,7 @@ impl AttackTechnique for CredentialsInFiles {
                                 if found {
                                     credential_files_found += 1;
                                     total_patterns_found += count;
-                                    writeln!(log, "✓ Credential file: {} ({} patterns)", path.display(), count).unwrap();
+                                    writeln!(log, "[OK] Credential file: {} ({} patterns)", path.display(), count).unwrap();
                                     
                                     findings.push(CredentialFinding {
                                         file_path: path.display().to_string(),
@@ -1946,7 +1949,7 @@ impl AttackTechnique for CredentialsInFiles {
                                 if found {
                                     credential_files_found += 1;
                                     total_patterns_found += count;
-                                    writeln!(log, "✓ Credential file: {config_path} ({count} patterns)").unwrap();
+                                    writeln!(log, "[OK] Credential file: {config_path} ({count} patterns)").unwrap();
                                     
                                     findings.push(CredentialFinding {
                                         file_path: config_path.to_string(),
@@ -2011,7 +2014,7 @@ impl AttackTechnique for CredentialsInFiles {
                                         credential_files_found += 1;
                                         let pattern_count = (has_create_user as usize) + (has_password as usize) + (has_grant as usize);
                                         total_patterns_found += pattern_count;
-                                        writeln!(log, "✓ Credential file: {dump_path}").unwrap();
+                                        writeln!(log, "[OK] Credential file: {dump_path}").unwrap();
                                         writeln!(log, "  [DATABASE DUMP] CREATE USER: {has_create_user}, PASSWORD: {has_password}, GRANT: {has_grant}").unwrap();
                                         
                                         findings.push(CredentialFinding {
@@ -2143,6 +2146,7 @@ impl AttackTechnique for ProcFilesystemCredentialDumping {
             cleanup_support: true,
             platforms: vec!["Linux".to_string()],
             permissions: vec!["root or process owner".to_string()],
+            voltron_only: false,
         }
     }
 
@@ -2362,7 +2366,7 @@ impl AttackTechnique for ProcFilesystemCredentialDumping {
                                                         if let Some(ssh_match) = ssh_key_pattern.find(&content_str) {
                                                             total_credentials_found += 1;
                                                             let matched_text = ssh_match.as_str();
-                                                            writeln!(log_file_handle,"✓ SSH PRIVATE KEY FOUND: {matched_text}").unwrap();
+                                                            writeln!(log_file_handle,"[OK] SSH PRIVATE KEY FOUND: {matched_text}").unwrap();
                                                             all_matches.push(CredentialMatch {
                                                                 pattern_type: "SSH Private Key".to_string(),
                                                                 content: matched_text.to_string(),
@@ -2383,7 +2387,7 @@ impl AttackTechnique for ProcFilesystemCredentialDumping {
                                                                     4 => "AWS Access Key",
                                                                     _ => "API Token",
                                                                 };
-                                                                writeln!(log_file_handle,"✓ {token_type} FOUND: {matched_text}").unwrap();
+                                                                writeln!(log_file_handle,"[OK] {token_type} FOUND: {matched_text}").unwrap();
                                                                 all_matches.push(CredentialMatch {
                                                                     pattern_type: token_type.to_string(),
                                                                     content: matched_text.to_string(),
@@ -2396,7 +2400,7 @@ impl AttackTechnique for ProcFilesystemCredentialDumping {
                                                         for password_match in password_patterns.iter().flat_map(|p| p.find_iter(&content_str)) {
                                                             total_credentials_found += 1;
                                                             let matched_text = password_match.as_str();
-                                                            writeln!(log_file_handle,"✓ PASSWORD PATTERN FOUND: {matched_text}").unwrap();
+                                                            writeln!(log_file_handle,"[OK] PASSWORD PATTERN FOUND: {matched_text}").unwrap();
                                                             all_matches.push(CredentialMatch {
                                                                 pattern_type: "Password String".to_string(),
                                                                 content: matched_text.to_string(),
@@ -2408,7 +2412,7 @@ impl AttackTechnique for ProcFilesystemCredentialDumping {
                                                         for conn_match in connection_string_patterns.iter().flat_map(|p| p.find_iter(&content_str)) {
                                                             total_credentials_found += 1;
                                                             let matched_text = conn_match.as_str();
-                                                            writeln!(log_file_handle,"✓ CONNECTION STRING FOUND: {matched_text}").unwrap();
+                                                            writeln!(log_file_handle,"[OK] CONNECTION STRING FOUND: {matched_text}").unwrap();
                                                             all_matches.push(CredentialMatch {
                                                                 pattern_type: "Database Connection String".to_string(),
                                                                 content: matched_text.to_string(),
@@ -2553,6 +2557,7 @@ impl AttackTechnique for SSHBruteForce {
             cleanup_support: true,
             platforms: vec!["Linux".to_string()],
             permissions: vec!["root (for full test user creation) or user (for existing user testing)".to_string()],
+            voltron_only: false,
         }
     }
 
@@ -3002,6 +3007,7 @@ impl AttackTechnique for EtcPasswdShadow {
             cleanup_support: true,
             platforms: vec!["Linux".to_string()],
             permissions: vec!["user (root for shadow)".to_string()],
+            voltron_only: false,
         }
     }
 

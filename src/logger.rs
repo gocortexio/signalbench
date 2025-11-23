@@ -1,22 +1,32 @@
-use chrono::Local;
+use chrono::Utc;
 use env_logger::{Builder, Env};
 use log::LevelFilter;
 use std::io::Write;
 
-/// Initialise the logger with timestamps and coloured output
-pub fn init_logger() {
-    Builder::from_env(Env::default().default_filter_or("info"))
+/// Initialise the logger with UTC ISO8601 timestamps and coloured output
+pub fn init_logger(debug: bool) {
+    let filter_level = if debug { "debug" } else { "info" };
+    
+    Builder::from_env(Env::default().default_filter_or(filter_level))
         .format(|buf, record| {
             writeln!(
                 buf,
                 "[{} {} {}] {}",
-                Local::now().format("%Y-%m-%d %H:%M:%S"),
+                Utc::now().format("%Y-%m-%dT%H:%M:%SZ"),
                 record.level(),
                 record.target(),
                 record.args()
             )
         })
         .init();
+}
+
+/// Macro for debug logging with UTC ISO8601 timestamps
+#[macro_export]
+macro_rules! debug_log {
+    ($($arg:tt)*) => {
+        eprintln!("[{} DEBUG] {}", chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ"), format!($($arg)*));
+    };
 }
 
 /// Set the logger level

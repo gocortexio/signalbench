@@ -181,6 +181,7 @@ impl AttackTechnique for NetworkServiceDiscovery {
             cleanup_support: true,
             platforms: vec!["Linux".to_string()],
             permissions: vec!["user".to_string()],
+            voltron_only: false,
         }
     }
 
@@ -480,6 +481,7 @@ impl AttackTechnique for ExfiltrationOverAlternativeProtocol {
             cleanup_support: true,
             platforms: vec!["Linux".to_string()],
             permissions: vec!["user".to_string()],
+            voltron_only: false,
         }
     }
 
@@ -849,6 +851,7 @@ impl AttackTechnique for NonApplicationLayerProtocol {
             cleanup_support: true,
             platforms: vec!["Linux".to_string()],
             permissions: vec!["user".to_string()],
+            voltron_only: false,
         }
     }
 

@@ -67,15 +67,8 @@ jobs:
       with:
         targets: ${{ matrix.target }}
 
-    - name: Install musl tools
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y musl-tools
-
-    - name: Install cross-compilation tools
-      if: matrix.target == 'aarch64-unknown-linux-musl'
-      run: |
-        sudo apt-get install -y gcc-aarch64-linux-gnu
+    - name: Install cross
+      run: cargo install cross --git https://github.com/cross-rs/cross
 
     - name: Cache cargo
       uses: actions/cache@v4
@@ -88,18 +81,14 @@ jobs:
           target/
         key: ${{ runner.os }}-cargo-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
 
-    - name: Configure cross-compilation
-      if: matrix.target == 'aarch64-unknown-linux-musl'
-      run: |
-        mkdir -p ~/.cargo
-        echo '[target.aarch64-unknown-linux-musl]' >> ~/.cargo/config.toml
-        echo 'linker = "aarch64-linux-gnu-gcc"' >> ~/.cargo/config.toml
+    - name: Clean build artifacts
+      run: cargo clean
 
     - name: Build helper binary with MUSL
       run: |
         echo "Building PACEMAKER helper binary with static MUSL linking for ${{ matrix.target }}"
         cd helpers/pacemaker
-        cargo build --release --target ${{ matrix.target }}
+        cross build --release --target ${{ matrix.target }}
         cd ../..
         
         # Copy the static helper binary to embedded_binaries/
@@ -140,7 +129,7 @@ jobs:
         echo "YARA signature verification passed"
 
     - name: Build release binary
-      run: cargo build --release --target ${{ matrix.target }}
+      run: cross build --release --target ${{ matrix.target }}
 
     - name: Get version info
       id: version

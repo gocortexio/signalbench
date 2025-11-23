@@ -16,9 +16,17 @@ pub fn list_techniques() -> Result<(), String> {
     let all_techniques = get_all_techniques();
     
     // Group techniques by category (normalized to ensure consistent capitalization)
+    // Filter out voltron_only techniques as they require multi-host coordination
     let mut techniques_by_category: HashMap<String, Vec<_>> = HashMap::new();
     for technique in all_techniques {
-        let category = technique.info().category.to_lowercase();
+        let info = technique.info();
+        
+        // Skip Voltron-only techniques (they require multi-host coordination)
+        if info.voltron_only {
+            continue;
+        }
+        
+        let category = info.category.to_lowercase();
         techniques_by_category.entry(category).or_insert_with(Vec::new).push(technique);
     }
     
@@ -48,6 +56,50 @@ pub fn list_techniques() -> Result<(), String> {
     println!("\n{}", "Visit https://gocortex.io for documentation and support".italic());
     
     Ok(())
+}
+
+/// Generate telemetry for a specific technique with custom parameters (for Voltron mode)
+pub async fn run_technique_with_params(
+    technique_id: &str,
+    custom_params: std::collections::HashMap<String, String>,
+    dry_run: bool,
+    no_cleanup: bool,
+) -> Result<(), String> {
+    use crate::config::TechniqueConfig;
+    
+    // Find the technique
+    let technique = match get_technique_by_id_or_name(technique_id) {
+        Some(t) => t,
+        None => return Err(format!("Technique '{technique_id}' not found")),
+    };
+    
+    let _technique_info = technique.info();
+    
+    // Build technique config with custom parameters
+    let technique_config = TechniqueConfig {
+        parameters: custom_params,
+        timeout_seconds: Some(300), // Default 5 minutes
+        cleanup_after: Some(!no_cleanup),
+    };
+    
+    // Execute the technique
+    let result = match technique.execute(&technique_config, dry_run).await {
+        Ok(result) => result,
+        Err(e) => {
+            return Err(format!("Failed to execute technique: {e}"));
+        }
+    };
+    
+    // Cleanup if necessary
+    if !no_cleanup && technique_config.cleanup_after.unwrap_or(false) && result.cleanup_required {
+        let _ = technique.cleanup(&result.artifacts).await;
+    }
+    
+    if result.success {
+        Ok(())
+    } else {
+        Err(result.message)
+    }
 }
 
 /// Generate telemetry for a specific technique

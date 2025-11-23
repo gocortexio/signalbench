@@ -58,6 +58,7 @@ impl AttackTechnique for ObfuscatedFilesAndInformation {
             cleanup_support: true,
             platforms: vec!["Linux".to_string()],
             permissions: vec!["user".to_string()],
+            voltron_only: false,
         }
     }
 

@@ -49,6 +49,7 @@ impl AttackTechnique for S1109Pacemaker {
             cleanup_support: true,
             platforms: vec!["Linux".to_string()],
             permissions: vec!["user".to_string()],
+            voltron_only: false,
         }
     }
 

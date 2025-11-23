@@ -57,6 +57,7 @@ impl AttackTechnique for ProcessInjection {
             cleanup_support: true,
             platforms: vec!["Linux".to_string()],
             permissions: vec!["user".to_string(), "root".to_string()],
+            voltron_only: false,
         }
     }
 

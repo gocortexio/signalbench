@@ -11,6 +11,7 @@ pub mod defense_evasion;
 pub mod credential_access;
 pub mod discovery;
 pub mod lateral_movement;
+pub mod protocol_lateral_movement;
 pub mod execution;
 pub mod network;
 pub mod command_and_control;
@@ -42,6 +43,8 @@ pub struct Technique {
     pub cleanup_support: bool, // Whether this technique supports cleanup
     pub platforms: Vec<String>, // Supported platforms (e.g., ["Linux"])
     pub permissions: Vec<String>, // Required permissions (e.g., ["root"])
+    #[serde(default)]
+    pub voltron_only: bool,   // Whether this technique can only run in Voltron mode
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -126,6 +129,9 @@ pub fn get_all_techniques() -> Vec<Box<dyn AttackTechnique>> {
         
         // Lateral movement techniques
         Box::new(lateral_movement::SshLateralMovement {}),
+        Box::new(lateral_movement::VncLateralMovement {}),
+        Box::new(protocol_lateral_movement::VncProtoLateralMovement {}),
+        Box::new(protocol_lateral_movement::SshProtoLateralMovement {}),
         
         // Execution techniques
         Box::new(execution::CommandLineInterface {}),

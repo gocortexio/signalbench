@@ -36,6 +36,7 @@ impl AttackTechnique for CommandLineInterface {
             cleanup_support: true,
             platforms: vec!["Linux".to_string()],
             permissions: vec!["user".to_string()],
+            voltron_only: false,
         }
     }
 
@@ -355,6 +356,7 @@ impl AttackTechnique for ScriptExecution {
             cleanup_support: true,
             platforms: vec!["Linux".to_string()],
             permissions: vec!["user".to_string()],
+            voltron_only: false,
         }
     }
 
@@ -968,6 +970,7 @@ impl AttackTechnique for UncommonRemoteShellCommands {
             cleanup_support: true,
             platforms: vec!["Linux".to_string()],
             permissions: vec!["user".to_string()],
+            voltron_only: false,
         }
     }
 

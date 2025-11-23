@@ -7,6 +7,7 @@ use std::fs::{self, File};
 use std::io::{Write, Read};
 use std::path::Path;
 use tokio::process::Command;
+use tokio::time::Duration;
 use uuid::Uuid;
 
 pub struct SshLateralMovement {}
@@ -37,6 +38,7 @@ impl AttackTechnique for SshLateralMovement {
             cleanup_support: true,
             platforms: vec!["Linux".to_string()],
             permissions: vec!["user".to_string()],
+            voltron_only: false,
         }
     }
 
@@ -401,6 +403,240 @@ impl AttackTechnique for SshLateralMovement {
             }
             
             info!("SSH lateral movement cleanup complete");
+            Ok(())
+        })
+    }
+}
+
+// ======================================
+// T1021.005 - VNC Lateral Movement
+// ======================================
+pub struct VncLateralMovement {}
+
+#[async_trait]
+impl AttackTechnique for VncLateralMovement {
+    fn info(&self) -> Technique {
+        Technique {
+            id: "T1021.005".to_string(),
+            name: "VNC Lateral Movement".to_string(),
+            description: "Simulates VNC-based lateral movement between attacker and victim hosts. The attacker attempts to establish a VNC connection to the victim's display server, generating network traffic and connection logs typical of VNC lateral movement. This is a Voltron-only technique requiring two coordinated hosts: one acting as attacker, one as victim. Generates telemetry for VNC connection attempts, port 5900+ traffic, and RFB protocol handshakes.".to_string(),
+            category: "Lateral Movement".to_string(),
+            parameters: vec![
+                TechniqueParameter {
+                    name: "vnc_port".to_string(),
+                    description: "VNC port to connect to (default 5900 for display :0)".to_string(),
+                    required: false,
+                    default: Some("5900".to_string()),
+                },
+                TechniqueParameter {
+                    name: "display".to_string(),
+                    description: "Display number to target (adds to base port 5900)".to_string(),
+                    required: false,
+                    default: Some("0".to_string()),
+                },
+                TechniqueParameter {
+                    name: "log_file".to_string(),
+                    description: "Path to save VNC connection attempt log".to_string(),
+                    required: false,
+                    default: Some("/tmp/signalbench_vnc_lateral_movement.log".to_string()),
+                },
+            ],
+            detection: "Monitor for VNC connection attempts on ports 5900-5909, RFB protocol handshakes, VNC client process execution (vncviewer, tightvnc, etc.), and network connections to uncommon VNC ports. EDR/XDR systems can detect VNC lateral movement through process telemetry and network flow analysis.".to_string(),
+            cleanup_support: true,
+            platforms: vec!["Linux".to_string()],
+            permissions: vec!["user".to_string()],
+            voltron_only: false,
+        }
+    }
+
+    fn execute<'a>(
+        &'a self,
+        config: &'a TechniqueConfig,
+        dry_run: bool,
+    ) -> ExecuteFuture<'a> {
+        Box::pin(async move {
+            let technique_info = self.info();
+            
+            let log_file = config
+                .parameters
+                .get("log_file")
+                .unwrap_or(&"/tmp/signalbench_vnc_lateral_movement.log".to_string())
+                .clone();
+            
+            let _vnc_port = config
+                .parameters
+                .get("vnc_port")
+                .unwrap_or(&"5900".to_string())
+                .parse::<u16>()
+                .unwrap_or(5900);
+            
+            let display = config
+                .parameters
+                .get("display")
+                .unwrap_or(&"0".to_string())
+                .parse::<u16>()
+                .unwrap_or(0);
+            
+            let target_port = 5900 + display;
+            
+            // Get role from voltron context (attacker or victim)
+            let role = config
+                .parameters
+                .get("__voltron_role")
+                .map(|s| s.as_str())
+                .unwrap_or("attacker");
+            
+            // Get target info from voltron context
+            let target_ip = config
+                .parameters
+                .get("__voltron_target_ip")
+                .unwrap_or(&"127.0.0.1".to_string())
+                .clone();
+            
+            if dry_run {
+                return Ok(SimulationResult {
+                    technique_id: technique_info.id,
+                    success: true,
+                    message: format!(
+                        "Would simulate VNC lateral movement as {role}: target {target_ip}:{target_port}"
+                    ),
+                    artifacts: vec![log_file],
+                    cleanup_required: true,
+                });
+            }
+            
+            let mut log = File::create(&log_file)
+                .map_err(|e| format!("Failed to create log file: {e}"))?;
+            
+            writeln!(log, "=== SignalBench VNC Lateral Movement ===").unwrap();
+            writeln!(log, "Technique ID: T1021.005").unwrap();
+            writeln!(log, "Role: {role}").unwrap();
+            writeln!(log, "Timestamp: {}", chrono::Local::now()).unwrap();
+            writeln!(log, "Target: {target_ip}:{target_port}").unwrap();
+            writeln!(log).unwrap();
+            
+            if role == "attacker" {
+                // Attacker: attempt VNC connection
+                writeln!(log, "=== Attacker: VNC Connection Attempt ===").unwrap();
+                info!("Attempting VNC connection to {target_ip}:{target_port}");
+                
+                // Try to connect using vncviewer if available
+                let vnc_cmd = format!("timeout 5 vncviewer -viewonly {target_ip}:{display} || true");
+                
+                let output = Command::new("bash")
+                    .args(["-c", &vnc_cmd])
+                    .output()
+                    .await
+                    .map_err(|e| format!("Failed to execute VNC connection: {e}"))?;
+                
+                writeln!(log, "VNC command: {vnc_cmd}").unwrap();
+                writeln!(log, "Exit code: {}", output.status.code().unwrap_or(-1)).unwrap();
+                writeln!(log, "Stdout: {}", String::from_utf8_lossy(&output.stdout)).unwrap();
+                writeln!(log, "Stderr: {}", String::from_utf8_lossy(&output.stderr)).unwrap();
+                
+                // Fallback: raw TCP connection to generate network telemetry
+                writeln!(log, "\n=== Fallback: Raw TCP Connection ===").unwrap();
+                info!("Attempting raw TCP connection to VNC port");
+                
+                match tokio::time::timeout(
+                    Duration::from_secs(5),
+                    tokio::net::TcpStream::connect(format!("{target_ip}:{target_port}"))
+                ).await {
+                    Ok(Ok(mut stream)) => {
+                        writeln!(log, "TCP connection established to {target_ip}:{target_port}").unwrap();
+                        
+                        // Try to read VNC RFB protocol version
+                        let mut buffer = vec![0u8; 12];
+                        match tokio::time::timeout(
+                            Duration::from_secs(2),
+                            tokio::io::AsyncReadExt::read(&mut stream, &mut buffer)
+                        ).await {
+                            Ok(Ok(n)) if n > 0 => {
+                                let rfb_version = String::from_utf8_lossy(&buffer[..n]);
+                                writeln!(log, "RFB version received: {}", rfb_version.trim()).unwrap();
+                                info!("Received RFB version: {}", rfb_version.trim());
+                            },
+                            _ => {
+                                writeln!(log, "No RFB version received (connection may be filtered)").unwrap();
+                            }
+                        }
+                    },
+                    Ok(Err(e)) => {
+                        writeln!(log, "TCP connection failed: {e}").unwrap();
+                        warn!("VNC connection failed: {e}");
+                    },
+                    Err(_) => {
+                        writeln!(log, "TCP connection timeout").unwrap();
+                        warn!("VNC connection timeout");
+                    }
+                }
+                
+                writeln!(log, "\n=== Attacker Summary ===").unwrap();
+                writeln!(log, "VNC connection attempt completed").unwrap();
+                writeln!(log, "Target: {target_ip}:{target_port}").unwrap();
+                
+                Ok(SimulationResult {
+                    technique_id: technique_info.id,
+                    success: true,
+                    message: format!("VNC lateral movement attempt: targeted {target_ip}:{target_port}"),
+                    artifacts: vec![log_file],
+                    cleanup_required: true,
+                })
+                
+            } else {
+                // Victim: prepare to receive VNC connection
+                writeln!(log, "=== Victim: VNC Server Preparation ===").unwrap();
+                info!("Victim role: monitoring for VNC connection");
+                
+                writeln!(log, "Note: Victim would normally start VNC server on port {target_port}").unwrap();
+                writeln!(log, "In this simulation, we log the expected configuration").unwrap();
+                
+                // Check if VNC server is already running
+                let check_vnc = Command::new("bash")
+                    .args(["-c", "ps aux | grep -E 'vnc|x11vnc|tightvnc' | grep -v grep || echo 'No VNC server running'"])
+                    .output()
+                    .await
+                    .map_err(|e| format!("Failed to check VNC processes: {e}"))?;
+                
+                writeln!(log, "VNC process check:").unwrap();
+                writeln!(log, "{}", String::from_utf8_lossy(&check_vnc.stdout)).unwrap();
+                
+                // Check listening ports
+                let check_ports = Command::new("bash")
+                    .args(["-c", "ss -tlnp 2>/dev/null | grep -E ':590[0-9]' || echo 'No VNC ports listening'"])
+                    .output()
+                    .await
+                    .map_err(|e| format!("Failed to check ports: {e}"))?;
+                
+                writeln!(log, "\nVNC port check (5900-5909):").unwrap();
+                writeln!(log, "{}", String::from_utf8_lossy(&check_ports.stdout)).unwrap();
+                
+                writeln!(log, "\n=== Victim Summary ===").unwrap();
+                writeln!(log, "Victim configuration logged").unwrap();
+                writeln!(log, "Expected VNC port: {target_port}").unwrap();
+                
+                Ok(SimulationResult {
+                    technique_id: technique_info.id,
+                    success: true,
+                    message: format!("VNC victim role: configured for port {target_port}"),
+                    artifacts: vec![log_file],
+                    cleanup_required: true,
+                })
+            }
+        })
+    }
+
+    fn cleanup<'a>(&'a self, artifacts: &'a [String]) -> CleanupFuture<'a> {
+        Box::pin(async move {
+            for artifact in artifacts {
+                if Path::new(artifact).exists() {
+                    if let Err(e) = std::fs::remove_file(artifact) {
+                        warn!("Failed to remove artifact {artifact}: {e}");
+                    } else {
+                        info!("Removed artifact: {artifact}");
+                    }
+                }
+            }
             Ok(())
         })
     }

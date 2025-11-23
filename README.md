@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="assets/signalbench-logo-supersized.png" alt="SignalBench Logo" width="600"/>
+  <img src="assets/signalbench-logo-voltron.png" alt="SignalBench Logo" width="600"/>
 </div>
 
 # SignalBench
@@ -10,97 +10,145 @@ A Rust-based application for Linux that generates endpoint telemetry aligned wit
 
 ## Overview
 
-SignalBench allows security professionals to generate realistic endpoint telemetry patterns for analytics development, research, and training scenarios. It implements multiple techniques from the MITRE ATT&CK framework across different categories such as persistence, privilege escalation, defence evasion, credential access, discovery, lateral movement, and execution.
+SignalBench enables security professionals to generate realistic endpoint telemetry patterns for analytics development, research, and training scenarios. It implements multiple techniques from the MITRE ATT&CK framework across categories including persistence, privilege escalation, defence evasion, credential access, discovery, lateral movement, collection, impact, command and control, and exfiltration.
 
 ### Important: Telemetry Generation Design
 
-SignalBench **executes actual OS commands** that emulate technique-aligned activity patterns whilst remaining safe and non-destructive. This design choice ensures realistic telemetry generation for security analytics:
+SignalBench executes actual OS commands that emulate technique-aligned activity patterns whilst remaining safe and non-destructive. This design generates realistic telemetry for security analytics:
 
 - Activities perform real actions (network operations, file manipulation, process injection, etc.)
 - Each technique executes commands that generate observable endpoint signals
-- All activities are designed to be controlled and limited to avoid actual compromise
-- Proper cleanup procedures ensure no lasting system changes remain
+- Activities are designed to be controlled and limited to avoid actual compromise
+- Cleanup procedures ensure no lasting system changes remain
 
 ### Simulation-Aware Environment Notice
 
-Many modern security products are simulation-aware and may not generate alerts for research tools by design. This tool is intended for controlled lab environments, analytics development, and training scenarios - not as a comparative benchmark of security products.
+Many modern security products are simulation-aware and may not generate alerts for research tools by design. This tool is intended for controlled lab environments, analytics development, and training scenarios.
 
-### v1.5.22 The Ultimate Supersized Release
+## Voltron Mode - Multi-Host Attack Simulation
 
-SignalBench v1.5.22 represents the pinnacle of realistic telemetry generation with **42 total techniques** and **36 supersized (86% coverage)**. This release adds 9 powerful new techniques (4 upgrades + 5 brand new) including the COLLECTION and IMPACT categories, bringing comprehensive coverage across the MITRE ATT&CK framework whilst maintaining 100% safety and reversibility:
+NEW in v1.6.19: SignalBench introduces Voltron Mode, enabling distributed MITRE ATT&CK technique execution across multiple Linux endpoints through encrypted peer-to-peer coordination.
 
-**4 UPGRADED SUPERSIZED TECHNIQUES:**
-- **T1053.003 Cron Job**: Creates REAL system-wide and user cron jobs in /etc/cron.d/ and via crontab, executes benign commands, full backup/restore
-- **T1547.002 Startup Folder**: Actually modifies /etc/profile.d/, ~/.bashrc, ~/.bash_profile with persistence commands, comprehensive backup/restoration
-- **T1036.003 Masquerading**: Compiles REAL C binaries with misleading names ([kworker/0:0], systemd-journald, crond), uses prctl() for process name spoofing
-- **T1505.003 Web Shell**: Deploys REAL malicious PHP and Python web shells with eval(), system(), exec() backdoor patterns, multiple variants
+### What is Voltron Mode?
 
-**5 BRAND NEW SUPERSIZED TECHNIQUES:**
-- **T1119 Automated Collection**: Recursively collects sensitive files from /home/, /var/, /opt/, creates tar archives, generates comprehensive JSON reports
-- **T1070.004 File Deletion**: Anti-forensics with shred -uvz, secure file wiping, log tampering simulation, all with backup/restore
-- **T1003.008 /etc/passwd and /etc/shadow**: Comprehensive user enumeration, shadow file parsing (if root), password hash extraction
-- **T1098 Account Manipulation**: Modifies user accounts, injects SSH keys into authorized_keys, changes shells, group manipulation (requires root)
-- **T1496 Resource Hijacking**: Controlled CPU stress (crypto-mining simulation), memory allocation, disk I/O stress with safety limits
+Voltron Mode transforms SignalBench from a single-host telemetry generator into a multi-host attack simulation platform. Techniques requiring lateral movement, network-based command and control, or distributed operations can now execute across actual networked systems, generating authentic cross-host telemetry.
 
-All 36 supersized techniques generate high-volume, realistic telemetry designed for detection by security products whilst remaining 100% safe and reversible through comprehensive artifact tracking and cleanup verification.
+### Architecture
 
-### v1.5.13 The Supersized Menu
+- Server: Coordinator running on TCP 0.0.0.0:16969 with encrypted JSON-RPC 2.0 protocol
+- Clients: Endpoint nodes executing techniques on command
+- Encryption: Pre-shared key (PSK) authentication with ChaCha20-Poly1305 for all communication
+- Journal: SQLite database tracking execution state for crash recovery
+- Dual-Plane: Control channel (TCP 16969) plus native protocol ports (SSH 2222, VNC 5900, etc.)
 
-SignalBench v1.5.13 dramatically expands realistic telemetry coverage to **27 of 37 techniques (73%)** with 13 new or enhanced implementations driven by real-world security product testing that showed 50% detection on v1.5.0. This release maximises detection whilst maintaining 100% safety and reversibility:
+### Current Capabilities
 
-**6 NEW SUPERSIZED TECHNIQUES:**
-- **T1110.002 SSH Brute Force**: Creates temporary test user, performs REAL failed SSH authentication attempts against localhost:22, generates auth.log entries, measures timing patterns
-- **T1021.004 SSH Lateral Movement**: Generates SSH keys, modifies authorized_keys, executes REAL SSH connections with port forwarding attempts
-- **T1049 Network Connections**: Comprehensive enumeration via netstat/ss/lsof, parses active connections, listening ports, process-to-socket mappings
-- **T1070.003 Clear Command History**: Actually backs up and modifies shell history files (.bash_history, .zsh_history, etc.), removes suspicious patterns, full restoration
-- **T1548.003 Sudoers Modification**: Creates REAL sudoers files with NOPASSWD rules, validates with visudo, comprehensive backup/restore
-- **T1548.001 SUID Binary**: Compiles C wrapper, sets SUID bit, attempts privileged operations, complete cleanup
+T1021.004-PROTO - SSH Lateral Movement
+- Real SSH connections between endpoints on port 2222 (avoiding system SSH)
+- Actual authentication, key exchange, tunnel establishment
+- Generates authentic SSH protocol telemetry
 
-**7 ENHANCED v1.5.0 TECHNIQUES FOR IMPROVED DETECTION:**
-- **T1056.001 Keylogging**: Expanded to enumerate ALL /dev/input/event0-15 (16 devices), added 5 new history files (.sqlite_history, .redis_history, .node_repl_history), enhanced auth.log parsing
-- **T1552.001 Credentials in Files**: Added 8 new search directories (/var/www, /opt, /srv, /var/lib, /root/.ssh, /usr/local/etc), database dump file analysis, expanded credential patterns
-- **T1046 Port Scanning**: Increased from 10 ports to 1,032 TCP ports (1-1024 + backdoor ports), added UDP scanning (DNS, NTP, SNMP), scans both IPv4/IPv6 localhost
-- **T1059.006 Python Script**: Added persistent socket listener (20s accept loop), /proc/*/fd enumeration, reads environment variables from all processes, comprehensive recon reporting
-- **T1574.007 PATH Interception**: Expanded from 3 to 7 trojan binaries (added sudo, ssh, curl, wget), enhanced logging with PID/timestamp/arguments
-- **T1562.002 Disable Audit**: Added systemctl service manipulation, /etc/audit/audit.rules modification option, multi-method approach
-- **T1068 Privilege Escalation**: Attempts actual exploitation - creates systemd test services, tests Docker operations, executes sudo -l vulnerabilities
+T1021.005-PROTO - VNC Remote Desktop
+- Full RFB (Remote Framebuffer) protocol implementation
+- TightVNC file transfer extension (messages 132-133)
+- Simulates data exfiltration: uploads gocortex.sh (8KB) and ssigre-malware.bin (24KB)
+- Generates authentic VNC protocol and file transfer telemetry
 
-All 27 supersized techniques generate high-volume, realistic telemetry designed for maximum detection by security products whilst remaining 100% safe and reversible through comprehensive artifact tracking and cleanup verification.
+### Getting Started with Voltron Mode
 
-### v1.5.0 Realistic Telemetry Upgrade
+1. Generate Pre-Shared Key
+```bash
+# On server host
+signalbench voltron keygen --output voltron.key
 
-SignalBench v1.5.0 introduces a major upgrade from simulations to REAL attack behaviours across 14 core techniques:
+# Copy voltron.key to all client hosts
+scp voltron.key user@client1:/path/to/voltron.key
+scp voltron.key user@client2:/path/to/voltron.key
+```
 
-**CREDENTIAL ACCESS**: Real memory dumping (gcore, /proc/mem), actual keystroke capture from /dev/input devices, genuine filesystem credential harvesting, live process memory parsing
+2. Start Server
+```bash
+# On server host
+signalbench voltron server
 
-**DISCOVERY**: Comprehensive system enumeration with security tool detection, comprehensive network reconnaissance including ARP/VPN/VLAN discovery, real TCP port scanning with banner grabbing
+# Server listens on 0.0.0.0:16969
+# Displays fingerprint for verification
+# Monitors client connections and technique execution
+```
 
-**EXECUTION**: Actual reverse shell execution to localhost, real Python-based reconnaissance with socket listeners, genuine command injection patterns
+3. Connect Clients
+```bash
+# On each client host
+signalbench voltron client --server 192.168.1.10:16969
 
-**DEFENSE EVASION**: Real PATH hijacking with trojan binaries, actual audit log manipulation requiring root privileges
+# Clients register with server
+# Send heartbeat every 30 seconds
+# Execute techniques on demand
+```
 
-**PRIVILEGE ESCALATION**: Comprehensive local account creation with sudo access, real SUID binary enumeration, genuine privilege escalation vector identification
+4. Check Formation Status
+```bash
+# From any host with network access to server
+signalbench voltron formed --server 192.168.1.10:16969
 
-**COMMAND & CONTROL**: Actual iptables rule installation for port knocking, real network traffic signalling
+# Displays connected clients, versions, status, last seen times
+```
 
-All techniques remain 100% safe and reversible with comprehensive cleanup, but now generate authentic telemetry that security products will actually detect. Many techniques require elevated privileges for full functionality.
+5. Execute Distributed Techniques
+```bash
+# SSH lateral movement (attacker -> victim)
+signalbench voltron run --server 192.168.1.10 --technique T1021.004-PROTO --attacker client1 --victim client2
+
+# VNC remote desktop with file transfer
+signalbench voltron run --server 192.168.1.10 --technique T1021.005-PROTO --attacker client1 --victim client2
+```
+
+6. List Voltron-Compatible Techniques
+```bash
+# Show all techniques including Voltron-specific implementations
+signalbench voltron list
+```
+
+### Security Considerations
+
+- Controlled Environments Only: Voltron Mode is designed for isolated lab environments
+- Pre-Shared Keys: All communication requires PSK authentication
+- Encryption: ChaCha20-Poly1305 AEAD encryption for all peer communication
+- No Internet: Techniques communicate only between registered peers
+- Reversibility: All distributed techniques maintain 100% cleanup capability
 
 ## Features
 
+### Telemetry Coverage
+
+42 Total Techniques with 40 Supersized Implementations (95% coverage) across:
+
+- Discovery: System/network reconnaissance, security tool detection, user/group enumeration
+- Credential Access: Memory dumping, keylogging, credential file harvesting, password hash extraction
+- Privilege Escalation: SUID binaries, sudo manipulation, local account creation
+- Defence Evasion: PATH hijacking, audit log manipulation, command history clearing, process masquerading, web shells
+- Execution: Reverse shells, Python reconnaissance, command injection, script execution
+- Command and Control: Port knocking, DNS tunnelling, ICMP beaconing, tool transfer
+- Exfiltration: Network protocols, DNS tunnelling, ICMP data transfer
+- Lateral Movement: SSH connections, protocol-based movement (Voltron Mode)
+- Persistence: Cron jobs, startup scripts, systemd services, SSH keys
+- Collection: Automated file collection, recursive directory enumeration
+- Impact: Resource hijacking, file deletion, anti-forensics
+
+### Capabilities
+
 - Command-line interface for Linux environments
-- Generate endpoint telemetry based on MITRE ATT&CK techniques
-- Support for common technique categories including Discovery, Credential Access, Defence Evasion, Execution, Command and Control, and Exfiltration
 - Multi-category execution support for running multiple technique categories simultaneously
-- Universal Linux compatibility with static musl builds (works on any distribution)
-- GLIBC compatibility validation for distribution-specific builds
-- Configurable activity parameters via JSON configuration files
-- Safe execution environment to prevent accidental harm
-- Logging of all telemetry generation activities
-- Dry-run mode to preview actions without executing them
-- Automatic cleanup functionality to remove all artifacts after execution
-- Optional --no-cleanup flag to preserve artifacts for debugging and analysis
+- Universal Linux compatibility with static musl builds
+- Configurable activity parameters via JSON configuration
+- Safe execution environment with controlled parameters
+- Comprehensive logging of all activities
+- Dry-run mode to preview actions without executing
+- Automatic cleanup functionality to remove all artefacts
+- `--no-cleanup` flag to preserve artefacts for debugging and analysis
 - Support for selecting techniques by exact name when multiple techniques share the same MITRE ATT&CK ID
 - Comprehensive documentation of all implemented techniques
+- Voltron Mode for multi-host distributed attack simulation
 
 ## Installation
 
@@ -108,31 +156,23 @@ All techniques remain 100% safe and reversible with comprehensive cleanup, but n
 
 SignalBench provides pre-built binaries for maximum compatibility across Linux distributions.
 
-**For Universal Linux Compatibility (Recommended):**
+For Universal Linux Compatibility (Recommended):
 ```bash
 # Download static binary that works on any Linux distribution
-wget https://github.com/gocortex/signalbench/releases/download/v1.5.22/signalbench-1.5.22-linux-musl-x86_64
-chmod +x signalbench-1.5.22-linux-musl-x86_64
-sudo mv signalbench-1.5.22-linux-musl-x86_64 /usr/local/bin/signalbench
+wget https://github.com/gocortex/signalbench/releases/download/v1.6.19/signalbench-1.6.19-linux-musl-x86_64
+chmod +x signalbench-1.6.19-linux-musl-x86_64
+sudo mv signalbench-1.6.19-linux-musl-x86_64 /usr/local/bin/signalbench
 
 # For ARM64 systems (Apple Silicon, ARM servers)
-wget https://github.com/gocortex/signalbench/releases/download/v1.5.22/signalbench-1.5.22-linux-musl-aarch64
-chmod +x signalbench-1.5.22-linux-musl-aarch64
-sudo mv signalbench-1.5.22-linux-musl-aarch64 /usr/local/bin/signalbench
-```
-
-**For Specific Distributions:**
-```bash
-# Debian 12/Ubuntu 22.04+ systems (requires GLIBC 2.36+)
-wget https://github.com/gocortex/signalbench/releases/download/v1.5.22/signalbench-1.5.22-debian12-glibc2.36-x86_64
-chmod +x signalbench-1.5.22-debian12-glibc2.36-x86_64
-sudo mv signalbench-1.5.22-debian12-glibc2.36-x86_64 /usr/local/bin/signalbench
+wget https://github.com/gocortex/signalbench/releases/download/v1.6.19/signalbench-1.6.19-linux-musl-aarch64
+chmod +x signalbench-1.6.19-linux-musl-aarch64
+sudo mv signalbench-1.6.19-linux-musl-aarch64 /usr/local/bin/signalbench
 ```
 
 ### Option 2: Build from Source
 
-1. Ensure you have Rust and Cargo installed.
-2. Clone this repository.
+1. Ensure you have Rust and Cargo installed
+2. Clone this repository
 3. Build the application:
 
 ```bash
@@ -140,6 +180,8 @@ cargo build --release
 ```
 
 ## Usage
+
+### Single-Host Mode
 
 ```bash
 # List all available techniques
@@ -157,22 +199,38 @@ signalbench category <category1> <category2> <category3> [--dry-run] [--no-clean
 # Run with custom configuration
 signalbench run <technique_id_or_name> --config <config_file.json>
 
-# Generate telemetry for technique with duplicate MITRE ID using exact name
-signalbench run "Possible C2 via dnscat2" [--dry-run]
-
-# Preserve artifacts for debugging (skip cleanup)
+# Preserve artefacts for debugging (skip cleanup)
 signalbench run <technique_id_or_name> --no-cleanup
 ```
 
-For detailed information on available techniques and implementations, refer to the comprehensive [Technical Documentation](docs/TECHNIQUES.md).
+### Multi-Host Mode (Voltron)
 
-### Using Configuration Files
-
-You can customise technique parameters using a JSON configuration file. This allows for more complex scenarios and customisation of technique behaviour.
-
-Example:
 ```bash
-# Generate telemetry for a specific technique with custom parameters
+# Generate and distribute pre-shared key
+signalbench voltron keygen --output voltron.key
+
+# Start server
+signalbench voltron server [--debug]
+
+# Connect client
+signalbench voltron client --server <server_ip>:16969 [--debug]
+
+# Check formation status
+signalbench voltron formed --server <server_ip>:16969
+
+# List Voltron-compatible techniques
+signalbench voltron list
+
+# Execute distributed technique
+signalbench voltron run --server <server_ip> --technique <technique_id> --attacker <client1> [--victim <client2>]
+```
+
+### Configuration Files
+
+You can customise technique parameters using a JSON configuration file:
+
+```bash
+# Generate telemetry with custom parameters
 signalbench run T1003.001 --config docs/config-example.json
 
 # Generate telemetry for all techniques in a category with custom parameters
@@ -182,24 +240,24 @@ signalbench category credential_access --config docs/config-example.json
 signalbench category discovery execution credential_access --config docs/config-example.json
 ```
 
-A sample configuration file is provided at [docs/config-example.json](docs/config-example.json) that shows how to customise parameters for all techniques.
+A sample configuration file is provided at [docs/config-example.json](docs/config-example.json).
 
 ### Multi-Category Execution
 
-SignalBench supports running multiple technique categories simultaneously, which is particularly useful for comprehensive analytics scenarios and training exercises:
+SignalBench supports running multiple technique categories simultaneously for comprehensive analytics scenarios:
 
 ```bash
-# Generate telemetry for discovery and execution techniques together
+# Discovery and execution techniques together
 signalbench category discovery execution --dry-run
 
-# Generate telemetry for privilege escalation and credential access techniques
+# Privilege escalation and credential access techniques
 signalbench category privilege_escalation credential_access
 
-# Generate comprehensive telemetry across multiple categories
-signalbench category discovery execution credential_access command_and_control exfiltration --dry-run
+# Comprehensive telemetry across multiple categories
+signalbench category discovery execution credential_access command_and_control exfiltration
 ```
 
-This feature allows security teams to generate complex telemetry patterns that span multiple tactics in the MITRE ATT&CK framework, providing realistic data for analytics development and training scenarios.
+For detailed information on available techniques and implementations, refer to the comprehensive [Technical Documentation](docs/TECHNIQUES.md).
 
 ## Contact & Support
 

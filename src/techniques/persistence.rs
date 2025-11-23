@@ -32,6 +32,7 @@ impl AttackTechnique for StartupFolder {
             cleanup_support: true,
             platforms: vec!["Linux".to_string()],
             permissions: vec!["user".to_string()],
+            voltron_only: false,
         }
     }
 
@@ -165,7 +166,7 @@ impl AttackTechnique for StartupFolder {
             
             match test_result {
                 Ok(output) if output.status.success() => {
-                    info!("✓ Verified: .bashrc sources without errors");
+                    info!("[OK] Verified: .bashrc sources without errors");
                 }
                 Ok(output) => {
                     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -212,7 +213,7 @@ impl AttackTechnique for StartupFolder {
                     if Path::new(artifact).exists() && Path::new(&bashrc).exists() {
                         info!("Restoring ~/.bashrc from backup");
                         match fs::copy(artifact, &bashrc) {
-                            Ok(_) => info!("✓ Restored ~/.bashrc from backup"),
+                            Ok(_) => info!("[OK] Restored ~/.bashrc from backup"),
                             Err(e) => warn!("Failed to restore .bashrc: {e}"),
                         }
                         fs::remove_file(artifact).ok();
@@ -221,7 +222,7 @@ impl AttackTechnique for StartupFolder {
                     if Path::new(artifact).exists() && Path::new(&bash_profile).exists() {
                         info!("Restoring ~/.bash_profile from backup");
                         match fs::copy(artifact, &bash_profile) {
-                            Ok(_) => info!("✓ Restored ~/.bash_profile from backup"),
+                            Ok(_) => info!("[OK] Restored ~/.bash_profile from backup"),
                             Err(e) => warn!("Failed to restore .bash_profile: {e}"),
                         }
                         fs::remove_file(artifact).ok();
@@ -230,7 +231,7 @@ impl AttackTechnique for StartupFolder {
                     if Path::new(artifact).exists() {
                         info!("Restoring /etc/profile.d/99-signalbench.sh from backup");
                         match fs::copy(artifact, profile_d) {
-                            Ok(_) => info!("✓ Restored profile.d script from backup"),
+                            Ok(_) => info!("[OK] Restored profile.d script from backup"),
                             Err(e) => warn!("Failed to restore profile.d script: {e}"),
                         }
                         fs::remove_file(artifact).ok();
@@ -288,6 +289,7 @@ impl AttackTechnique for CronJob {
             cleanup_support: true,
             platforms: vec!["Linux".to_string()],
             permissions: vec!["user".to_string()],
+            voltron_only: false,
         }
     }
 
@@ -352,7 +354,7 @@ impl AttackTechnique for CronJob {
                 methods_used.push("system cron file".to_string());
                 
                 if Path::new(system_cron_file).exists() {
-                    info!("✓ Verified: {system_cron_file} created successfully");
+                    info!("[OK] Verified: {system_cron_file} created successfully");
                 }
             } else {
                 info!("Not root - skipping /etc/cron.d/ modification");
@@ -403,7 +405,7 @@ impl AttackTechnique for CronJob {
                 
             let verify_content = String::from_utf8_lossy(&verify_output.stdout);
             if verify_content.contains(&id) {
-                info!("✓ Verified: User crontab entry installed successfully");
+                info!("[OK] Verified: User crontab entry installed successfully");
             } else {
                 warn!("⚠ Warning: Could not verify crontab installation");
             }
@@ -437,7 +439,7 @@ impl AttackTechnique for CronJob {
                     if Path::new("/etc/cron.d/99-signalbench-test").exists() {
                         info!("Restoring system cron from backup: {artifact}");
                         match fs::copy(artifact, "/etc/cron.d/99-signalbench-test") {
-                            Ok(_) => info!("✓ Restored system cron from backup"),
+                            Ok(_) => info!("[OK] Restored system cron from backup"),
                             Err(e) => warn!("Failed to restore system cron: {e}"),
                         }
                     }
@@ -461,7 +463,7 @@ impl AttackTechnique for CronJob {
                                     
                                     if let Ok(status) = restore_status {
                                         if status.success() {
-                                            info!("✓ Restored user crontab from backup");
+                                            info!("[OK] Restored user crontab from backup");
                                         }
                                     }
                                 }
@@ -510,6 +512,7 @@ impl AttackTechnique for WebShellDeployment {
             cleanup_support: true,
             platforms: vec!["Linux".to_string()],
             permissions: vec!["user".to_string()],
+            voltron_only: false,
         }
     }
 
@@ -742,7 +745,7 @@ impl AttackTechnique for WebShellDeployment {
             artifacts.push(py_advanced.clone());
             shells_created.push("handler.py (advanced/base64/compile)");
 
-            info!("✓ Created {} REAL web shells with malicious patterns", shells_created.len());
+            info!("[OK] Created {} REAL web shells with malicious patterns", shells_created.len());
             for shell in &shells_created {
                 info!("  • {shell}");
             }
@@ -817,6 +820,7 @@ impl AttackTechnique for AccountManipulation {
             cleanup_support: true,
             platforms: vec!["Linux".to_string()],
             permissions: vec!["root".to_string()],
+            voltron_only: false,
         }
     }
 
@@ -1018,7 +1022,7 @@ impl AttackTechnique for AccountManipulation {
                 manipulation_data["ssh_key_file"] = serde_json::json!(auth_keys_file);
                 manipulation_data["ssh_key_backup"] = serde_json::json!(backup_file);
                 
-                info!("✓ Added SSH authorised key to {auth_keys_file}");
+                info!("[OK] Added SSH authorised key to {auth_keys_file}");
             }
             
             // Phase 3: Shell Modification
@@ -1048,7 +1052,7 @@ impl AttackTechnique for AccountManipulation {
                 
                 match chsh_output {
                     Ok(output) if output.status.success() => {
-                        info!("✓ Changed shell from {original_shell} to {new_shell}");
+                        info!("[OK] Changed shell from {original_shell} to {new_shell}");
                         manipulation_data["shell_modified"] = serde_json::json!(true);
                         manipulation_data["new_shell"] = serde_json::json!(new_shell);
                     }
@@ -1112,7 +1116,7 @@ impl AttackTechnique for AccountManipulation {
                     
                     match usermod_output {
                         Ok(output) if output.status.success() => {
-                            info!("✓ Added {test_username} to group: {group}");
+                            info!("[OK] Added {test_username} to group: {group}");
                             added_groups.push(group.to_string());
                         }
                         Ok(output) => {

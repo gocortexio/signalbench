@@ -37,6 +37,7 @@ impl AttackTechnique for SudoersModification {
             cleanup_support: true,
             platforms: vec!["Linux".to_string()],
             permissions: vec!["root".to_string()],
+            voltron_only: false,
         }
     }
 
@@ -108,7 +109,7 @@ impl AttackTechnique for SudoersModification {
             info!("Step 1: Creating backup directory: {backup_dir}");
             fs::create_dir_all(&backup_dir)
                 .map_err(|e| format!("Failed to create backup directory: {e}"))?;
-            info!("✓ Backup directory created");
+            info!("[OK] Backup directory created");
             
             // STEP 2: List and backup existing /etc/sudoers.d/ files
             info!("Step 2: Backing up existing /etc/sudoers.d/ files");
@@ -127,7 +128,7 @@ impl AttackTechnique for SudoersModification {
                                 match fs::copy(&source, &dest) {
                                     Ok(_) => {
                                         backup_count += 1;
-                                        info!("  ✓ Backed up: {}", file_name.to_string_lossy());
+                                        info!("  [OK] Backed up: {}", file_name.to_string_lossy());
                                     }
                                     Err(e) => {
                                         warn!("  ✗ Failed to backup {}: {}", file_name.to_string_lossy(), e);
@@ -140,9 +141,9 @@ impl AttackTechnique for SudoersModification {
             }
             
             if backup_count > 0 {
-                info!("✓ Backed up {backup_count} existing sudoers.d files to {backup_dir}");
+                info!("[OK] Backed up {backup_count} existing sudoers.d files to {backup_dir}");
             } else {
-                info!("✓ No existing sudoers.d files to backup");
+                info!("[OK] No existing sudoers.d files to backup");
             }
             
             // STEP 3: Create the sudoers file content
@@ -164,7 +165,7 @@ impl AttackTechnique for SudoersModification {
             file.write_all(sudoers_content.as_bytes())
                 .map_err(|e| format!("Failed to write to temporary file: {e}"))?;
             
-            info!("✓ Created temporary sudoers file for validation");
+            info!("[OK] Created temporary sudoers file for validation");
             
             // STEP 4: Validate syntax using visudo
             info!("Step 4: Validating sudoers syntax with visudo");
@@ -180,7 +181,7 @@ impl AttackTechnique for SudoersModification {
                 return Err(format!("Sudoers syntax validation failed: {error_output}"));
             }
             
-            info!("✓ Sudoers syntax validation passed");
+            info!("[OK] Sudoers syntax validation passed");
             
             // STEP 5: Move the validated file to /etc/sudoers.d/
             info!("Step 5: Installing sudoers file to {sudoers_file}");
@@ -195,7 +196,7 @@ impl AttackTechnique for SudoersModification {
                 return Err("Failed to install sudoers file to /etc/sudoers.d/".to_string());
             }
             
-            info!("✓ Sudoers file installed at {sudoers_file}");
+            info!("[OK] Sudoers file installed at {sudoers_file}");
             
             // STEP 6: Set correct permissions (440)
             info!("Step 6: Setting permissions to 440 (r--r-----)");
@@ -211,7 +212,7 @@ impl AttackTechnique for SudoersModification {
                 return Err("Failed to set correct permissions on sudoers file - file removed for safety".to_string());
             }
             
-            info!("✓ Permissions set to 440");
+            info!("[OK] Permissions set to 440");
             
             // STEP 7: Validate the installed file one more time
             info!("Step 7: Final validation of installed sudoers file");
@@ -229,7 +230,7 @@ impl AttackTechnique for SudoersModification {
                 return Err(format!("Final sudoers validation failed, file removed: {error_output}"));
             }
             
-            info!("✓ Final validation passed - sudoers file is active");
+            info!("[OK] Final validation passed - sudoers file is active");
             
             // STEP 8: Optional - Test sudo access
             let mut test_result = String::new();
@@ -243,8 +244,8 @@ impl AttackTechnique for SudoersModification {
                 match test_output {
                     Ok(output) if output.status.success() => {
                         let whoami = String::from_utf8_lossy(&output.stdout);
-                        info!("✓ Sudo test SUCCESSFUL - executed as: {}", whoami.trim());
-                        test_result = format!("\n  ✓ Sudo test: SUCCESSFUL (whoami: {})", whoami.trim());
+                        info!("[OK] Sudo test SUCCESSFUL - executed as: {}", whoami.trim());
+                        test_result = format!("\n  [OK] Sudo test: SUCCESSFUL (whoami: {})", whoami.trim());
                     }
                     Ok(output) => {
                         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -260,12 +261,12 @@ impl AttackTechnique for SudoersModification {
             
             let success_message = format!(
                 "Successfully performed REAL sudoers modification:\n  \
-                ✓ Backed up {backup_count} existing files to {backup_dir}\n  \
-                ✓ Created {sudoers_file}\n  \
-                ✓ Added NOPASSWD rule: {username} ALL=(ALL) NOPASSWD: ALL\n  \
-                ✓ Validated syntax with visudo\n  \
-                ✓ Set permissions: 440 (r--r-----)\n  \
-                ✓ File is now ACTIVE and will grant passwordless sudo to {username}{test_result}"
+                [OK] Backed up {backup_count} existing files to {backup_dir}\n  \
+                [OK] Created {sudoers_file}\n  \
+                [OK] Added NOPASSWD rule: {username} ALL=(ALL) NOPASSWD: ALL\n  \
+                [OK] Validated syntax with visudo\n  \
+                [OK] Set permissions: 440 (r--r-----)\n  \
+                [OK] File is now ACTIVE and will grant passwordless sudo to {username}{test_result}"
             );
             
             info!("{success_message}");
@@ -311,11 +312,11 @@ impl AttackTechnique for SudoersModification {
                 if Path::new(file).exists() {
                     match fs::remove_file(file) {
                         Ok(_) => {
-                            info!("✓ Removed sudoers file: {file}");
+                            info!("[OK] Removed sudoers file: {file}");
                             
                             // Verify removal
                             if !Path::new(file).exists() {
-                                info!("✓ Verified: {file} successfully deleted");
+                                info!("[OK] Verified: {file} successfully deleted");
                             } else {
                                 warn!("✗ Warning: {file} still exists after deletion attempt");
                             }
@@ -354,7 +355,7 @@ impl AttackTechnique for SudoersModification {
                                         match fs::copy(&source, &dest) {
                                             Ok(_) => {
                                                 restored_count += 1;
-                                                info!("  ✓ Restored: {}", file_name.to_string_lossy());
+                                                info!("  [OK] Restored: {}", file_name.to_string_lossy());
                                             }
                                             Err(e) => {
                                                 warn!("  ✗ Failed to restore {}: {}", file_name.to_string_lossy(), e);
@@ -367,9 +368,9 @@ impl AttackTechnique for SudoersModification {
                     }
                     
                     if restored_count > 0 {
-                        info!("✓ Restored {restored_count} files from backup");
+                        info!("[OK] Restored {restored_count} files from backup");
                     } else {
-                        info!("✓ No files needed restoration (system intact)");
+                        info!("[OK] No files needed restoration (system intact)");
                     }
                 } else {
                     info!("  Backup directory {backup_path} does not exist");
@@ -382,11 +383,11 @@ impl AttackTechnique for SudoersModification {
                 if Path::new(backup_path).exists() {
                     match fs::remove_dir_all(backup_path) {
                         Ok(_) => {
-                            info!("✓ Removed backup directory: {backup_path}");
+                            info!("[OK] Removed backup directory: {backup_path}");
                             
                             // Verify removal
                             if !Path::new(backup_path).exists() {
-                                info!("✓ Verified: backup directory successfully deleted");
+                                info!("[OK] Verified: backup directory successfully deleted");
                             } else {
                                 warn!("✗ Warning: backup directory still exists after deletion");
                             }
@@ -400,7 +401,7 @@ impl AttackTechnique for SudoersModification {
                 }
             }
             
-            info!("✓ Comprehensive sudoers modification cleanup completed");
+            info!("[OK] Comprehensive sudoers modification cleanup completed");
             Ok(())
         })
     }
@@ -428,6 +429,7 @@ impl AttackTechnique for SuidBinary {
             cleanup_support: true,
             platforms: vec!["Linux".to_string()],
             permissions: vec!["root".to_string()],
+            voltron_only: false,
         }
     }
 
@@ -530,7 +532,7 @@ int main() {
             file.write_all(c_source_code.as_bytes())
                 .map_err(|e| format!("Failed to write to source file: {e}"))?;
             
-            info!("✓ Created C source file: {source_file}");
+            info!("[OK] Created C source file: {source_file}");
             
             // STEP 2: Compile the C source code using gcc
             info!("Step 2: Compiling C source with gcc");
@@ -547,7 +549,7 @@ int main() {
                 return Err(format!("Compilation failed: {stderr}"));
             }
             
-            info!("✓ Binary compiled successfully: {binary_file}");
+            info!("[OK] Binary compiled successfully: {binary_file}");
             
             // Verify binary was created
             if !Path::new(&binary_file).exists() {
@@ -570,7 +572,7 @@ int main() {
                 return Err("Failed to change ownership to root:root".to_string());
             }
             
-            info!("✓ Ownership changed to root:root");
+            info!("[OK] Ownership changed to root:root");
             
             // STEP 4: Set SUID bit
             info!("Step 4: Setting SUID bit (chmod u+s)");
@@ -587,7 +589,7 @@ int main() {
                 return Err("Failed to set SUID bit".to_string());
             }
             
-            info!("✓ SUID bit set on binary");
+            info!("[OK] SUID bit set on binary");
             
             // STEP 5: Verify SUID bit is set
             info!("Step 5: Verifying SUID bit with ls -la");
@@ -603,7 +605,7 @@ int main() {
                 
                 // Check if 'rws' is present (SUID bit indicator)
                 if ls_result.contains("rws") {
-                    info!("✓ SUID bit verified (rws permissions visible)");
+                    info!("[OK] SUID bit verified (rws permissions visible)");
                 } else {
                     warn!("✗ Warning: SUID bit may not be set correctly - 'rws' not found in permissions");
                 }
@@ -640,10 +642,10 @@ int main() {
                         let stderr = String::from_utf8_lossy(&output.stderr);
                         
                         if output.status.success() {
-                            info!("✓ SUID binary executed successfully");
+                            info!("[OK] SUID binary executed successfully");
                             info!("Output:\n{stdout}");
-                            test_result = "\n  ✓ Test execution: SUCCESS - Privilege escalation demonstrated\n  \
-                                ✓ Binary successfully accessed /etc/shadow".to_string();
+                            test_result = "\n  [OK] Test execution: SUCCESS - Privilege escalation demonstrated\n  \
+                                [OK] Binary successfully accessed /etc/shadow".to_string();
                         } else {
                             warn!("✗ SUID binary execution failed");
                             if !stderr.is_empty() {
@@ -665,12 +667,12 @@ int main() {
             
             let success_message = format!(
                 "Successfully performed REAL SUID binary creation:\n  \
-                ✓ Created C source file: {source_file}\n  \
-                ✓ Compiled binary with gcc: {binary_file}\n  \
-                ✓ Changed ownership to root:root\n  \
-                ✓ Set SUID bit (chmod u+s)\n  \
-                ✓ Verified SUID bit set (rws permissions)\n  \
-                ✓ Binary is now ACTIVE and can escalate privileges{test_result}"
+                [OK] Created C source file: {source_file}\n  \
+                [OK] Compiled binary with gcc: {binary_file}\n  \
+                [OK] Changed ownership to root:root\n  \
+                [OK] Set SUID bit (chmod u+s)\n  \
+                [OK] Verified SUID bit set (rws permissions)\n  \
+                [OK] Binary is now ACTIVE and can escalate privileges{test_result}"
             );
             
             info!("{success_message}");
@@ -721,7 +723,7 @@ int main() {
                         
                     match status {
                         Ok(status) if status.success() => {
-                            info!("✓ Removed SUID bit from {binary}");
+                            info!("[OK] Removed SUID bit from {binary}");
                         }
                         Ok(_) => {
                             warn!("✗ Failed to remove SUID bit from {binary}");
@@ -741,7 +743,7 @@ int main() {
                         if output.status.success() {
                             let ls_result = String::from_utf8_lossy(&output.stdout);
                             if !ls_result.contains("rws") {
-                                info!("✓ Verified: SUID bit successfully removed (no 'rws' in permissions)");
+                                info!("[OK] Verified: SUID bit successfully removed (no 'rws' in permissions)");
                             } else {
                                 warn!("✗ Warning: SUID bit may still be set");
                             }
@@ -758,11 +760,11 @@ int main() {
                 if Path::new(binary).exists() {
                     match fs::remove_file(binary) {
                         Ok(_) => {
-                            info!("✓ Removed binary file: {binary}");
+                            info!("[OK] Removed binary file: {binary}");
                             
                             // Verify removal
                             if !Path::new(binary).exists() {
-                                info!("✓ Verified: binary file successfully deleted");
+                                info!("[OK] Verified: binary file successfully deleted");
                             } else {
                                 warn!("✗ Warning: binary file still exists after deletion");
                             }
@@ -782,11 +784,11 @@ int main() {
                 if Path::new(source).exists() {
                     match fs::remove_file(source) {
                         Ok(_) => {
-                            info!("✓ Removed source file: {source}");
+                            info!("[OK] Removed source file: {source}");
                             
                             // Verify removal
                             if !Path::new(source).exists() {
-                                info!("✓ Verified: source file successfully deleted");
+                                info!("[OK] Verified: source file successfully deleted");
                             } else {
                                 warn!("✗ Warning: source file still exists after deletion");
                             }
@@ -800,7 +802,7 @@ int main() {
                 }
             }
             
-            info!("✓ Comprehensive SUID binary cleanup completed");
+            info!("[OK] Comprehensive SUID binary cleanup completed");
             Ok(())
         })
     }
@@ -835,6 +837,7 @@ impl AttackTechnique for LocalAccountCreation {
             cleanup_support: true,
             platforms: vec!["Linux".to_string()],
             permissions: vec!["root".to_string()],
+            voltron_only: false,
         }
     }
 
@@ -887,7 +890,7 @@ impl AttackTechnique for LocalAccountCreation {
             if !status.success() {
                 return Err(format!("Failed to create user account {username}"));
             }
-            info!("✓ User account {username} created successfully");
+            info!("[OK] User account {username} created successfully");
             
             // Step 3: Set password for the account
             info!("Step 2: Setting password for {username}");
@@ -910,7 +913,7 @@ impl AttackTechnique for LocalAccountCreation {
                 let _ = Command::new("userdel").args(["-r", &username]).status().await;
                 return Err(format!("Failed to set password for {username}"));
             }
-            info!("✓ Password set for {username}");
+            info!("[OK] Password set for {username}");
             
             // Step 4: Add user to sudo/wheel group
             info!("Step 3: Adding {username} to sudo group");
@@ -925,7 +928,7 @@ impl AttackTechnique for LocalAccountCreation {
                     
                 if let Ok(status) = status {
                     if status.success() {
-                        info!("✓ Added {username} to {group} group for sudo access");
+                        info!("[OK] Added {username} to {group} group for sudo access");
                         sudo_added = true;
                         break;
                     }
@@ -966,7 +969,7 @@ impl AttackTechnique for LocalAccountCreation {
                     .map_err(|e| format!("Failed to generate SSH keys: {e}"))?;
                     
                 if status.success() {
-                    info!("✓ SSH key pair generated at {ssh_key_path}");
+                    info!("[OK] SSH key pair generated at {ssh_key_path}");
                 } else {
                     warn!("Failed to generate SSH keys");
                 }
@@ -984,7 +987,7 @@ impl AttackTechnique for LocalAccountCreation {
                 .map_err(|e| format!("Failed to set ownership: {e}"))?;
                 
             if status.success() {
-                info!("✓ Set ownership of {home_dir} to {username}");
+                info!("[OK] Set ownership of {home_dir} to {username}");
             }
             
             // Set permissions on .ssh directory
@@ -1009,7 +1012,7 @@ impl AttackTechnique for LocalAccountCreation {
                         .status()
                         .await;
                 }
-                info!("✓ Set proper permissions on .ssh directory and keys");
+                info!("[OK] Set proper permissions on .ssh directory and keys");
             }
             
             // Verify account creation
@@ -1028,11 +1031,11 @@ impl AttackTechnique for LocalAccountCreation {
             
             let success_message = format!(
                 "Successfully created REAL user account '{username}':\n  \
-                ✓ Account created with home directory: {home_dir}\n  \
-                ✓ Password set\n  \
-                ✓ Sudo access granted (added to sudo/wheel group)\n  \
-                ✓ SSH keys generated in {ssh_dir}/\n  \
-                ✓ Proper permissions set on home directory and .ssh folder"
+                [OK] Account created with home directory: {home_dir}\n  \
+                [OK] Password set\n  \
+                [OK] Sudo access granted (added to sudo/wheel group)\n  \
+                [OK] SSH keys generated in {ssh_dir}/\n  \
+                [OK] Proper permissions set on home directory and .ssh folder"
             );
             
             info!("{success_message}");
@@ -1071,7 +1074,7 @@ impl AttackTechnique for LocalAccountCreation {
                     match pkill_status {
                         Ok(status) => {
                             if status.success() {
-                                info!("✓ Terminated processes for user {username}");
+                                info!("[OK] Terminated processes for user {username}");
                             } else {
                                 info!("No processes found running as {username}");
                             }
@@ -1094,7 +1097,7 @@ impl AttackTechnique for LocalAccountCreation {
                     match status {
                         Ok(status) => {
                             if status.success() {
-                                info!("✓ Removed user account {username} and home directory");
+                                info!("[OK] Removed user account {username} and home directory");
                             } else {
                                 warn!("Failed to remove user account {username}");
                             }
@@ -1114,7 +1117,7 @@ impl AttackTechnique for LocalAccountCreation {
                     match verify {
                         Ok(output) => {
                             if !output.status.success() {
-                                info!("✓ Verified: User {username} no longer exists");
+                                info!("[OK] Verified: User {username} no longer exists");
                             } else {
                                 warn!("User {username} still exists after deletion attempt");
                             }
@@ -1127,7 +1130,7 @@ impl AttackTechnique for LocalAccountCreation {
                     // Verify home directory removed
                     let home_dir = format!("/home/{username}");
                     if !Path::new(&home_dir).exists() {
-                        info!("✓ Verified: Home directory {home_dir} removed");
+                        info!("[OK] Verified: Home directory {home_dir} removed");
                     } else {
                         warn!("Home directory {home_dir} still exists");
                         // Try to remove it manually
@@ -1198,6 +1201,7 @@ impl AttackTechnique for PrivilegeEscalationExploit {
             cleanup_support: true,
             platforms: vec!["Linux".to_string()],
             permissions: vec!["user".to_string()],
+            voltron_only: false,
         }
     }
 
@@ -1289,7 +1293,7 @@ impl AttackTechnique for PrivilegeEscalationExploit {
                 
                 if suid_count > 0 {
                     findings.push(format!("{suid_count} SUID binaries found"));
-                    info!("✓ Found {suid_count} SUID binaries");
+                    info!("[OK] Found {suid_count} SUID binaries");
                 } else {
                     writeln!(log, "  No SUID binaries found in common directories").unwrap();
                 }
@@ -1333,8 +1337,8 @@ impl AttackTechnique for PrivilegeEscalationExploit {
                     
                     match fs::write(service_file, &service_content) {
                         Ok(_) => {
-                            writeln!(log, "  ✓ SUCCESS: Created service file {service_file}").unwrap();
-                            info!("✓ Created systemd service file");
+                            writeln!(log, "  [OK] SUCCESS: Created service file {service_file}").unwrap();
+                            info!("[OK] Created systemd service file");
                             systemd_service_created = true;
                             artifacts.push(format!("systemd:{service_file}"));
                             findings.push("Systemd service created".to_string());
@@ -1348,8 +1352,8 @@ impl AttackTechnique for PrivilegeEscalationExploit {
                                 
                             match reload_result {
                                 Ok(output) if output.status.success() => {
-                                    writeln!(log, "  ✓ SUCCESS: daemon-reload completed").unwrap();
-                                    info!("✓ systemctl daemon-reload successful");
+                                    writeln!(log, "  [OK] SUCCESS: daemon-reload completed").unwrap();
+                                    info!("[OK] systemctl daemon-reload successful");
                                     
                                     // ATTEMPT to start the service
                                     writeln!(log, "\n  ATTEMPTING: systemctl start signalbench-test").unwrap();
@@ -1360,8 +1364,8 @@ impl AttackTechnique for PrivilegeEscalationExploit {
                                         
                                     match start_result {
                                         Ok(output) if output.status.success() => {
-                                            writeln!(log, "  ✓ CRITICAL SUCCESS: Service started successfully!").unwrap();
-                                            info!("✓ CRITICAL: systemd service started - privilege escalation vector confirmed!");
+                                            writeln!(log, "  [OK] CRITICAL SUCCESS: Service started successfully!").unwrap();
+                                            info!("[OK] CRITICAL: systemd service started - privilege escalation vector confirmed!");
                                             artifacts.push("systemd:started:signalbench-test".to_string());
                                             findings.push("Systemd service STARTED (Critical!)".to_string());
                                         }
@@ -1414,7 +1418,7 @@ impl AttackTechnique for PrivilegeEscalationExploit {
                 }
                 
                 if writable_systemd_count > 0 || systemd_service_created {
-                    info!("✓ Systemd exploitation attempt completed");
+                    info!("[OK] Systemd exploitation attempt completed");
                 }
             }
             
@@ -1461,7 +1465,7 @@ impl AttackTechnique for PrivilegeEscalationExploit {
                 
                 if writable_cron_count > 0 {
                     findings.push(format!("{writable_cron_count} writable cron files"));
-                    info!("✓ Found {writable_cron_count} writable cron files");
+                    info!("[OK] Found {writable_cron_count} writable cron files");
                 } else {
                     writeln!(log, "  No writable cron files found").unwrap();
                 }
@@ -1487,7 +1491,7 @@ impl AttackTechnique for PrivilegeEscalationExploit {
                         if output.status.success() && !sudo_output.is_empty() {
                             sudo_privs_found = true;
                             writeln!(log, "{sudo_output}").unwrap();
-                            info!("✓ Sudo privileges detected");
+                            info!("[OK] Sudo privileges detected");
                             
                             // Parse for NOPASSWD entries
                             writeln!(log, "\n  Parsing for NOPASSWD entries...").unwrap();
@@ -1529,9 +1533,9 @@ impl AttackTechnique for PrivilegeEscalationExploit {
                                         match test_result {
                                             Ok(test_output) if test_output.status.success() => {
                                                 let stdout = String::from_utf8_lossy(&test_output.stdout);
-                                                writeln!(log, "  ✓ SUCCESS: Command executed without password!").unwrap();
+                                                writeln!(log, "  [OK] SUCCESS: Command executed without password!").unwrap();
                                                 writeln!(log, "  Output: {stdout}").unwrap();
-                                                info!("✓ CRITICAL: sudo command executed without password!");
+                                                info!("[OK] CRITICAL: sudo command executed without password!");
                                                 sudo_commands_tested.push(cmd.clone());
                                                 findings.push(format!("Executed sudo command: {cmd}"));
                                             }
@@ -1569,7 +1573,7 @@ impl AttackTechnique for PrivilegeEscalationExploit {
                 }
                 
                 if !sudo_commands_tested.is_empty() {
-                    info!("✓ Tested {} sudo NOPASSWD commands", sudo_commands_tested.len());
+                    info!("[OK] Tested {} sudo NOPASSWD commands", sudo_commands_tested.len());
                 }
             }
             
@@ -1601,10 +1605,10 @@ impl AttackTechnique for PrivilegeEscalationExploit {
                                 Ok(output) if output.status.success() => {
                                     docker_access = true;
                                     let stdout = String::from_utf8_lossy(&output.stdout);
-                                    writeln!(log, "  ✓ SUCCESS: Docker socket is ACCESSIBLE!").unwrap();
+                                    writeln!(log, "  [OK] SUCCESS: Docker socket is ACCESSIBLE!").unwrap();
                                     writeln!(log, "  Output:\n{stdout}").unwrap();
                                     findings.push("Docker socket accessible".to_string());
-                                    info!("✓ CRITICAL: Docker socket is accessible!");
+                                    info!("[OK] CRITICAL: Docker socket is accessible!");
                                     
                                     // ATTEMPT: docker run test container
                                     writeln!(log, "\n  ATTEMPTING: docker run --rm alpine echo 'SignalBench Docker Test'").unwrap();
@@ -1618,9 +1622,9 @@ impl AttackTechnique for PrivilegeEscalationExploit {
                                     match container_test {
                                         Ok(container_output) if container_output.status.success() => {
                                             let container_stdout = String::from_utf8_lossy(&container_output.stdout);
-                                            writeln!(log, "  ✓ CRITICAL SUCCESS: Docker container executed!").unwrap();
+                                            writeln!(log, "  [OK] CRITICAL SUCCESS: Docker container executed!").unwrap();
                                             writeln!(log, "  Container output: {container_stdout}").unwrap();
-                                            info!("✓ CRITICAL: Docker container executed - privilege escalation vector confirmed!");
+                                            info!("[OK] CRITICAL: Docker container executed - privilege escalation vector confirmed!");
                                             docker_container_ran = true;
                                             findings.push("Docker container EXECUTED (Critical!)".to_string());
                                         }
@@ -1682,7 +1686,7 @@ impl AttackTechnique for PrivilegeEscalationExploit {
                 }
                 
                 if docker_access {
-                    info!("✓ Docker socket exploitation attempt completed - socket is accessible!");
+                    info!("[OK] Docker socket exploitation attempt completed - socket is accessible!");
                 }
             }
             
@@ -1723,7 +1727,7 @@ impl AttackTechnique for PrivilegeEscalationExploit {
                         shadow_readable = true;
                         writeln!(log, "  [CRITICAL] /etc/shadow is READABLE - Major security issue!").unwrap();
                         findings.push("/etc/shadow is readable".to_string());
-                        info!("✓ /etc/shadow is readable (critical finding!)");
+                        info!("[OK] /etc/shadow is readable (critical finding!)");
                         
                         let metadata = fs::metadata("/etc/shadow");
                         if let Ok(meta) = metadata {
@@ -1797,7 +1801,7 @@ impl AttackTechnique for PrivilegeEscalationExploit {
                     }
                 }
                 
-                info!("✓ Kernel vulnerability enumeration completed");
+                info!("[OK] Kernel vulnerability enumeration completed");
             }
             
             // Summary
@@ -1861,7 +1865,7 @@ impl AttackTechnique for PrivilegeEscalationExploit {
             summary_parts.push(format!("Log: {log_file}"));
             
             let summary = format!(
-                "Privilege escalation exploitation attempt complete:\n  ✓ {}\n  ✓ {}\n  ✓ {}\n  ✓ {}",
+                "Privilege escalation exploitation attempt complete:\n  [OK] {}\n  [OK] {}\n  [OK] {}\n  [OK] {}",
                 summary_parts[0], summary_parts[1], summary_parts[2], summary_parts[3]
             );
             
@@ -1894,7 +1898,7 @@ impl AttackTechnique for PrivilegeEscalationExploit {
                         
                     match stop_result {
                         Ok(output) if output.status.success() => {
-                            info!("✓ Stopped systemd service: {service_name}");
+                            info!("[OK] Stopped systemd service: {service_name}");
                         }
                         Ok(_) => {
                             warn!("Failed to stop systemd service: {service_name} (may already be stopped)");
@@ -1911,7 +1915,7 @@ impl AttackTechnique for PrivilegeEscalationExploit {
                     if Path::new(service_file).exists() {
                         match fs::remove_file(service_file) {
                             Ok(_) => {
-                                info!("✓ Removed systemd service file: {service_file}");
+                                info!("[OK] Removed systemd service file: {service_file}");
                                 
                                 // Daemon-reload after removing service file
                                 let reload_result = Command::new("systemctl")
@@ -1921,7 +1925,7 @@ impl AttackTechnique for PrivilegeEscalationExploit {
                                     
                                 match reload_result {
                                     Ok(output) if output.status.success() => {
-                                        info!("✓ Executed systemctl daemon-reload after service removal");
+                                        info!("[OK] Executed systemctl daemon-reload after service removal");
                                     }
                                     Ok(_) => {
                                         warn!("daemon-reload failed after service removal");
@@ -1942,13 +1946,13 @@ impl AttackTechnique for PrivilegeEscalationExploit {
                 // Handle log file cleanup
                 else if Path::new(artifact).exists() && artifact.ends_with(".log") {
                     match fs::remove_file(artifact) {
-                        Ok(_) => info!("✓ Removed log file: {artifact}"),
+                        Ok(_) => info!("[OK] Removed log file: {artifact}"),
                         Err(e) => warn!("Failed to remove log file {artifact}: {e}"),
                     }
                 }
             }
             
-            info!("✓ Privilege escalation exploitation cleanup completed");
+            info!("[OK] Privilege escalation exploitation cleanup completed");
             info!("Note: Sudo command tests and Docker container runs are one-shot and don't require cleanup");
             Ok(())
         })
@@ -1989,6 +1993,7 @@ impl AttackTechnique for SudoUnsignedIntegerEscalation {
             cleanup_support: true,
             platforms: vec!["Linux".to_string()],
             permissions: vec!["user".to_string()],
+            voltron_only: false,
         }
     }
 

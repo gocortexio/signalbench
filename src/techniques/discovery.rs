@@ -36,6 +36,7 @@ impl AttackTechnique for NetworkDiscovery {
             cleanup_support: true,
             platforms: vec!["Linux".to_string()],
             permissions: vec!["user".to_string()],
+            voltron_only: false,
         }
     }
 
@@ -509,6 +510,7 @@ impl AttackTechnique for SystemInformationDiscovery {
             cleanup_support: true,
             platforms: vec!["Linux".to_string()],
             permissions: vec!["user".to_string()],
+            voltron_only: false,
         }
     }
 
@@ -860,6 +862,7 @@ impl AttackTechnique for NetworkConnectionsDiscovery {
             cleanup_support: false,
             platforms: vec!["Linux".to_string()],
             permissions: vec!["user".to_string()],
+            voltron_only: false,
         }
     }
 

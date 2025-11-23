@@ -42,6 +42,7 @@ impl AttackTechnique for DisableAuditLogs {
             cleanup_support: true,
             platforms: vec!["Linux".to_string()],
             permissions: vec!["root".to_string()],
+            voltron_only: false,
         }
     }
 
@@ -174,7 +175,7 @@ impl AttackTechnique for DisableAuditLogs {
                         Ok(output) => {
                             if output.status.success() {
                                 methods_used.push("auditctl_delete_rules".to_string());
-                                manipulation_log.push_str("✓ Successfully deleted all audit rules with auditctl -D\n");
+                                manipulation_log.push_str("[OK] Successfully deleted all audit rules with auditctl -D\n");
                                 
                                 // Add exclusion rules for directories and files
                                 manipulation_log.push_str("\nAdding exclusion rules...\n");
@@ -186,7 +187,7 @@ impl AttackTechnique for DisableAuditLogs {
                                     .await {
                                     Ok(cmd_output) => {
                                         if cmd_output.status.success() {
-                                            manipulation_log.push_str("  ✓ Added exclusion for /tmp directory\n");
+                                            manipulation_log.push_str("  [OK] Added exclusion for /tmp directory\n");
                                         } else {
                                             manipulation_log.push_str("  ✗ Failed to add /tmp exclusion\n");
                                         }
@@ -203,7 +204,7 @@ impl AttackTechnique for DisableAuditLogs {
                                     .await {
                                     Ok(cmd_output) => {
                                         if cmd_output.status.success() {
-                                            manipulation_log.push_str("  ✓ Added exclusion for /var directory\n");
+                                            manipulation_log.push_str("  [OK] Added exclusion for /var directory\n");
                                         } else {
                                             manipulation_log.push_str("  ✗ Failed to add /var exclusion\n");
                                         }
@@ -220,7 +221,7 @@ impl AttackTechnique for DisableAuditLogs {
                                     .await {
                                     Ok(cmd_output) => {
                                         if cmd_output.status.success() {
-                                            manipulation_log.push_str("  ✓ Added exclusion for /etc/passwd writes\n");
+                                            manipulation_log.push_str("  [OK] Added exclusion for /etc/passwd writes\n");
                                         } else {
                                             manipulation_log.push_str("  ✗ Failed to add /etc/passwd exclusion\n");
                                         }
@@ -237,7 +238,7 @@ impl AttackTechnique for DisableAuditLogs {
                                     .await {
                                     Ok(cmd_output) => {
                                         if cmd_output.status.success() {
-                                            manipulation_log.push_str("  ✓ Added exclusion for /etc/shadow writes\n");
+                                            manipulation_log.push_str("  [OK] Added exclusion for /etc/shadow writes\n");
                                         } else {
                                             manipulation_log.push_str("  ✗ Failed to add /etc/shadow exclusion\n");
                                         }
@@ -254,7 +255,7 @@ impl AttackTechnique for DisableAuditLogs {
                                     .await {
                                     Ok(cmd_output) => {
                                         if cmd_output.status.success() {
-                                            manipulation_log.push_str("  ✓ Added exclusion for execve syscalls\n");
+                                            manipulation_log.push_str("  [OK] Added exclusion for execve syscalls\n");
                                         } else {
                                             manipulation_log.push_str("  ✗ Failed to add execve exclusion\n");
                                         }
@@ -271,7 +272,7 @@ impl AttackTechnique for DisableAuditLogs {
                                     .await {
                                     Ok(cmd_output) => {
                                         if cmd_output.status.success() {
-                                            manipulation_log.push_str("  ✓ Added exclusion for execveat syscalls\n");
+                                            manipulation_log.push_str("  [OK] Added exclusion for execveat syscalls\n");
                                         } else {
                                             manipulation_log.push_str("  ✗ Failed to add execveat exclusion\n");
                                         }
@@ -301,7 +302,7 @@ impl AttackTechnique for DisableAuditLogs {
                             if output.status.success() {
                                 methods_used.push("service_stop".to_string());
                                 service_was_stopped = true;
-                                manipulation_log.push_str("✓ Successfully stopped auditd service\n");
+                                manipulation_log.push_str("[OK] Successfully stopped auditd service\n");
                                 manipulation_log.push_str("  WARNING: Service state change generates EDR telemetry!\n");
                             } else {
                                 let stderr = String::from_utf8_lossy(&output.stderr);
@@ -357,7 +358,7 @@ impl AttackTechnique for DisableAuditLogs {
                             match file.write_all(disable_rules.as_bytes()) {
                                 Ok(_) => {
                                     methods_used.push("file_modification".to_string());
-                                    manipulation_log.push_str(&format!("✓ Successfully modified {audit_conf_path}\n"));
+                                    manipulation_log.push_str(&format!("[OK] Successfully modified {audit_conf_path}\n"));
                                     manipulation_log.push_str("  WARNING: File modification generates strong EDR signals!\n");
                                 }
                                 Err(e) => {
@@ -490,7 +491,7 @@ impl AttackTechnique for DisableAuditLogs {
                                                 Ok(mut file) => {
                                                     match file.write_all(original_content.as_bytes()) {
                                                         Ok(_) => {
-                                                            info!("✓ Successfully restored audit.rules file");
+                                                            info!("[OK] Successfully restored audit.rules file");
                                                         }
                                                         Err(e) => warn!("✗ Failed to write restored rules: {e}"),
                                                     }
@@ -533,7 +534,7 @@ impl AttackTechnique for DisableAuditLogs {
                                                         .await {
                                                         Ok(output) => {
                                                             if output.status.success() {
-                                                                info!("✓ Successfully restored audit rules");
+                                                                info!("[OK] Successfully restored audit rules");
                                                             } else {
                                                                 warn!("✗ Failed to restore some audit rules");
                                                             }
@@ -560,7 +561,7 @@ impl AttackTechnique for DisableAuditLogs {
                                             .await {
                                             Ok(output) => {
                                                 if output.status.success() {
-                                                    info!("✓ Successfully restarted auditd service");
+                                                    info!("[OK] Successfully restarted auditd service");
                                                 } else {
                                                     let stderr = String::from_utf8_lossy(&output.stderr);
                                                     warn!("✗ Failed to restart auditd service: {stderr}");
@@ -583,7 +584,7 @@ impl AttackTechnique for DisableAuditLogs {
                                         .await {
                                         Ok(output) => {
                                             if output.status.success() {
-                                                info!("✓ Auditd service is active");
+                                                info!("[OK] Auditd service is active");
                                             } else {
                                                 warn!("✗ Auditd service is not active");
                                             }
@@ -648,6 +649,7 @@ impl AttackTechnique for ClearBashHistory {
             cleanup_support: true,
             platforms: vec!["Linux".to_string()],
             permissions: vec!["user".to_string()],
+            voltron_only: false,
         }
     }
 
@@ -765,7 +767,7 @@ impl AttackTechnique for ClearBashHistory {
                 fs::copy(history_path, &backup_path)
                     .map_err(|e| format!("Failed to backup {history_path}: {e}"))?;
                 
-                writeln!(log_file, "  ✓ Backed up to: {backup_path}")
+                writeln!(log_file, "  [OK] Backed up to: {backup_path}")
                     .map_err(|e| format!("Failed to write: {e}"))?;
                 writeln!(log_file, "  Original entries: {original_count}")
                     .map_err(|e| format!("Failed to write: {e}"))?;
@@ -812,7 +814,7 @@ impl AttackTechnique for ClearBashHistory {
                 fs::set_permissions(history_path, fs::Permissions::from_mode(original_perms))
                     .map_err(|e| format!("Failed to set permissions: {e}"))?;
 
-                writeln!(log_file, "  ✓ Modified history file")
+                writeln!(log_file, "  [OK] Modified history file")
                     .map_err(|e| format!("Failed to write: {e}"))?;
                 writeln!(log_file, "  Entries removed: {entries_removed}")
                     .map_err(|e| format!("Failed to write: {e}"))?;
@@ -924,7 +926,7 @@ impl AttackTechnique for ClearBashHistory {
                                         // Restore the file
                                         match fs::copy(backup_path, original_path) {
                                             Ok(_) => {
-                                                info!("  ✓ Restored: {original_path}");
+                                                info!("  [OK] Restored: {original_path}");
                                                 
                                                 // Restore original permissions
                                                 if let Ok(perms_mode) = u32::from_str_radix(perms_str, 8) {
@@ -1016,6 +1018,7 @@ impl AttackTechnique for ModifyEnvironmentVariable {
             cleanup_support: true,
             platforms: vec!["Linux".to_string()],
             permissions: vec!["user".to_string()],
+            voltron_only: false,
         }
     }
 
@@ -1265,6 +1268,7 @@ impl AttackTechnique for MasqueradingAsCrond {
             cleanup_support: true,
             platforms: vec!["Linux".to_string()],
             permissions: vec!["user".to_string()],
+            voltron_only: false,
         }
     }
 
@@ -1369,7 +1373,7 @@ impl AttackTechnique for MasqueradingAsCrond {
                 running_pids.push(pid);
                 artifacts.push(format!("pid_{pid}"));
                 
-                info!("✓ Binary running with PID {pid}, spoofing as {spoof_name}");
+                info!("[OK] Binary running with PID {pid}, spoofing as {spoof_name}");
                 
                 tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
             }
@@ -1386,7 +1390,7 @@ impl AttackTechnique for MasqueradingAsCrond {
             
             for (spoof_name, _) in &binaries {
                 if ps_text.contains(spoof_name) {
-                    info!("✓ Verified: '{spoof_name}' appears in ps output");
+                    info!("[OK] Verified: '{spoof_name}' appears in ps output");
                     verified_count += 1;
                 } else {
                     warn!("⚠ Warning: '{spoof_name}' not found in ps output");
@@ -1473,6 +1477,7 @@ impl AttackTechnique for FileDeletion {
             cleanup_support: true,
             platforms: vec!["Linux".to_string()],
             permissions: vec!["user".to_string()],
+            voltron_only: false,
         }
     }
 
@@ -1650,7 +1655,7 @@ impl AttackTechnique for FileDeletion {
                     match shred_output {
                         Ok(output) if output.status.success() => {
                             deletion_results.push((file_name.to_string(), "shred -n 3".to_string(), true));
-                            writeln!(log, "✓ Successfully shredded: {file_name}").unwrap();
+                            writeln!(log, "[OK] Successfully shredded: {file_name}").unwrap();
                         }
                         Ok(output) => {
                             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -1675,7 +1680,7 @@ impl AttackTechnique for FileDeletion {
                     match wipe_output {
                         Ok(output) if output.status.success() => {
                             deletion_results.push((file_name.to_string(), "wipe -f".to_string(), true));
-                            writeln!(log, "✓ Successfully wiped: {file_name}").unwrap();
+                            writeln!(log, "[OK] Successfully wiped: {file_name}").unwrap();
                         }
                         Ok(_) => {
                             deletion_results.push((file_name.to_string(), "wipe -f".to_string(), false));
@@ -1694,7 +1699,7 @@ impl AttackTechnique for FileDeletion {
                     match fs::remove_file(file_path) {
                         Ok(_) => {
                             deletion_results.push((file_name.to_string(), "rm -f".to_string(), true));
-                            writeln!(log, "✓ Successfully removed: {file_name}").unwrap();
+                            writeln!(log, "[OK] Successfully removed: {file_name}").unwrap();
                         }
                         Err(e) => {
                             writeln!(log, "✗ rm failed for {file_name}: {e}").unwrap();

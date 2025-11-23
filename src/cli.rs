@@ -61,6 +61,103 @@ pub enum Commands {
         #[arg(short, long)]
         config: Option<PathBuf>,
     },
+    
+    /// Voltron Mode - Multi-host MITRE ATT&CK simulation with peer-to-peer hive architecture
+    #[command(subcommand)]
+    Voltron(VoltronCommands),
+}
+
+#[derive(Subcommand)]
+pub enum VoltronCommands {
+    /// Generate pre-shared key for Voltron encryption
+    Keygen {
+        /// Output path for the key file (default: voltron.key)
+        #[arg(short, long, default_value = "voltron.key")]
+        output: PathBuf,
+        
+        /// Deprecated: hostname is no longer used with PSK model
+        #[arg(long, hide = true)]
+        hostname: Option<String>,
+    },
+    
+    /// Start Voltron server (coordinator node)
+    Server {
+        /// Path to pre-shared key file (from keygen)
+        #[arg(short, long, default_value = "voltron.key")]
+        psk: PathBuf,
+        
+        /// Path to SQLite journal database
+        #[arg(short, long, default_value = "voltron.db")]
+        journal: PathBuf,
+        
+        /// Enable debug logging (verbose output to stderr)
+        #[arg(short, long, default_value_t = false)]
+        debug: bool,
+    },
+    
+    /// Start Voltron client (endpoint node)
+    Client {
+        /// Server address (IP:PORT, default port: 16969)
+        #[arg(short, long)]
+        server: String,
+        
+        /// Path to pre-shared key file (shared with server)
+        #[arg(short, long, default_value = "voltron.key")]
+        psk: PathBuf,
+        
+        /// Client hostname (default: auto-detected)
+        #[arg(long)]
+        hostname: Option<String>,
+        
+        /// Enable debug logging (verbose output to stderr)
+        #[arg(short, long, default_value_t = false)]
+        debug: bool,
+    },
+    
+    /// Dispatch technique to connected clients (run from server console)
+    Run {
+        /// Server address for coordination (IP:PORT)
+        #[arg(short, long)]
+        server: String,
+        
+        /// Path to pre-shared key file
+        #[arg(short, long, default_value = "voltron.key")]
+        psk: PathBuf,
+        
+        /// MITRE ATT&CK technique ID (e.g., T1003.001)
+        #[arg(short, long)]
+        technique: String,
+        
+        /// Attacker hostname(s) - comma-separated for multiple
+        #[arg(short, long)]
+        attacker: String,
+        
+        /// Victim hostname (optional - defaults to same as attacker for single-host techniques, required for multi-host lateral movement)
+        #[arg(short, long)]
+        victim: Option<String>,
+        
+        /// Custom parameters as JSON (optional)
+        #[arg(long)]
+        params: Option<String>,
+        
+        /// Enable debug logging (verbose output to stderr)
+        #[arg(short, long, default_value_t = false)]
+        debug: bool,
+    },
+    
+    /// List Voltron-compatible techniques (multi-host/NETWORK category)
+    List,
+    
+    /// Show connected clients and formation status
+    Formed {
+        /// Server address (IP:PORT, default port: 16969)
+        #[arg(short, long)]
+        server: String,
+        
+        /// Path to pre-shared key file (shared with server)
+        #[arg(short, long, default_value = "voltron.key")]
+        psk: PathBuf,
+    },
 }
 
 // Helper function to get all available categories

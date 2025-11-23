@@ -58,6 +58,7 @@ impl AttackTechnique for IngressToolTransfer {
             cleanup_support: true,
             platforms: vec!["Linux".to_string()],
             permissions: vec!["user".to_string()],
+            voltron_only: false,
         }
     }
 
@@ -327,6 +328,7 @@ impl AttackTechnique for TrafficSignaling {
             cleanup_support: true,
             platforms: vec!["Linux".to_string()],
             permissions: vec!["root".to_string()],
+            voltron_only: false,
         }
     }
 
@@ -400,7 +402,7 @@ impl AttackTechnique for TrafficSignaling {
                         writeln!(log_file_handle, "Proceeding with any available interface\n").unwrap();
                     } else {
                         let output_str = String::from_utf8_lossy(&output.stdout);
-                        writeln!(log_file_handle, "✓ Interface {interface} is available").unwrap();
+                        writeln!(log_file_handle, "[OK] Interface {interface} is available").unwrap();
                         writeln!(log_file_handle, "Interface details:\n{}\n", output_str.lines().next().unwrap_or("")).unwrap();
                     }
                 },
@@ -459,7 +461,7 @@ impl AttackTechnique for TrafficSignaling {
                         let stdout = String::from_utf8_lossy(&output.stdout);
                         
                         if exit_code == 0 {
-                            writeln!(log_file_handle, "✓ Rule installed successfully").unwrap();
+                            writeln!(log_file_handle, "[OK] Rule installed successfully").unwrap();
                             installed_rules.push(format!("{port}|{rule_id}"));
                             
                             // Try to get the rule number
@@ -612,7 +614,7 @@ impl AttackTechnique for TrafficSignaling {
                                 let stderr = String::from_utf8_lossy(&output.stderr);
                                 
                                 if exit_code == 0 {
-                                    info!("✓ Successfully removed iptables rule for port {port}");
+                                    info!("[OK] Successfully removed iptables rule for port {port}");
                                     rules_removed += 1;
                                 } else {
                                     warn!("Failed to remove iptables rule for port {port} (exit code: {exit_code})");
@@ -661,7 +663,7 @@ impl AttackTechnique for TrafficSignaling {
                                             match num_result {
                                                 Ok(num_output) => {
                                                     if num_output.status.code().unwrap_or(-1) == 0 {
-                                                        info!("✓ Removed rule at line {line_num} for port {port}");
+                                                        info!("[OK] Removed rule at line {line_num} for port {port}");
                                                         rules_removed += 1;
                                                     } else {
                                                         warn!("Failed to remove rule at line {line_num}");
@@ -715,7 +717,7 @@ impl AttackTechnique for TrafficSignaling {
                     warn!("⚠ Warning: {remaining} PORT_KNOCK rules still present in iptables");
                     warn!("Manual cleanup may be required: iptables -L INPUT -n --line-numbers | grep PORT_KNOCK");
                 } else {
-                    info!("✓ Cleanup verified: No PORT_KNOCK rules remain");
+                    info!("[OK] Cleanup verified: No PORT_KNOCK rules remain");
                 }
             }
             
@@ -751,6 +753,7 @@ impl AttackTechnique for SuspiciousGitHubToolTransfer {
             cleanup_support: true,
             platforms: vec!["Linux".to_string()],
             permissions: vec!["user".to_string()],
+            voltron_only: false,
         }
     }
 
