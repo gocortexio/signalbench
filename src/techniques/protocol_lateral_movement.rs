@@ -764,7 +764,7 @@ impl AttackTechnique for VncProtoLateralMovement {
             id: "T1021.005-PROTO".to_string(),
             name: "VNC Protocol Lateral Movement".to_string(),
             description: "Implements the RFB (Remote Framebuffer) protocol per RFC 6143 plus TightVNC file transfer extension to generate authentic VNC lateral movement telemetry with data exfiltration. The victim runs an RFB server on port 5900, handling full protocol handshake including ProtocolVersion negotiation, VNC Authentication with DES-encrypted challenge/response, and ServerInit. The attacker connects as an RFB client, completes authentication, and simulates a 45-second active VNC session with FramebufferUpdateRequests, PointerEvents, and TightVNC file uploads (messages 132-133). Files uploaded: gocortex.sh (malicious bash script) and ssigre-malware.bin (ELF binary). All traffic is cleartext (no TLS) for maximum visibility to security products. Requires Voltron multi-host coordination.".to_string(),
-            category: "Lateral Movement".to_string(),
+            category: "lateral_movement".to_string(),
             parameters: vec![
                 TechniqueParameter {
                     name: "vnc_password".to_string(),
@@ -850,7 +850,7 @@ impl AttackTechnique for SshProtoLateralMovement {
             id: "T1021.004-PROTO".to_string(),
             name: "SSH Protocol Lateral Movement".to_string(),
             description: "Implements the SSH protocol per RFC 4253 to generate authentic SSH lateral movement telemetry. The victim runs an SSH server on port 2222 (avoiding conflict with system SSH on port 22), sending SSH-2.0 banner, handling version exchange, simulating key exchange (KEX) negotiation, and accepting authentication. The attacker connects as an SSH client, completes version exchange and KEX, authenticates, and simulates a 30-second active SSH session with channel requests and command execution. All traffic is cleartext SSH protocol (no encryption) for maximum visibility. Requires Voltron multi-host coordination.".to_string(),
-            category: "Lateral Movement".to_string(),
+            category: "lateral_movement".to_string(),
             parameters: vec![
                 TechniqueParameter {
                     name: "log_file".to_string(),

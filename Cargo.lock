@@ -1060,7 +1060,7 @@ dependencies = [
 
 [[package]]
 name = "signalbench"
-version = "1.6.19"
+version = "1.6.41"
 dependencies = [
  "async-trait",
  "base64",

@@ -9,6 +9,11 @@ pub struct TechniqueConfig {
     pub parameters: HashMap<String, String>,
     pub timeout_seconds: Option<u64>,
     pub cleanup_after: Option<bool>,
+    /// Force execution of all operations regardless of pre-check results.
+    /// When true, techniques attempt ALL operations even when guards indicate
+    /// they will fail. The attempt itself generates security product detections.
+    #[serde(default)]
+    pub force: bool,
 }
 
 impl Default for TechniqueConfig {
@@ -17,6 +22,7 @@ impl Default for TechniqueConfig {
             parameters: HashMap::new(),
             timeout_seconds: Some(30),
             cleanup_after: Some(true),
+            force: false,
         }
     }
 }
@@ -86,6 +92,7 @@ pub fn get_technique_config(
                 parameters: HashMap::new(),
                 timeout_seconds: config.global.default_timeout_seconds,
                 cleanup_after: config.global.default_cleanup_after,
+                force: false,
             };
             debug!("No configuration found for technique {technique_id}, using defaults");
             default_config

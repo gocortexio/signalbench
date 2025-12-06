@@ -87,15 +87,20 @@ impl AttackTechnique for AutomatedCollection {
             
             let search_dirs = vec![
                 format!("{}/", std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string())),
+                format!("{}/.ssh/", std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string())),
                 "/tmp/".to_string(),
                 "/var/log/".to_string(),
                 "/opt/".to_string(),
+                "/etc/".to_string(),
+                "/root/.ssh/".to_string(),
             ];
             
             let target_patterns = vec![
                 "*.key", "*.pem", "*.conf", "*.db", "*.sql", 
                 "*secret*", "*password*", "*.env", "*.cfg",
                 "*.config", "*.ini", "*.yaml", "*.yml", "*.json",
+                "*id_rsa*", "*id_ed25519*", "*authorized_keys*", "*known_hosts*",
+                "*shadow*", "*passwd*", "*sudoers*",
             ];
             
             if dry_run {

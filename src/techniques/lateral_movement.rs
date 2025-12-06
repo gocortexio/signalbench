@@ -420,7 +420,7 @@ impl AttackTechnique for VncLateralMovement {
             id: "T1021.005".to_string(),
             name: "VNC Lateral Movement".to_string(),
             description: "Simulates VNC-based lateral movement between attacker and victim hosts. The attacker attempts to establish a VNC connection to the victim's display server, generating network traffic and connection logs typical of VNC lateral movement. This is a Voltron-only technique requiring two coordinated hosts: one acting as attacker, one as victim. Generates telemetry for VNC connection attempts, port 5900+ traffic, and RFB protocol handshakes.".to_string(),
-            category: "Lateral Movement".to_string(),
+            category: "lateral_movement".to_string(),
             parameters: vec![
                 TechniqueParameter {
                     name: "vnc_port".to_string(),

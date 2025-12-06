@@ -37,8 +37,8 @@ async fn main() {
     // Parse command line arguments first to extract debug flag
     let cli = Cli::parse();
     
-    // Determine if debug mode is enabled from Voltron commands
-    let debug_enabled = match &cli.command {
+    // Determine if debug mode is enabled - check global flag first, then Voltron subcommands
+    let debug_enabled = cli.debug || match &cli.command {
         Commands::Voltron(VoltronCommands::Server { debug, .. }) => *debug,
         Commands::Voltron(VoltronCommands::Client { debug, .. }) => *debug,
         Commands::Voltron(VoltronCommands::Run { debug, .. }) => *debug,
@@ -47,6 +47,11 @@ async fn main() {
     
     // Initialize the logger with appropriate level
     logger::init_logger(debug_enabled);
+    
+    // Log force mode activation
+    if cli.force {
+        info!("[FORCE] Force mode enabled - bypassing pre-checks, maximum telemetry generation");
+    }
 
     info!("Starting SignalBench v{} - Endpoint Telemetry Generator by GoCortex.io", env!("CARGO_PKG_VERSION"));
     
@@ -64,6 +69,9 @@ async fn main() {
 }
 
 async fn run_command(cli: Cli) -> Result<(), String> {
+    let force = cli.force;
+    let delay_cleanup = cli.delay_cleanup;
+    
     match cli.command {
         Commands::List => {
             runner::list_techniques()
@@ -73,14 +81,14 @@ async fn run_command(cli: Cli) -> Result<(), String> {
             safety::check_environment()?;
             
             // Run the specified technique
-            runner::run_technique(&technique, dry_run, no_cleanup, config).await
+            runner::run_technique(&technique, dry_run, no_cleanup, config, force, delay_cleanup).await
         },
         Commands::Category { categories, dry_run, no_cleanup, config } => {
             // Check safety before execution
             safety::check_environment()?;
             
             // Run all techniques in the specified categories
-            runner::run_categories(&categories, dry_run, no_cleanup, config).await
+            runner::run_categories(&categories, dry_run, no_cleanup, config, force, delay_cleanup).await
         },
         Commands::Voltron(voltron_cmd) => {
             match voltron_cmd {

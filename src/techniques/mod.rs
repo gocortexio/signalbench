@@ -24,6 +24,8 @@ pub mod dns_recon;
 pub mod software;
 pub mod collection;
 pub mod impact;
+pub mod container_escape;
+pub mod gtfobins;
 
 use crate::config::TechniqueConfig;
 use async_trait::async_trait;
@@ -105,6 +107,20 @@ pub fn get_all_techniques() -> Vec<Box<dyn AttackTechnique>> {
         Box::new(privilege_escalation::LocalAccountCreation {}),
         Box::new(privilege_escalation::PrivilegeEscalationExploit {}),
         Box::new(privilege_escalation::SudoUnsignedIntegerEscalation {}),
+        Box::new(gtfobins::GtfobinsProbe {}),
+        
+        // Container escape techniques (T1611)
+        Box::new(container_escape::DockerSocketEscape {}),
+        Box::new(container_escape::PrivilegedContainerEscape {}),
+        Box::new(container_escape::SensitiveMountEscape {}),
+        Box::new(container_escape::CgroupReleaseAgentEscape {}),
+        Box::new(container_escape::KernelModuleEscape {}),
+        Box::new(container_escape::ContainerReconnaissance {}),
+        Box::new(container_escape::HostPidNamespaceEscape {}),
+        Box::new(container_escape::SuidPrivilegeEscape {}),
+        Box::new(container_escape::AdvancedContainerBreakout {}),
+        Box::new(container_escape::RuntimeCveCheck {}),
+        Box::new(container_escape::NamespaceEscapeDetection {}),
         
         // Defense evasion techniques
         Box::new(defense_evasion::DisableAuditLogs {}),
@@ -112,6 +128,8 @@ pub fn get_all_techniques() -> Vec<Box<dyn AttackTechnique>> {
         Box::new(defense_evasion::ModifyEnvironmentVariable {}),
         Box::new(defense_evasion::MasqueradingAsCrond {}),
         Box::new(defense_evasion::FileDeletion {}),
+        Box::new(defense_evasion::ProcessMasquerading {}),
+        Box::new(defense_evasion::SelfDeletingBinary {}),
         
         // Credential access techniques
         Box::new(credential_access::MemoryDumping {}),
@@ -146,6 +164,7 @@ pub fn get_all_techniques() -> Vec<Box<dyn AttackTechnique>> {
         Box::new(command_and_control::IngressToolTransfer {}),
         Box::new(command_and_control::TrafficSignaling {}),
         Box::new(command_and_control::SuspiciousGitHubToolTransfer {}),
+        Box::new(command_and_control::SuspiciousDomainConnections {}),
         
         // Advanced Command Interpreter
         Box::new(command_interpreter::AdvancedCommandExecution {}),

@@ -1,8 +1,8 @@
 <div align="center">
-  <img src="assets/signalbench-logo-voltron.png" alt="SignalBench Logo" width="600"/>
+  <img src="assets/signalbench-logo-baby.png" alt="SignalBench Logo" width="600"/>
 </div>
 
-# SignalBench
+# SignalBench v1.6.41: Nobody Puts ~~Baby~~ SignalBox In A ~~Corner~~ Container
 
 Endpoint Telemetry Generator from GoCortex.io
 
@@ -26,8 +26,6 @@ SignalBench executes actual OS commands that emulate technique-aligned activity 
 Many modern security products are simulation-aware and may not generate alerts for research tools by design. This tool is intended for controlled lab environments, analytics development, and training scenarios.
 
 ## Voltron Mode - Multi-Host Attack Simulation
-
-NEW in v1.6.19: SignalBench introduces Voltron Mode, enabling distributed MITRE ATT&CK technique execution across multiple Linux endpoints through encrypted peer-to-peer coordination.
 
 ### What is Voltron Mode?
 
@@ -121,11 +119,11 @@ signalbench voltron list
 
 ### Telemetry Coverage
 
-42 Total Techniques with 40 Supersized Implementations (95% coverage) across:
+58 techniques across:
 
 - Discovery: System/network reconnaissance, security tool detection, user/group enumeration
 - Credential Access: Memory dumping, keylogging, credential file harvesting, password hash extraction
-- Privilege Escalation: SUID binaries, sudo manipulation, local account creation
+- Privilege Escalation: SUID binaries, sudo manipulation, local account creation, container escape (T1611)
 - Defence Evasion: PATH hijacking, audit log manipulation, command history clearing, process masquerading, web shells
 - Execution: Reverse shells, Python reconnaissance, command injection, script execution
 - Command and Control: Port knocking, DNS tunnelling, ICMP beaconing, tool transfer
@@ -134,6 +132,9 @@ signalbench voltron list
 - Persistence: Cron jobs, startup scripts, systemd services, SSH keys
 - Collection: Automated file collection, recursive directory enumeration
 - Impact: Resource hijacking, file deletion, anti-forensics
+- Container Escape: Docker socket abuse (T1611-SOCK), privileged container breakout (T1611-PRIV), sensitive mount exploitation (T1611-MOUNT), cgroup escape (T1611-CGROUP), kernel module loading (T1611-MODULE), container reconnaissance (T1611-RECON), PID namespace escape (T1611-PIDNS), SUID binary exploitation (T1611-SUID), chroot breakout (T1611-BREAKOUT), kernel CVE checks (T1611-CVE), namespace escape (T1611-NS)
+
+Network techniques (T1046, T1095, T1048) target the Palo Alto sinkhole address (198.135.184.22) by default for realistic external network telemetry. Lateral movement techniques (T1021.004, T1021.005) use localhost for service-dependent testing.
 
 ### Capabilities
 
@@ -159,14 +160,14 @@ SignalBench provides pre-built binaries for maximum compatibility across Linux d
 For Universal Linux Compatibility (Recommended):
 ```bash
 # Download static binary that works on any Linux distribution
-wget https://github.com/gocortex/signalbench/releases/download/v1.6.19/signalbench-1.6.19-linux-musl-x86_64
-chmod +x signalbench-1.6.19-linux-musl-x86_64
-sudo mv signalbench-1.6.19-linux-musl-x86_64 /usr/local/bin/signalbench
+wget https://github.com/gocortex/signalbench/releases/download/v1.6.41/signalbench-1.6.41-linux-musl-x86_64
+chmod +x signalbench-1.6.41-linux-musl-x86_64
+sudo mv signalbench-1.6.41-linux-musl-x86_64 /usr/local/bin/signalbench
 
 # For ARM64 systems (Apple Silicon, ARM servers)
-wget https://github.com/gocortex/signalbench/releases/download/v1.6.19/signalbench-1.6.19-linux-musl-aarch64
-chmod +x signalbench-1.6.19-linux-musl-aarch64
-sudo mv signalbench-1.6.19-linux-musl-aarch64 /usr/local/bin/signalbench
+wget https://github.com/gocortex/signalbench/releases/download/v1.6.41/signalbench-1.6.41-linux-musl-aarch64
+chmod +x signalbench-1.6.41-linux-musl-aarch64
+sudo mv signalbench-1.6.41-linux-musl-aarch64 /usr/local/bin/signalbench
 ```
 
 ### Option 2: Build from Source
@@ -188,19 +189,64 @@ cargo build --release
 signalbench list
 
 # Generate telemetry for a specific technique
-signalbench run <technique_id_or_name> [--dry-run] [--no-cleanup]
+signalbench run <technique_id_or_name> [--dry-run] [--no-cleanup] [--force] [--debug]
 
 # Generate telemetry for all techniques in a category
-signalbench category <category> [--dry-run] [--no-cleanup]
+signalbench category <category> [--dry-run] [--no-cleanup] [--force] [--debug]
 
 # Generate telemetry for multiple categories simultaneously
-signalbench category <category1> <category2> <category3> [--dry-run] [--no-cleanup]
+signalbench category <category1> <category2> <category3> [--dry-run] [--no-cleanup] [--force]
 
 # Run with custom configuration
 signalbench run <technique_id_or_name> --config <config_file.json>
 
 # Preserve artefacts for debugging (skip cleanup)
 signalbench run <technique_id_or_name> --no-cleanup
+
+# Force mode - bypass pre-checks, run ALL fallback methods for maximum telemetry
+signalbench run <technique_id_or_name> --force
+
+# Debug mode - verbose logging (replaces RUST_LOG=debug environment variable)
+signalbench run <technique_id_or_name> --debug
+
+# ALL_CAPS meta-category - run ALL techniques across ALL categories
+# Automatically enables force mode for maximum telemetry generation
+# (MF DOOM tribute - 1971-2020 - "JUST REMEMBER ALL CAPS WHEN YOU SPELL THE MAN NAME")
+signalbench category ALL_CAPS [--dry-run]
+```
+
+### Force Mode
+
+The `--force` flag enables maximum telemetry generation by:
+- Bypassing all environment pre-checks (capability detection, tool availability)
+- Attempting operations that would normally be skipped
+- Running BOTH primary AND fallback methods (e.g., gcore AND /proc/mem for memory dumps)
+- Executing commands even when tools are not found on PATH
+
+This is particularly useful when:
+- Security products detect the attempt itself (failed operations still generate telemetry)
+- Testing detection coverage regardless of environment conditions
+- Generating maximum signal for security product evaluation
+
+### Debug Mode
+
+The `--debug` flag enables verbose logging without requiring environment variables:
+- Replaces `RUST_LOG=debug` environment variable
+- Shows detailed execution flow and command outputs
+- Useful for troubleshooting and understanding technique behaviour
+
+### Delay Cleanup Mode
+
+The `--delay-cleanup <seconds>` flag pauses before removing artefacts after technique execution:
+- Gives security tools time to scan and detect artefacts before cleanup
+- Default: 0 seconds (no delay)
+- ALL_CAPS mode automatically uses 5 seconds if not specified
+- Useful when security products need time to analyse created files
+
+Example:
+```bash
+signalbench category discovery --delay-cleanup 10
+signalbench run T1003.001 --delay-cleanup 5
 ```
 
 ### Multi-Host Mode (Voltron)
@@ -240,7 +286,7 @@ signalbench category credential_access --config docs/config-example.json
 signalbench category discovery execution credential_access --config docs/config-example.json
 ```
 
-A sample configuration file is provided at [docs/config-example.json](docs/config-example.json).
+A sample configuration file is provided at [docs/config-example.json](docs/config-example.json), containing all 58 technique configurations matching ALL_CAPS mode execution parameters.
 
 ### Multi-Category Execution
 

@@ -49,8 +49,12 @@ pub fn list_techniques() -> Result<(), String> {
     }
     
     println!("\n{}", "Usage:".bold());
-    println!("  signalbench run <technique_id_or_name> [--dry-run] [--config <config_file>]");
-    println!("  signalbench category <category1> [category2] [category3] ... [--dry-run] [--config <config_file>]");
+    println!("  signalbench run <technique_id_or_name> [--dry-run] [--force] [--debug] [--config <config_file>]");
+    println!("  signalbench category <category1> [category2] ... [--dry-run] [--force] [--debug] [--config <config_file>]");
+    println!("  signalbench category ALL_CAPS  [--dry-run]   # Run ALL techniques with FORCE mode");
+    println!("\n{}", "Flags:".bold());
+    println!("  -d, --debug   Enable debug logging (verbose output to stderr)");
+    println!("  -f, --force   Bypass pre-checks, attempt all operations for maximum telemetry");
     println!("\n{}", "Note:".bold());
     println!("  For techniques with the same MITRE ATT&CK ID, use the exact technique name in quotes");
     println!("\n{}", "Visit https://gocortex.io for documentation and support".italic());
@@ -76,10 +80,13 @@ pub async fn run_technique_with_params(
     let _technique_info = technique.info();
     
     // Build technique config with custom parameters
+    // Check for force parameter in custom_params
+    let force = custom_params.get("force").map(|v| v == "true").unwrap_or(false);
     let technique_config = TechniqueConfig {
         parameters: custom_params,
         timeout_seconds: Some(300), // Default 5 minutes
         cleanup_after: Some(!no_cleanup),
+        force,
     };
     
     // Execute the technique
@@ -108,6 +115,8 @@ pub async fn run_technique(
     dry_run: bool,
     no_cleanup: bool,
     config_path: Option<std::path::PathBuf>,
+    force: bool,
+    delay_cleanup: u64,
 ) -> Result<(), String> {
     // Load configuration
     let config = load_config(config_path.as_deref())?;
@@ -131,8 +140,13 @@ pub async fn run_technique(
         println!("\n{}", "[DRY RUN MODE]".bold().blue());
     }
     
-    // Get technique-specific configuration
-    let technique_config = get_technique_config(&technique_info.id, &config);
+    if force {
+        println!("{}", "[FORCE MODE] Bypassing pre-checks - maximum telemetry".yellow().bold());
+    }
+    
+    // Get technique-specific configuration with force flag
+    let mut technique_config = get_technique_config(&technique_info.id, &config);
+    technique_config.force = force;
     
     // Execute the technique
     println!("\n{}", "Executing...".bold());
@@ -171,6 +185,10 @@ pub async fn run_technique(
             }
         }
     } else if result.cleanup_required && !dry_run && technique_config.cleanup_after.unwrap_or(true) {
+        if delay_cleanup > 0 {
+            println!("{}", format!("Waiting {}s before cleanup (detection window)...", delay_cleanup).yellow());
+            tokio::time::sleep(std::time::Duration::from_secs(delay_cleanup)).await;
+        }
         println!("\n{}", "Cleaning up...".bold());
         if let Err(e) = technique.cleanup(&result.artifacts).await {
             warn!("Cleanup failed: {e}");
@@ -189,7 +207,9 @@ pub async fn run_technique(
 
 /// Generate telemetry for all techniques in multiple specified categories
 /// Developed by Simon Sigre for GoCortex.io
-pub async fn run_categories(categories: &[String], dry_run: bool, no_cleanup: bool, config_path: Option<std::path::PathBuf>) -> Result<(), String> {
+pub async fn run_categories(categories: &[String], dry_run: bool, no_cleanup: bool, config_path: Option<std::path::PathBuf>, force: bool, delay_cleanup: u64) -> Result<(), String> {
+    use crate::cli::{get_available_categories, ALL_CAPS_CATEGORY};
+    
     println!("\n{}", format!("SIGNALBENCH v{} - Endpoint Telemetry Generator", env!("CARGO_PKG_VERSION")).bold().green());
     println!("{}", "Developed by GoCortex.io | https://gocortex.io".italic());
     
@@ -197,11 +217,44 @@ pub async fn run_categories(categories: &[String], dry_run: bool, no_cleanup: bo
         return Err("No categories specified".to_string());
     }
     
+    // Check for ALL_CAPS meta-category (MF DOOM tribute)
+    let (effective_categories, effective_force, effective_delay) = if categories.len() == 1 && categories[0].to_uppercase() == ALL_CAPS_CATEGORY {
+        // MF DOOM tribute
+        println!("\n{}", "=".repeat(60).cyan());
+        println!("{}", "  ALL CAPS - MITRE ATT&CK FULL SPECTRUM EXECUTION".bold().cyan());
+        println!("{}", "=".repeat(60).cyan());
+        println!();
+        println!("  {}", "JUST REMEMBER ALL CAPS WHEN YOU SPELL THE MAN NAME".italic());
+        println!("  {}", "-- MF DOOM (1971-2020)".italic());
+        println!();
+        println!("{}", "=".repeat(60).cyan());
+        println!();
+        println!("{}", "[ALL_CAPS] Running ALL techniques across ALL categories with FORCE mode".yellow().bold());
+        println!("{}", "[ALL_CAPS] Maximum telemetry generation - no guards, no mercy".yellow());
+        println!();
+        
+        // Get all categories
+        let all_cats: Vec<String> = get_available_categories().iter().map(|s| s.to_string()).collect();
+        // ALL_CAPS uses 5s delay by default if not specified
+        let delay = if delay_cleanup == 0 { 5 } else { delay_cleanup };
+        (all_cats, true, delay)
+    } else {
+        (categories.to_vec(), force, delay_cleanup)
+    };
+    
     // Validate all categories first
-    for category in categories {
+    for category in &effective_categories {
         if !is_valid_category(category) {
             return Err(format!("Invalid category: {category}. Use 'signalbench list' to see available categories."));
         }
+    }
+    
+    if effective_force {
+        println!("{}", "[FORCE MODE] Bypassing all pre-checks - maximum telemetry generation".yellow().bold());
+    }
+    
+    if effective_delay > 0 {
+        println!("{}", format!("[DELAY] {}s pause before cleanup (detection window)", effective_delay).yellow());
     }
     
     // Load configuration if provided
@@ -216,7 +269,7 @@ pub async fn run_categories(categories: &[String], dry_run: bool, no_cleanup: bo
     let mut total_techniques = 0;
     
     // Process each category
-    for category in categories {
+    for category in &effective_categories {
         println!("\n{}", format!("Processing Category: {}", category.to_uppercase()).bold().cyan());
         println!("{}", "=".repeat(50));
         
@@ -241,12 +294,13 @@ pub async fn run_categories(categories: &[String], dry_run: bool, no_cleanup: bo
                 println!("{}", "(DRY RUN MODE - No actual execution)".yellow().italic());
             }
             
-            // Get technique-specific config
-            let technique_config = if let Some(ref config) = config {
+            // Get technique-specific config with force flag
+            let mut technique_config = if let Some(ref config) = config {
                 get_technique_config(&info.id, config)
             } else {
                 Default::default()
             };
+            technique_config.force = effective_force;
             
             // Execute the technique
             match technique.execute(&technique_config, dry_run).await {
@@ -269,6 +323,10 @@ pub async fn run_categories(categories: &[String], dry_run: bool, no_cleanup: bo
                             println!("{}", "Skipping cleanup (--no-cleanup flag set)".yellow());
                         }
                     } else if result.cleanup_required && !dry_run && technique_config.cleanup_after.unwrap_or(true) {
+                        if effective_delay > 0 {
+                            println!("{}", format!("Waiting {}s before cleanup...", effective_delay).dimmed());
+                            tokio::time::sleep(std::time::Duration::from_secs(effective_delay)).await;
+                        }
                         println!("{}", "Cleaning up...".bold());
                         if let Err(e) = technique.cleanup(&result.artifacts).await {
                             warn!("Cleanup failed: {e}");
@@ -298,7 +356,7 @@ pub async fn run_categories(categories: &[String], dry_run: bool, no_cleanup: bo
     
     // Print overall summary
     println!("\n{}", "Overall Execution Summary".bold().underline());
-    println!("Categories Processed: {}", categories.len());
+    println!("Categories Processed: {}", effective_categories.len());
     println!("Total Techniques: {total_techniques}");
     println!("Total Successful: {}", total_success.to_string().green());
     println!("Total Failed: {}", if total_failure > 0 { 
@@ -306,6 +364,9 @@ pub async fn run_categories(categories: &[String], dry_run: bool, no_cleanup: bo
     } else { 
         total_failure.to_string().normal()
     });
+    if effective_force {
+        println!("{}", "[FORCE MODE] All operations attempted regardless of pre-checks".yellow());
+    }
     
     Ok(())
 }

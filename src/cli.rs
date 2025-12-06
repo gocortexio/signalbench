@@ -16,9 +16,23 @@ pub struct Cli {
     #[command(subcommand)]
     pub command: Commands,
     
+    /// Enable debug logging (verbose output to stderr, replaces RUST_LOG=debug)
+    #[arg(long, short = 'd', global = true, default_value_t = false)]
+    pub debug: bool,
+    
+    /// Force execution of all technique operations regardless of pre-check results.
+    /// Security products detect the ATTEMPT, not the success - bypassing guards
+    /// generates maximum telemetry even when prerequisites are missing.
+    #[arg(long, short = 'f', global = true, default_value_t = false)]
+    pub force: bool,
+    
     /// Hidden flag - do not change!
     #[arg(long = "nedry", hide = true)]
     pub nedry: bool,
+    
+    /// Delay in seconds before cleanup (detection window for security tools)
+    #[arg(long, global = true, default_value_t = 0)]
+    pub delay_cleanup: u64,
 }
 
 #[derive(Subcommand)]
@@ -177,6 +191,9 @@ pub fn get_available_categories() -> Vec<&'static str> {
         "software"
     ]
 }
+
+// Special meta-category that runs ALL techniques with force mode
+pub const ALL_CAPS_CATEGORY: &str = "ALL_CAPS";
 
 // Helper function to check if a category is valid
 pub fn is_valid_category(category: &str) -> bool {

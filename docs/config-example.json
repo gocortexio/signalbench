@@ -1,5 +1,65 @@
 {
+  "_comment": "SignalBench v1.6.40 - Complete configuration matching ALL_CAPS mode execution",
+  "_description": "This configuration file contains all technique parameters that would be used when running: signalbench category ALL_CAPS",
+  "_usage": "signalbench --config config-example.json category discovery",
+  
   "techniques": {
+    
+    "T1119": {
+      "parameters": {
+        "output_file": "/tmp/signalbench_collection.tar.gz",
+        "search_paths": "/etc,/home,/root/.ssh",
+        "patterns": "*.key,*.pem,*.conf,*secret*,*password*,*.env,*shadow*,*passwd*,*sudoers*,*id_rsa*,*id_ed25519*,*authorized_keys*"
+      },
+      "cleanup_after": true
+    },
+    
+    "T1095": {
+      "parameters": {
+        "protocol": "icmp",
+        "target": "198.135.184.22",
+        "port": "4444",
+        "log_file": "/tmp/signalbench_c2_beacon.log",
+        "command_file": "/tmp/signalbench_c2_commands.txt"
+      },
+      "cleanup_after": true
+    },
+    
+    "T1105": {
+      "parameters": {
+        "url": "https://raw.githubusercontent.com/simonsigre/gocortex/refs/heads/main/test-script.sh",
+        "output_dir": "/tmp/signalbench_download",
+        "download_tool": "curl",
+        "execution_attempt": true
+      },
+      "cleanup_after": true
+    },
+    
+    "T1205": {
+      "parameters": {
+        "knock_ports": "7000,8000,9000",
+        "target": "198.135.184.22",
+        "log_file": "/tmp/signalbench_port_knock.log"
+      },
+      "cleanup_after": true
+    },
+    
+    "T1105.001": {
+      "parameters": {
+        "repo_count": "10",
+        "log_file": "/tmp/signalbench_github_downloads.log"
+      },
+      "cleanup_after": true
+    },
+    
+    "T1071-IOC": {
+      "parameters": {
+        "domains": "torproject.org,onion.foundation",
+        "log_file": "/tmp/signalbench_suspicious_domains.log"
+      },
+      "cleanup_after": true
+    },
+    
     "Possible C2 via dnscat2": {
       "parameters": {
         "download_url": "https://api.pan.run/test/dnscat",
@@ -9,280 +69,465 @@
       },
       "cleanup_after": true
     },
-    "DNS reconnaissance or enumeration via DNSRecon": {
-      "parameters": {
-        "target_domain": "example.com",
-        "output_file": "/tmp/dns_recon_results.txt",
-        "subdomain_list": "www,mail,api,admin,test,dev"
-      },
-      "cleanup_after": true
-    },
-    "T1046": {
-      "parameters": {
-        "target_hosts": "127.0.0.1,192.168.1.1",
-        "ports": "22,80,443,8080",
-        "output_file": "/tmp/custom_port_scan_results.txt"
-      },
-      "cleanup_after": true
-    },
-    "T1049": {
-      "parameters": {
-        "output_file": "/tmp/custom_network_connections.txt",
-        "commands": "netstat -tuln,ss -tunap"
-      },
-      "cleanup_after": true
-    },
-    "T1048": {
-      "parameters": {
-        "protocol": "dns",
-        "data_file": "/tmp/custom_exfil_data.txt",
-        "log_file": "/tmp/custom_exfil_log.txt",
-        "target": "example.com"
-      },
-      "cleanup_after": true
-    },
-    "T1095": {
-      "parameters": {
-        "protocol": "tcp",
-        "target": "127.0.0.1",
-        "port": "4444",
-        "log_file": "/tmp/custom_c2_simulation.txt",
-        "command_file": "/tmp/custom_c2_commands.txt"
-      },
-      "cleanup_after": true
-    },
-    "T1003.001": {
-      "parameters": {
-        "target_pid": "1",
-        "dump_file": "/tmp/custom_memory_dump"
-      },
-      "cleanup_after": true
-    },
-    "T1056.001": {
-      "parameters": {
-        "log_file": "/tmp/custom_keylogger.log",
-        "duration": "10"
-      },
-      "cleanup_after": true
-    },
-    "T1562.002": {
-      "parameters": {
-        "audit_rules_file": "/tmp/custom_audit_rules"
-      },
-      "cleanup_after": true
-    },
-    "T1070.003": {
-      "parameters": {
-        "history_backup": "/tmp/custom_history_backup"
-      },
-      "cleanup_after": true
-    },
-    "T1574.007": {
-      "parameters": {
-        "custom_path": "/tmp/malicious_path",
-        "env_log_file": "/tmp/custom_env_log"
-      },
-      "cleanup_after": true
-    },
-    "T1082": {
-      "parameters": {
-        "output_file": "/tmp/custom_sysinfo",
-        "commands": "uname -a,hostname,lscpu,free -h,df -h"
-      },
-      "cleanup_after": true
-    },
-    "T1016": {
-      "parameters": {
-        "output_file": "/tmp/custom_network_info",
-        "commands": "ip addr,ip route,netstat -tuln"
-      },
-      "cleanup_after": true
-    },
-    "T1059.004": {
-      "parameters": {
-        "shell": "/bin/bash",
-        "command": "echo 'Custom command execution' > /tmp/custom_cmd_output",
-        "log_file": "/tmp/custom_cmd_log"
-      },
-      "cleanup_after": true
-    },
-    "T1059.006": {
-      "parameters": {
-        "script_file": "/tmp/custom_python_script.py",
-        "log_file": "/tmp/custom_script_log"
-      },
-      "cleanup_after": true
-    },
-    "T1021.004": {
-      "parameters": {
-        "targets": "localhost,127.0.0.1",
-        "username": "$(whoami)",
-        "log_file": "/tmp/custom_ssh_log"
-      },
-      "cleanup_after": true
-    },
-    "T1547.001": {
-      "parameters": {
-        "key_name": "custom_startup_key",
-        "command": "echo 'Custom startup' > /tmp/custom_startup_output"
-      },
-      "cleanup_after": true
-    },
-    "T1547.002": {
-      "parameters": {
-        "script_name": "custom_startup.sh",
-        "script_content": "#!/bin/bash\necho 'Custom startup script' > /tmp/custom_startup_executed"
-      },
-      "cleanup_after": true
-    },
-    "T1053.003": {
-      "parameters": {
-        "cron_expression": "*/15 * * * *",
-        "command": "/usr/bin/echo 'Custom cron job' > /tmp/custom_cron_output"
-      },
-      "cleanup_after": true
-    },
-    "T1548.003": {
-      "parameters": {
-        "username": "$(whoami)",
-        "privileges": "ALL=(ALL:ALL) NOPASSWD: /usr/bin/cat,/usr/bin/ls"
-      },
-      "cleanup_after": true
-    },
-    "T1548.003.001": {
-      "parameters": {
-        "command": "whoami",
-        "test_both_variants": "true",
-        "log_file": "/tmp/custom_sudo_exploit.log"
-      },
-      "cleanup_after": true
-    },
-    "T1548.001": {
-      "parameters": {
-        "target_binary": "/tmp/custom_suid_binary"
-      },
-      "cleanup_after": true
-    },
-    "T1027": {
-      "parameters": {
-        "obfuscation_type": "encoding",
-        "output_dir": "/tmp/custom_obfuscation",
-        "log_file": "/tmp/custom_obfuscation.log",
-        "execute_after": "true"
-      },
-      "cleanup_after": true
-    },
-    "T1055": {
-      "parameters": {
-        "technique": "ptrace",
-        "target_process": "self",
-        "output_dir": "/tmp/custom_injection",
-        "log_file": "/tmp/custom_injection.log"
-      },
-      "cleanup_after": true
-    },
+    
     "T1059": {
       "parameters": {
         "interpreter": "bash",
         "obfuscation": "base64",
-        "command": "echo 'Custom command test' > /tmp/custom_execution_test",
-        "output_dir": "/tmp/custom_command_interpreter",
-        "log_file": "/tmp/custom_cmd_execution.log"
+        "command": "echo 'SignalBench command interpreter test' > /tmp/signalbench_execution_test",
+        "output_dir": "/tmp/signalbench_command_interpreter",
+        "log_file": "/tmp/signalbench_cmd_execution.log"
       },
       "cleanup_after": true
     },
-    "T1105": {
+    
+    "T1003.001": {
       "parameters": {
-        "url": "https://raw.githubusercontent.com/simonsigre/gocortex/refs/heads/main/test-script.sh",
-        "output_dir": "/tmp/custom_download",
-        "download_tool": "curl",
-        "execution_attempt": true
+        "target_pid": "0",
+        "dump_file": "/tmp/signalbench_memory_dump",
+        "use_ptrace": "true",
+        "enumerate_maps": "true"
       },
       "cleanup_after": true
     },
+    
+    "T1056.001": {
+      "parameters": {
+        "log_file": "/tmp/signalbench_keylogger.log",
+        "duration": "5"
+      },
+      "cleanup_after": true
+    },
+    
+    "T1552.001": {
+      "parameters": {
+        "search_paths": "/tmp,/home,/etc",
+        "file_patterns": ".env,.config,config.json,settings.ini,credentials",
+        "output_file": "/tmp/signalbench_discovered_credentials.log"
+      },
+      "cleanup_after": true
+    },
+    
+    "T1003.007": {
+      "parameters": {
+        "target_processes": "firefox,chrome,ssh,sshd,apache2,nginx",
+        "memory_dump_size": "4096",
+        "max_processes": "5",
+        "log_file": "/tmp/signalbench_proc_dump.log",
+        "search_patterns": "password,token,key,auth,credential"
+      },
+      "cleanup_after": true
+    },
+    
+    "T1110.002": {
+      "parameters": {
+        "hydra_path": "/tmp/signalbench_hydra",
+        "target_service": "ssh",
+        "target_host": "198.135.184.22",
+        "log_file": "/tmp/signalbench_hydra_log"
+      },
+      "cleanup_after": true
+    },
+    
+    "T1003.008": {
+      "parameters": {
+        "output_file": "/tmp/signalbench_passwd_shadow.log"
+      },
+      "cleanup_after": true
+    },
+    
+    "T1562.002": {
+      "parameters": {
+        "audit_rules_file": "/tmp/signalbench_audit_rules"
+      },
+      "cleanup_after": true
+    },
+    
+    "T1070.003": {
+      "parameters": {
+        "history_backup": "/tmp/signalbench_history_backup"
+      },
+      "cleanup_after": true
+    },
+    
+    "T1574.007": {
+      "parameters": {
+        "custom_path": "/tmp/signalbench_malicious_path",
+        "env_log_file": "/tmp/signalbench_env_log"
+      },
+      "cleanup_after": true
+    },
+    
+    "T1036.003": {
+      "parameters": {
+        "target_path": "/tmp/signalbench_crond",
+        "execute_masqueraded": "true",
+        "log_file": "/tmp/signalbench_masquerade.log"
+      },
+      "cleanup_after": true
+    },
+    
+    "T1070.004": {
+      "parameters": {
+        "target_files": "/tmp/signalbench_test_delete",
+        "method": "all",
+        "log_file": "/tmp/signalbench_deletion.log"
+      },
+      "cleanup_after": true
+    },
+    
+    "T1036-PROC": {
+      "parameters": {
+        "process_name": "[kworker/0:0]",
+        "runtime": "5",
+        "spawn_children": "3",
+        "log_file": "/tmp/signalbench_proc_masquerade.log"
+      },
+      "cleanup_after": true
+    },
+    
+    "T1070.004-SELF": {
+      "parameters": {
+        "network_activity": "true",
+        "target": "198.135.184.22",
+        "delay_seconds": "3",
+        "log_file": "/tmp/signalbench_self_delete.log"
+      },
+      "cleanup_after": true
+    },
+    
+    "T1027": {
+      "parameters": {
+        "obfuscation_type": "encoding",
+        "output_dir": "/tmp/signalbench_obfuscation",
+        "log_file": "/tmp/signalbench_obfuscation.log",
+        "execute_after": "true"
+      },
+      "cleanup_after": true
+    },
+    
+    "T1055": {
+      "parameters": {
+        "technique": "ptrace",
+        "target_process": "self",
+        "output_dir": "/tmp/signalbench_injection",
+        "log_file": "/tmp/signalbench_injection.log"
+      },
+      "cleanup_after": true
+    },
+    
+    "T1082": {
+      "parameters": {
+        "output_file": "/tmp/signalbench_sysinfo",
+        "commands": "uname -a,hostname,lscpu,free -h,df -h,cat /etc/os-release"
+      },
+      "cleanup_after": true
+    },
+    
+    "T1016": {
+      "parameters": {
+        "output_file": "/tmp/signalbench_network_info",
+        "commands": "ip addr,ip route,netstat -tuln,cat /etc/resolv.conf"
+      },
+      "cleanup_after": true
+    },
+    
+    "T1049": {
+      "parameters": {
+        "output_file": "/tmp/signalbench_network_connections.txt",
+        "commands": "netstat -tuln,ss -tunap,lsof -i"
+      },
+      "cleanup_after": true
+    },
+    
+    "T1046": {
+      "parameters": {
+        "target_hosts": "198.135.184.22",
+        "ports": "22,80,443,8080,3389,5900",
+        "output_file": "/tmp/signalbench_port_scan_results.txt"
+      },
+      "cleanup_after": true
+    },
+    
+    "DNS reconnaissance or enumeration via DNSRecon": {
+      "parameters": {
+        "target_domain": "example.com",
+        "output_file": "/tmp/signalbench_dns_recon_results.txt",
+        "subdomain_list": "www,mail,api,admin,test,dev,staging,prod"
+      },
+      "cleanup_after": true
+    },
+    
+    "T1059.004": {
+      "parameters": {
+        "shell": "/bin/bash",
+        "command": "echo 'SignalBench telemetry generation' > /tmp/signalbench_cmd_output",
+        "log_file": "/tmp/signalbench_cmd_log"
+      },
+      "cleanup_after": true
+    },
+    
+    "T1059.006": {
+      "parameters": {
+        "script_file": "/tmp/signalbench_python_script.py",
+        "log_file": "/tmp/signalbench_script_log"
+      },
+      "cleanup_after": true
+    },
+    
+    "T1059.004.001": {
+      "parameters": {
+        "command_count": "10",
+        "bad_ports": "4444,1337,31337",
+        "target": "198.135.184.22",
+        "log_file": "/tmp/signalbench_uncommon_commands.log"
+      },
+      "cleanup_after": true
+    },
+    
+    "T1048": {
+      "parameters": {
+        "protocol": "dns",
+        "data_file": "/tmp/signalbench_exfil_data.txt",
+        "log_file": "/tmp/signalbench_exfil_log.txt",
+        "target": "198.135.184.22"
+      },
+      "cleanup_after": true
+    },
+    
+    "T1496": {
+      "parameters": {
+        "cpu_stress": "true",
+        "memory_stress": "true",
+        "duration": "10",
+        "simulate_miner": "true",
+        "miner_name": "xmrig",
+        "log_file": "/tmp/signalbench_resource_hijack.log"
+      },
+      "cleanup_after": true
+    },
+    
+    "T1021.004": {
+      "parameters": {
+        "targets": "127.0.0.1",
+        "username": "root",
+        "port": "2222",
+        "log_file": "/tmp/signalbench_ssh_lateral.log"
+      },
+      "cleanup_after": true
+    },
+    
+    "T1021.005": {
+      "parameters": {
+        "targets": "127.0.0.1",
+        "port": "5900",
+        "log_file": "/tmp/signalbench_vnc_lateral.log"
+      },
+      "cleanup_after": true
+    },
+    
+    "T1547.002": {
+      "parameters": {
+        "script_name": "signalbench_startup.sh",
+        "script_content": "#!/bin/bash\necho 'SignalBench startup script' > /tmp/signalbench_startup_executed"
+      },
+      "cleanup_after": true
+    },
+    
+    "T1053.003": {
+      "parameters": {
+        "cron_expression": "*/15 * * * *",
+        "command": "/usr/bin/echo 'SignalBench cron job' > /tmp/signalbench_cron_output"
+      },
+      "cleanup_after": true
+    },
+    
+    "T1505.003": {
+      "parameters": {
+        "web_root": "/tmp/signalbench_webshell_test",
+        "shell_type": "php",
+        "shell_name": "signalbench_webshell.php"
+      },
+      "cleanup_after": true
+    },
+    
+    "T1098": {
+      "parameters": {
+        "username": "signalbench_test",
+        "action": "modify",
+        "log_file": "/tmp/signalbench_account_manipulation.log"
+      },
+      "cleanup_after": true
+    },
+    
     "T1543": {
       "parameters": {
         "service_type": "systemd",
-        "service_name": "custom_service",
-        "command": "echo 'Custom service execution' > /tmp/custom_service_execution",
-        "output_dir": "/tmp/custom_service",
+        "service_name": "signalbench_service",
+        "command": "echo 'SignalBench service execution' > /tmp/signalbench_service_execution",
+        "output_dir": "/tmp/signalbench_service",
         "install": false
       },
       "cleanup_after": true
     },
-    "T1505.003": {
+    
+    "T1548.003": {
       "parameters": {
-        "web_root": "/tmp/custom_webshell_test",
-        "shell_type": "php",
-        "shell_name": "custom_webshell.php"
+        "username": "signalbench_user",
+        "privileges": "ALL=(ALL:ALL) NOPASSWD: ALL"
       },
       "cleanup_after": true
     },
+    
+    "T1548.001": {
+      "parameters": {
+        "target_binary": "/tmp/signalbench_suid_binary"
+      },
+      "cleanup_after": true
+    },
+    
     "T1136.001": {
       "parameters": {
-        "username": "custom_test_user",
+        "username": "signalbench_test_user",
         "groups": "sudo,adm",
         "shell": "/bin/bash"
       },
       "cleanup_after": true
     },
+    
     "T1068": {
       "parameters": {
-        "exploit_type": "dirty_cow",
-        "target_file": "/tmp/custom_privesc_target"
+        "exploit_type": "dirty_pipe",
+        "target_file": "/tmp/signalbench_privesc_target",
+        "log_file": "/tmp/signalbench_privesc.log"
       },
       "cleanup_after": true
     },
-    "T1552.001": {
+    
+    "T1548.003.001": {
       "parameters": {
-        "search_paths": "/tmp/custom_cred_test,/home",
-        "file_patterns": ".env,.config,config.json,settings.ini",
-        "output_file": "/tmp/custom_discovered_credentials.log"
+        "command": "whoami",
+        "test_both_variants": "true",
+        "log_file": "/tmp/signalbench_sudo_exploit.log"
       },
       "cleanup_after": true
     },
-    "T1036.003": {
+    
+    "T1548-GTFOBINS": {
       "parameters": {
-        "target_path": "/tmp/custom_crond",
-        "execute_masqueraded": "true",
-        "log_file": "/tmp/custom_masquerade.log"
+        "check_sudo": "true",
+        "check_suid": "true",
+        "generate_telemetry": "true",
+        "log_file": "/tmp/signalbench_gtfobins.log"
       },
       "cleanup_after": true
     },
-    "T1059.004.001": {
+    
+    "T1611-SOCK": {
       "parameters": {
-        "command_count": "10",
-        "log_file": "/tmp/custom_uncommon_commands.log"
+        "socket_path": "/var/run/docker.sock",
+        "output_dir": "/tmp/signalbench_socket_escape"
       },
       "cleanup_after": true
     },
-    "T1105.001": {
+    
+    "T1611-PRIV": {
       "parameters": {
-        "repo_count": "8",
-        "log_file": "/tmp/custom_github_downloads.log"
+        "output_dir": "/tmp/signalbench_priv_escape",
+        "test_mount": "true"
       },
       "cleanup_after": true
     },
-    "T1110.002": {
+    
+    "T1611-MOUNT": {
       "parameters": {
-        "hydra_path": "/tmp/custom_hydra",
-        "target_service": "ftp",
-        "log_file": "/tmp/custom_hydra_log"
+        "output_dir": "/tmp/signalbench_mount_escape",
+        "test_read": "true"
       },
       "cleanup_after": true
     },
+    
+    "T1611-CGROUP": {
+      "parameters": {
+        "output_dir": "/tmp/signalbench_cgroup_escape",
+        "simulate_payload": "true"
+      },
+      "cleanup_after": true
+    },
+    
+    "T1611-MODULE": {
+      "parameters": {
+        "output_dir": "/tmp/signalbench_module_escape",
+        "enumerate_modules": "true"
+      },
+      "cleanup_after": true
+    },
+    
+    "T1611-RECON": {
+      "parameters": {
+        "output_dir": "/tmp/signalbench_container_recon",
+        "scan_gateway": "true",
+        "credential_hunt": "true"
+      },
+      "cleanup_after": true
+    },
+    
+    "T1611-PIDNS": {
+      "parameters": {
+        "output_dir": "/tmp/signalbench_pidns_escape",
+        "enumerate_processes": "true"
+      },
+      "cleanup_after": true
+    },
+    
+    "T1611-SUID": {
+      "parameters": {
+        "output_dir": "/tmp/signalbench_suid_escape",
+        "search_paths": "/usr/bin,/usr/sbin,/bin,/sbin"
+      },
+      "cleanup_after": true
+    },
+    
+    "T1611-BREAKOUT": {
+      "parameters": {
+        "output_dir": "/tmp/signalbench_breakout",
+        "try_all_vectors": "true"
+      },
+      "cleanup_after": true
+    },
+    
+    "T1611-CVE": {
+      "parameters": {
+        "output_dir": "/tmp/signalbench_cve_check",
+        "check_all": "true"
+      },
+      "cleanup_after": true
+    },
+    
+    "T1611-NS": {
+      "parameters": {
+        "output_dir": "/tmp/signalbench_ns_escape",
+        "enumerate_namespaces": "true"
+      },
+      "cleanup_after": true
+    },
+    
     "S1109": {
       "parameters": {
-        "timeout": "5",
+        "timeout": "10",
         "memory_size": "32",
-        "scan_interval": "1"
+        "scan_interval": "1",
+        "output_dir": "/tmp/signalbench_pacemaker"
       },
       "cleanup_after": true
     }
   },
+  
   "global": {
     "dry_run": false,
     "cleanup_after": true,
+    "force": true,
+    "debug": false,
     "log_level": "info"
   }
 }

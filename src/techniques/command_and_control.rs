@@ -889,3 +889,252 @@ impl AttackTechnique for SuspiciousGitHubToolTransfer {
         })
     }
 }
+
+// =============================================================================
+// T1071-IOC: Suspicious Domain Connections
+// =============================================================================
+// Connects to known C2/malicious domains and IP addresses based on ttp-bench patterns.
+// Generates network telemetry that security products should flag as suspicious.
+
+pub struct SuspiciousDomainConnections {}
+
+#[async_trait]
+impl AttackTechnique for SuspiciousDomainConnections {
+    fn info(&self) -> Technique {
+        Technique {
+            id: "T1071-IOC".to_string(),
+            name: "Suspicious Domain Connections".to_string(),
+            description: "Connects to known malicious and suspicious domains to generate \
+                C2-like network telemetry. Includes connections to known threat actor \
+                infrastructure, suspicious TLDs, and IP addresses commonly associated with \
+                malware. Based on ttp-bench IOC patterns for realistic detection testing.".to_string(),
+            category: "COMMAND_AND_CONTROL".to_string(),
+            parameters: vec![
+                TechniqueParameter {
+                    name: "log_file".to_string(),
+                    description: "Path to save connection log".to_string(),
+                    required: false,
+                    default: Some("/tmp/signalbench_suspicious_domains.log".to_string()),
+                },
+                TechniqueParameter {
+                    name: "timeout".to_string(),
+                    description: "Connection timeout in seconds".to_string(),
+                    required: false,
+                    default: Some("3".to_string()),
+                },
+            ],
+            detection: "Monitor for: DNS queries to suspicious TLDs (.tk, .ru, .cn), \
+                connections to known C2 infrastructure, connections to IP addresses \
+                in threat intelligence feeds, high-entropy domain names, DGA-like patterns, \
+                beaconing behaviour.".to_string(),
+            cleanup_support: true,
+            platforms: vec!["Linux".to_string()],
+            permissions: vec!["user".to_string()],
+            voltron_only: false,
+        }
+    }
+
+    fn execute<'a>(
+        &'a self,
+        config: &'a TechniqueConfig,
+        dry_run: bool,
+    ) -> ExecuteFuture<'a> {
+        Box::pin(async move {
+            let log_file = config
+                .parameters
+                .get("log_file")
+                .cloned()
+                .unwrap_or_else(|| "/tmp/signalbench_suspicious_domains.log".to_string());
+            
+            let timeout = config
+                .parameters
+                .get("timeout")
+                .and_then(|t| t.parse::<u32>().ok())
+                .unwrap_or(3);
+            
+            debug!("[T1071-IOC] Starting Suspicious Domain Connections technique");
+            debug!("[T1071-IOC] Log file: {}", log_file);
+            debug!("[T1071-IOC] Timeout: {} seconds", timeout);
+            
+            // IOC domains based on ttp-bench and known threat patterns
+            // These are designed to trigger security detections without actual harm
+            let suspicious_domains = vec![
+                // Known malware/C2 infrastructure simulation (non-existent domains)
+                ("signalbench-c2-test.tk", "Suspicious TLD (.tk)"),
+                ("signalbench-malware.ru", "Suspicious TLD (.ru)"),
+                ("signalbench-backdoor.cn", "Suspicious TLD (.cn)"),
+                ("signalbench-rat.xyz", "Suspicious TLD (.xyz)"),
+                ("signalbench-payload.top", "Suspicious TLD (.top)"),
+                
+                // DGA-like high entropy domains (sigre.xyz test infrastructure)
+                ("xk8f2m9p3q.t1071.signalbench.sigre.xyz", "DGA-like pattern"),
+                ("a1b2c3d4e5f6.t1071.signalbench.sigre.xyz", "DGA-like pattern"),
+                ("q9w8e7r6t5.t1071.signalbench.sigre.xyz", "DGA-like pattern"),
+                
+                // Known malicious patterns
+                ("update.signalbench-services.com", "Update masquerading"),
+                ("cdn.signalbench-delivery.net", "CDN masquerading"),
+                ("api.signalbench-auth.io", "API masquerading"),
+                
+                // Suspicious IP addresses (TEST-NET ranges per RFC 5737)
+                ("192.0.2.1", "TEST-NET-1 IP"),
+                ("198.51.100.1", "TEST-NET-2 IP"),
+                ("203.0.113.1", "TEST-NET-3 IP"),
+                
+                // Tor-like patterns
+                ("signalbench.onion.link", "Tor proxy pattern"),
+                
+                // Cryptocurrency mining pool patterns
+                ("pool.signalbench-mining.com", "Mining pool pattern"),
+                ("stratum.signalbench-crypto.net", "Stratum protocol pattern"),
+            ];
+            
+            if dry_run {
+                info!("[DRY RUN] Would connect to {} suspicious domains:", suspicious_domains.len());
+                for (domain, reason) in &suspicious_domains {
+                    info!("[DRY RUN] - {} ({})", domain, reason);
+                }
+                return Ok(SimulationResult {
+                    technique_id: self.info().id,
+                    success: true,
+                    message: format!("DRY RUN: Would connect to {} suspicious domains", suspicious_domains.len()),
+                    artifacts: vec![log_file],
+                    cleanup_required: false,
+                });
+            }
+            
+            // Create log file
+            let mut log = File::create(&log_file)
+                .map_err(|e| format!("Failed to create log file: {}", e))?;
+            
+            writeln!(log, "# SignalBench Suspicious Domain Connections").unwrap();
+            writeln!(log, "# MITRE ATT&CK Technique: T1071 - Application Layer Protocol").unwrap();
+            writeln!(log, "# Timestamp: {}", chrono::Local::now()).unwrap();
+            writeln!(log, "# Total domains: {}", suspicious_domains.len()).unwrap();
+            writeln!(log, "# Timeout: {} seconds", timeout).unwrap();
+            writeln!(log, "# --------------------------------------------------------\n").unwrap();
+            
+            let mut connection_count = 0;
+            let mut successful_connections = 0;
+            
+            info!("[T1071-IOC] Connecting to {} suspicious domains", suspicious_domains.len());
+            
+            // Console output: Display all domains/IPs being tested
+            println!("\n[T1071-IOC] Suspicious Domain Connections");
+            println!("{}", "-".repeat(60));
+            println!("{:<45} REASON", "TARGET");
+            println!("{}", "-".repeat(60));
+            for (domain, reason) in &suspicious_domains {
+                println!("  {:<43} {}", domain, reason);
+            }
+            println!("{}", "-".repeat(60));
+            println!();
+            
+            for (domain, reason) in &suspicious_domains {
+                connection_count += 1;
+                debug!("[T1071-IOC] Connecting to: {} ({})", domain, reason);
+                println!("[T1071-IOC] Connecting: {} ...", domain);
+                
+                writeln!(log, "=== Connection {} ===", connection_count).unwrap();
+                writeln!(log, "Target: {}", domain).unwrap();
+                writeln!(log, "Reason: {}", reason).unwrap();
+                writeln!(log, "Time: {}", chrono::Local::now()).unwrap();
+                
+                // Use curl to attempt connection (generates network telemetry)
+                let curl_result = Command::new("curl")
+                    .args([
+                        "-s",
+                        "-o", "/dev/null",
+                        "-w", "%{http_code},%{time_total},%{remote_ip}",
+                        "--max-time", &timeout.to_string(),
+                        "--connect-timeout", &timeout.to_string(),
+                        &format!("http://{}", domain),
+                    ])
+                    .output()
+                    .await;
+                
+                match curl_result {
+                    Ok(output) => {
+                        let result = String::from_utf8_lossy(&output.stdout);
+                        let exit_code = output.status.code().unwrap_or(-1);
+                        
+                        if exit_code == 0 {
+                            successful_connections += 1;
+                            println!("  [OK] Response: {}", result.trim());
+                            writeln!(log, "Status: SUCCESS").unwrap();
+                            writeln!(log, "Response: {}", result).unwrap();
+                        } else {
+                            println!("  [--] Failed (exit code: {})", exit_code);
+                            writeln!(log, "Status: FAILED (exit code: {})", exit_code).unwrap();
+                        }
+                    }
+                    Err(e) => {
+                        println!("  [!!] Error: {}", e);
+                        writeln!(log, "Status: ERROR ({})", e).unwrap();
+                    }
+                }
+                
+                // Also perform DNS lookup for additional telemetry
+                let dig_result = Command::new("dig")
+                    .args(["+short", "+time=1", "+tries=1", domain])
+                    .output()
+                    .await;
+                
+                if let Ok(output) = dig_result {
+                    let dns_result = String::from_utf8_lossy(&output.stdout);
+                    if !dns_result.trim().is_empty() {
+                        writeln!(log, "DNS: {}", dns_result.trim()).unwrap();
+                    } else {
+                        writeln!(log, "DNS: No resolution").unwrap();
+                    }
+                }
+                
+                writeln!(log).unwrap();
+            }
+            
+            writeln!(log, "=== Summary ===").unwrap();
+            writeln!(log, "Total connections attempted: {}", connection_count).unwrap();
+            writeln!(log, "Successful connections: {}", successful_connections).unwrap();
+            writeln!(log, "Failed connections: {}", connection_count - successful_connections).unwrap();
+            
+            // Console summary
+            println!("\n{}", "-".repeat(60));
+            println!("[T1071-IOC] Summary: {} attempted, {} successful, {} failed",
+                     connection_count, successful_connections, connection_count - successful_connections);
+            println!("{}", "-".repeat(60));
+            
+            info!("[T1071-IOC] Completed {} suspicious domain connections ({} successful)", 
+                  connection_count, successful_connections);
+            
+            Ok(SimulationResult {
+                technique_id: self.info().id,
+                success: true,
+                message: format!(
+                    "Completed {} suspicious domain connections ({} successful, {} failed)",
+                    connection_count, successful_connections, connection_count - successful_connections
+                ),
+                artifacts: vec![log_file],
+                cleanup_required: true,
+            })
+        })
+    }
+
+    fn cleanup<'a>(&'a self, artifacts: &'a [String]) -> CleanupFuture<'a> {
+        Box::pin(async move {
+            debug!("[T1071-IOC] Starting cleanup");
+            
+            for artifact in artifacts {
+                if Path::new(artifact).exists() {
+                    if let Err(e) = fs::remove_file(artifact) {
+                        warn!("[T1071-IOC] Failed to remove {}: {}", artifact, e);
+                    } else {
+                        debug!("[T1071-IOC] Removed: {}", artifact);
+                    }
+                }
+            }
+            
+            info!("[T1071-IOC] Cleanup complete");
+            Ok(())
+        })
+    }
+}

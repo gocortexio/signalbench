@@ -52,6 +52,60 @@ This is particularly useful for:
 - Analyzing telemetry patterns in detail
 - Training scenarios where artefact inspection is desired
 
+## Force Mode (--force)
+
+Force mode enables maximum telemetry generation by bypassing all environment pre-checks and running ALL available methods for each technique:
+
+```bash
+# Run single technique with force mode
+signalbench run T1003.001 --force
+
+# Run category with force mode
+signalbench category credential_access --force
+
+# ALL_CAPS meta-category (automatically enables force mode)
+signalbench category ALL_CAPS
+```
+
+When force mode is enabled:
+- All capability checks are bypassed (CAP_SYS_ADMIN, CAP_SYS_MODULE, etc.)
+- Tools are attempted even when not found on PATH (attempt generates telemetry)
+- Fallback patterns run BOTH primary AND secondary methods (e.g., gcore AND /proc/mem)
+- Container escape techniques attempt all operations regardless of container detection
+- File deletion runs shred AND wipe AND rm for maximum detection surface
+
+Force mode is particularly useful because:
+- Failed operations still generate detection telemetry (security products see the attempt)
+- Maximum coverage testing regardless of environment conditions
+- EDR/XDR evaluation with guaranteed signal generation
+
+## ALL_CAPS Meta-Category
+
+The ALL_CAPS meta-category runs ALL techniques across ALL categories with force mode automatically enabled:
+
+```bash
+signalbench category ALL_CAPS [--dry-run]
+```
+
+This is a tribute to MF DOOM (1971-2020) - "JUST REMEMBER ALL CAPS WHEN YOU SPELL THE MAN NAME"
+
+Features:
+- Executes every implemented technique in sequence
+- Force mode is automatically enabled
+- Maximum telemetry coverage in a single command
+- Comprehensive security product evaluation
+
+## Debug Mode (--debug)
+
+Debug mode enables verbose logging without requiring environment variables:
+
+```bash
+signalbench run T1003.001 --debug
+signalbench category discovery --debug
+```
+
+This replaces the need to set `RUST_LOG=debug` environment variable.
+
 ## DISCOVERY Techniques
 
 ### T1082 - System Information Discovery
@@ -78,7 +132,7 @@ Observable patterns:
 ### T1016 - System Network Configuration Discovery
 
 Description:  
-Simulates collection of network configuration information to map out the target network.
+Executes REAL network configuration discovery commands to map out the target network.
 
 How it works:
 1. Runs various network configuration commands (ip addr, ip route, ifconfig, netstat)
@@ -124,7 +178,7 @@ Detection opportunities:
 ### T1046 - Network Service Discovery
 
 Description:  
-Simulates scanning for network services to identify open ports and running services on the target network.
+Executes REAL port scanning to identify open ports and running services on the target network.
 
 How it works:
 1. Creates a log file for scan results
@@ -147,7 +201,7 @@ Detection opportunities:
 ### T1049 - System Network Connections Discovery
 
 Description:  
-Simulates discovering active network connections to understand data flow and potential lateral movement paths.
+Executes network connection discovery commands to enumerate active connections, understand data flow, and identify potential lateral movement paths.
 
 How it works:
 1. Executes various connection-gathering commands (netstat, ss, lsof)
@@ -170,13 +224,15 @@ Detection opportunities:
 ### T1003.001 - Memory Dumping
 
 Description:  
-Simulates the process of dumping memory from a running process to extract credentials, a common technique used by attackers to steal passwords and tokens from memory.
+Executes REAL memory dumping techniques against running processes to extract credentials, replicating techniques used by attackers to steal passwords and tokens from memory.
 
 How it works:
-1. Creates a simulated memory dump file in the specified location
-2. Generates fake memory content that appears to contain sensitive information
-3. Simulates a delay to mimic the process of memory extraction
-4. Creates an "Extracted Credentials" section that appears to contain credentials harvested from memory
+1. Attempts to attach to target process using ptrace/strace for memory access
+2. Enumerates /proc/[pid]/maps to identify readable memory regions
+3. Uses gcore (if available) to create process memory dumps
+4. Reads directly from /proc/[pid]/mem using dd for memory extraction
+5. Searches extracted memory for credential patterns (password, token, key, auth)
+6. Creates session-specific dump directories with realistic artefacts
 
 Parameters:
 - `target_pid`: PID of process to dump memory from (0 = self)
@@ -193,17 +249,17 @@ Detection opportunities:
 ### T1056.001 - Keylogging
 
 Description:  
-Simulates a keylogger that captures user keystrokes to steal credentials and sensitive information.
+Executes REAL keylogging techniques by accessing input devices and capturing keyboard events to harvest credentials and sensitive information.
 
 How it works:
-1. Creates a log file to simulate keylogger output
-2. Simulates capturing of keystrokes over a specified duration
-3. Records simulated sensitive information like SSH logins, passwords, and web credentials
-4. Timestamps each simulated keystroke to appear realistic
+1. Enumerates available input devices using xinput list and /dev/input
+2. Attempts to read from keyboard device files for keystroke capture
+3. Records captured keystrokes with timestamps in a log file
+4. Identifies potential credentials in captured input patterns
 
 Parameters:
 - `log_file`: Path to save the keylogger output
-- `duration`: Duration in seconds to run the keylogger simulation
+- `duration`: Duration in seconds to run the keylogger
 
 Artefacts:
 - Keylogger log file (cleaned up automatically after execution)
@@ -270,21 +326,21 @@ Detection opportunities:
 - Process memory analysis and credential extraction attempts
 - Creation of memory dump files in temporary directories
 
-### T1110.002 - Hydra Brute Force Tool Simulation
+### T1110.002 - Hydra Brute Force Tool Execution
 
 Description:  
-Simulates execution of the Hydra password brute-forcing tool by downloading a test file and executing it as 'hydra' to generate realistic attack tool telemetry.
+Executes the Hydra password brute-forcing tool with visible attack parameters to generate REAL brute force telemetry for EDR detection.
 
 How it works:
 1. Downloads the Palo Alto Wildfire ELF test file (harmless malware test binary)
-2. Saves the file with the name 'hydra' to simulate the password brute-force tool
-3. Makes the file executable to trigger execution-based detections
-4. Attempts to execute the binary (will fail safely but generates telemetry)
-5. Logs all activities including download, file operations, and execution attempts
+2. Saves the file as 'hydra' to replicate the password brute-force tool
+3. Makes the file executable and executes with realistic attack arguments
+4. Runs hydra with visible process arguments: -l user -P wordlist target service
+5. Generates process tree telemetry showing brute force attack patterns
 
 Parameters:
-- `hydra_path`: Path where the simulated hydra binary will be saved (default: /tmp/hydra)
-- `target_service`: Simulated target service type (ssh, ftp, http, etc.) (default: ssh)
+- `hydra_path`: Path where the hydra binary will be saved (default: /tmp/hydra)
+- `target_service`: Target service type (ssh, ftp, http, etc.) (default: ssh)
 - `log_file`: Path to save brute force attempt log (default: /tmp/signalbench_hydra_log)
 
 Artefacts:
@@ -302,7 +358,7 @@ Detection opportunities:
 ### T1003.008 - /etc/passwd and /etc/shadow
 
 Description:  
-Performs REAL extraction and analysis of /etc/passwd and /etc/shadow files to harvest user account information and password hashes. This supersized technique reads actual system files and attempts password hash cracking whilst remaining 100% safe and non-destructive.
+Performs REAL extraction and analysis of /etc/passwd and /etc/shadow files to harvest user account information and password hashes. This technique reads actual system files and attempts password hash cracking whilst remaining 100% safe and non-destructive.
 
 How it works:
 1. Reads REAL /etc/passwd file to enumerate all user accounts
@@ -422,7 +478,7 @@ Detection opportunities:
 ### T1562.002 - Disable Linux Audit Logs
 
 Description:  
-Simulates an attempt to disable or manipulate audit logs to avoid detection.
+Executes REAL audit log manipulation commands to disable or interfere with system logging.
 
 How it works:
 1. Creates a file that simulates rules to disable Linux audit logging
@@ -442,7 +498,7 @@ Detection opportunities:
 ### T1070.003 - Clear Command History
 
 Description:  
-Simulates clearing of bash command history to remove evidence of attacker activity.
+Executes REAL bash history clearing commands to remove evidence of attacker activity.
 
 How it works:
 1. Creates a backup of the current user's bash history
@@ -462,7 +518,7 @@ Detection opportunities:
 ### T1574.007 - Path Interception
 
 Description:  
-Simulates path interception by modifying environment variables to control which binaries are executed.
+Executes REAL PATH interception by modifying environment variables to control which binaries are executed.
 
 How it works:
 1. Documents current PATH and LD_LIBRARY_PATH variables
@@ -483,7 +539,7 @@ Detection opportunities:
 ### T1036.003 - Masquerading
 
 Description:  
-Performs REAL process masquerading by copying system binaries and executing them with spoofed names to evade detection by mimicking legitimate system daemons. This supersized technique creates actual processes with misleading names and manipulated command-line arguments.
+Performs REAL process masquerading by copying system binaries and executing them with spoofed names to evade detection by mimicking legitimate system daemons. This technique creates actual processes with misleading names and manipulated command-line arguments.
 
 How it works:
 1. Copies REAL system binaries (/bin/sh, /bin/bash) to temporary locations with legitimate daemon names (crond, systemd, sshd)
@@ -516,7 +572,7 @@ Detection opportunities:
 ### T1070.004 - File Deletion
 
 Description:  
-Performs REAL secure file deletion using multiple overwriting techniques to simulate evidence destruction and anti-forensics activities. This supersized technique uses actual deletion tools (shred, wipe, srm) whilst maintaining 100% safety by only deleting test files.
+Performs REAL secure file deletion using multiple overwriting techniques to simulate evidence destruction and anti-forensics activities. This technique uses actual deletion tools (shred, wipe, srm) whilst maintaining 100% safety by only deleting test files.
 
 How it works:
 1. Creates test files with realistic sensitive content (credentials, logs, database dumps)
@@ -700,7 +756,7 @@ Detection opportunities:
 ### T1021.004 - SSH Lateral Movement
 
 Description:  
-Simulates attempts to move laterally through a network using SSH.
+Executes REAL SSH lateral movement attempts using sshpass and ssh commands.
 
 How it works:
 1. Attempts SSH connections to specified target hosts
@@ -725,7 +781,7 @@ Detection opportunities:
 ### T1547.002 - Startup Folder
 
 Description:  
-Establishes REAL persistence by creating fully functional .desktop files in the user's XDG autostart directory that will execute commands automatically at user login. This supersized technique creates authentic persistence mechanisms that survive reboots.
+Establishes REAL persistence by creating fully functional .desktop files in the user's XDG autostart directory that will execute commands automatically at user login. This technique creates authentic persistence mechanisms that survive reboots.
 
 How it works:
 1. Creates the ~/.config/autostart directory if it doesn't exist
@@ -758,7 +814,7 @@ Detection opportunities:
 ### T1053.003 - Cron Job
 
 Description:  
-Creates REAL scheduled persistence by installing actual cron jobs that execute commands at specified intervals. This supersized technique modifies the user's live crontab to establish authentic time-based persistence mechanisms.
+Creates REAL scheduled persistence by installing actual cron jobs that execute commands at specified intervals. This technique modifies the user's live crontab to establish authentic time-based persistence mechanisms.
 
 How it works:
 1. Backs up the current user's crontab using crontab -l
@@ -828,7 +884,7 @@ Detection opportunities:
 ### T1505.003 - Web Shell Deployment
 
 Description:  
-Deploys REAL, functional web shells that can handle HTTP requests and execute commands on Linux-based web servers. This supersized technique creates authentic PHP, JSP, and Python backdoors with actual remote command execution capabilities for comprehensive testing.
+Deploys REAL, functional web shells that can handle HTTP requests and execute commands on Linux-based web servers. This technique creates authentic PHP, JSP, and Python backdoors with actual remote command execution capabilities for comprehensive testing.
 
 How it works:
 1. Creates web root directory structure (/tmp/www for safe testing)
@@ -868,7 +924,7 @@ Detection opportunities:
 ### T1098 - Account Manipulation
 
 Description:  
-Performs REAL account manipulation by modifying user account properties, adding SSH keys, and changing group memberships to establish persistent access. This supersized technique makes actual changes to user accounts whilst maintaining 100% safety and reversibility.
+Performs REAL account manipulation by modifying user account properties, adding SSH keys, and changing group memberships to establish persistent access. This technique makes actual changes to user accounts whilst maintaining 100% safety and reversibility.
 
 How it works:
 1. Creates test user accounts using useradd for manipulation testing
@@ -913,7 +969,7 @@ Detection opportunities:
 ### T1548.003 - Sudoers Modification
 
 Description:  
-Simulates modifying the sudoers file to grant elevated privileges.
+Executes REAL sudoers file modification attempts to grant elevated privileges.
 
 How it works:
 1. Creates a temporary sudoers file in the /etc/sudoers.d/ directory
@@ -959,7 +1015,7 @@ Detection opportunities:
 ### T1548.001 - SUID Binary
 
 Description:  
-Simulates setting the SUID bit on a binary for privilege escalation.
+Executes REAL SUID bit setting attempts on binaries for privilege escalation.
 
 How it works:
 1. Creates a small executable file
@@ -1024,12 +1080,435 @@ Detection opportunities:
 - Exploitation indicators
 - Privilege escalation attempts
 
+## CONTAINER_ESCAPE Techniques (T1611)
+
+Container escape techniques detect and simulate methods for breaking out of containerised environments to access the underlying host system. Based on Unit42 research, deepce enumeration capabilities, and MITRE ATT&CK T1611 specifications. These techniques execute real commands to generate EDR/XDR telemetry whilst remaining safe and non-destructive.
+
+### T1611-SOCK - Docker Socket Escape
+
+Description:  
+Detects and attempts container escape via exposed Docker socket. When /var/run/docker.sock is mounted inside a container, an attacker can communicate with the Docker daemon to create privileged containers, mount the host filesystem, and execute commands on the host. This technique performs ACTUAL escape exploitation by spawning a privileged container that creates a marker file on the host filesystem.
+
+How it works:
+1. Checks for Docker socket at /var/run/docker.sock and alternative locations
+2. Executes REAL Docker CLI commands and Docker API calls
+3. Enumerates Docker version and configuration
+4. Lists running containers, images, and networks on the host
+5. Attempts to pull alpine image for escape demonstration
+6. SPAWNS A PRIVILEGED CONTAINER that mounts host root and creates a marker file
+7. Verifies escape success by checking for marker file creation on host
+8. Cleans up spawned container and marker file automatically
+
+Commands Executed:
+```bash
+docker version                              # Docker version info
+docker info                                 # Docker daemon configuration
+docker ps -a                                # All containers (running/stopped)
+docker images                               # Available images
+docker network ls                           # Docker networks
+curl --unix-socket /var/run/docker.sock http://localhost/version    # Docker API version
+curl --unix-socket /var/run/docker.sock http://localhost/info       # Docker API info
+curl --unix-socket /var/run/docker.sock http://localhost/containers/json  # Container list
+socat - UNIX-CONNECT:/var/run/docker.sock   # Socket connectivity test
+docker pull alpine                          # Pull escape base image
+docker run --rm --privileged -v /:/host alpine /bin/sh -c "echo 'SignalBench...' > /host/tmp/signalbench_socket_escape_marker"  # ACTUAL ESCAPE
+```
+
+Parameters:
+- `socket_path`: Path to Docker socket (default: /var/run/docker.sock)
+- `output_dir`: Directory for enumeration output files
+- `test_api`: Attempt Docker API calls via curl/socat
+
+Artefacts:
+- Docker version JSON file (cleaned up automatically after execution)
+- Container list JSON file (cleaned up automatically after execution)
+- Escape simulation script (cleaned up automatically after execution)
+- Socket escape report (cleaned up automatically after execution)
+- Host marker file: /tmp/signalbench_socket_escape_marker (cleaned up automatically)
+
+XDR Detection Signatures:
+- docker run --privileged with -v /:/host mount pattern
+- Container spawned from within container (nested container creation)
+- File creation on host /tmp from container process
+- Docker socket API calls from non-daemon processes
+- Alpine image pull followed by privileged container execution
+- curl/socat connections to Docker socket
+- Container creation with full host filesystem mount
+- POST /containers/create API calls with privileged config (Unit42)
+- POST /containers/{id}/start API calls from container (Unit42)
+- DELETE /containers/{id} API calls (container removal)
+- Docker API responses containing container IDs
+- JSON body with "Privileged":true, "Binds":["/:/host"] patterns
+
+### T1611-PRIV - Privileged Container Escape
+
+Description:  
+Detects privileged container configurations that enable host escape. Executes capability enumeration, device discovery, and mount operations to generate telemetry. When namespace escape succeeds, CREATES A MARKER FILE ON THE HOST FILESYSTEM to prove host access.
+
+How it works:
+1. Parses capabilities from /proc/self/status
+2. Executes commands for capability and device enumeration
+3. Attempts mount operations requiring elevated privileges
+4. Enumerates block devices and namespace information
+5. Tests namespace escape via nsenter --target 1 --all
+6. ON SUCCESS: Creates marker file /tmp/signalbench_priv_escape_marker on host via nsenter
+7. Cleans up marker file automatically via nsenter during cleanup
+
+Commands Executed:
+```bash
+capsh --print                               # Capability enumeration
+lsblk                                       # Block device listing
+fdisk -l                                    # Disk partition information
+blkid                                       # Block device attributes
+mount --bind / /tmp/signalbench_bind_test   # Bind mount attempt
+mount -t tmpfs tmpfs /tmp/signalbench_tmpfs_test  # tmpfs mount attempt
+nsenter --target 1 --mount -- ls /          # Namespace escape attempt
+nsenter --target 1 --uts -- hostname        # UTS namespace probe
+nsenter --target 1 --pid -- ps              # PID namespace probe
+nsenter --target 1 --all -- /bin/sh -c "echo 'SignalBench...' > /tmp/signalbench_priv_escape_marker"  # ACTUAL HOST ACCESS
+```
+
+Parameters:
+- `output_dir`: Directory for capability enumeration output
+- `test_mount`: Attempt test mount operations (requires CAP_SYS_ADMIN)
+
+Artefacts:
+- Capabilities dump file (cleaned up automatically after execution)
+- Block devices enumeration (cleaned up automatically after execution)
+- Mount test results (cleaned up automatically after execution)
+- Privileged escape report (cleaned up automatically after execution)
+- Host marker file: /tmp/signalbench_priv_escape_marker (cleaned up automatically via nsenter)
+
+XDR Detection Signatures:
+- nsenter --target 1 --all with command execution
+- File creation on host filesystem via namespace escape
+- capsh --print capability enumeration from containers
+- lsblk/fdisk/blkid device discovery commands
+- mount --bind and mount -t tmpfs attempts
+- Process targeting PID 1 from container
+- CAP_SYS_ADMIN + CAP_SYS_PTRACE usage patterns
+
+### T1611-MOUNT - Sensitive Mount Escape
+
+Description:  
+Detects sensitive host filesystem mounts that enable container escape. Executes mount enumeration, file access attempts, and write tests to generate telemetry. When host filesystem is accessible, PERFORMS CHROOT ESCAPE to create marker file on host.
+
+How it works:
+1. Enumerates all mount points
+2. Attempts to read sensitive files from mounted paths
+3. Tests write access to mounted filesystems
+4. Identifies Docker socket and sensitive host path mounts
+5. CHROOTS INTO HOST FILESYSTEM to prove full host access
+6. Creates marker file /tmp/signalbench_mount_escape_marker on host via chroot
+7. Cleans up marker file automatically via chroot during cleanup
+
+Commands Executed:
+```bash
+findmnt -l                                  # List all mount points
+df -h                                       # Filesystem disk usage
+cat /etc/shadow                             # Read shadow file (if accessible)
+cat /etc/sudoers                            # Read sudoers file
+cat /root/.ssh/id_rsa                       # Read SSH private key
+cat /root/.ssh/authorized_keys              # Read SSH authorized keys
+ls -la /hostfs/                             # List host filesystem mount
+ls -la /host/                               # List alternative host mount
+touch /tmp/signalbench_write_test           # Write test in mounted path
+mount --bind / /tmp/signalbench_root_bind   # Bind mount host root
+chroot /host /bin/sh -c "echo 'SignalBench...' > /tmp/signalbench_mount_escape_marker"  # ACTUAL HOST CHROOT
+```
+
+Parameters:
+- `output_dir`: Directory for mount enumeration output
+- `test_read`: Attempt to read sensitive files from mounted paths
+- `test_write`: Test write access to mounted paths
+
+Artefacts:
+- Mount points dump file (cleaned up automatically after execution)
+- Sensitive file read results (cleaned up automatically after execution)
+- Mount escape report (cleaned up automatically after execution)
+- Host marker file: /tmp/signalbench_mount_escape_marker (cleaned up automatically via chroot)
+
+XDR Detection Signatures:
+- chroot command execution from container
+- File creation in host /tmp via chroot escape
+- findmnt and df -h mount enumeration
+- cat commands targeting /etc/shadow, /etc/sudoers
+- Access to SSH keys in /root/.ssh/
+- Write attempts to host-mounted paths (/host, /hostfs)
+- mount --bind attempts from containers
+- Sensitive file access patterns from container processes
+- ln -s creation of symlinks in /var/log (K8s escape, Unit42)
+- Symlinks pointing to / or /etc from log directories
+- touch tests on /var/log for write access checks
+- find -type l enumeration of symlinks in log paths
+- Symlink traversal attempts via /var/log/signalbench_*
+- K8s hostPath log volume symlink manipulation
+
+### T1611-CGROUP - cgroup Release Agent Escape
+
+Description:  
+Detects and exploits container escape via cgroup release_agent mechanism (CVE-2022-0492). EXECUTES ACTUAL RELEASE_AGENT SCRIPT on host by mounting cgroup, writing executable payload to release_agent, and triggering via cgroup.procs.
+
+How it works:
+1. Checks for CAP_SYS_ADMIN capability
+2. Mounts cgroup filesystem inside container
+3. Creates new cgroup and enables notify_on_release
+4. CREATES ACTUAL PAYLOAD SCRIPT that writes marker file on host
+5. Writes payload path to release_agent
+6. TRIGGERS RELEASE_AGENT by writing process to cgroup.procs and exiting
+7. Verifies escape success by checking for marker file creation
+8. Cleans up marker file and payload automatically
+
+Commands Executed:
+```bash
+cat /proc/self/cgroup                       # Current cgroup membership
+cat /proc/self/mountinfo                    # Mount namespace info
+mount | grep cgroup                         # Existing cgroup mounts
+mount -t cgroup -o rdma cgroup /tmp/signalbench_cgroup_test  # Mount cgroup
+mkdir /tmp/signalbench_cgroup_test/x        # Create cgroup directory
+echo 1 > /tmp/signalbench_cgroup_test/x/notify_on_release    # Enable notification
+cat /tmp/signalbench_cgroup_test/release_agent               # Read release_agent
+chmod +x /tmp/signalbench_cgroup_escape/cgroup_escape_payload.sh  # Make payload executable
+echo /tmp/signalbench.../payload.sh > .../release_agent      # WRITE ACTUAL PAYLOAD PATH
+sh -c 'echo $$ > .../cgroup.procs && exit 0'                 # TRIGGER RELEASE_AGENT
+```
+
+Parameters:
+- `output_dir`: Directory for cgroup escape simulation output
+- `simulate_payload`: Create payload script (EXECUTED when escape succeeds)
+
+Artefacts:
+- cgroup enumeration files (cleaned up automatically after execution)
+- Escape payload script (cleaned up automatically after execution)
+- cgroup escape report (cleaned up automatically after execution)
+- Host marker file: /tmp/signalbench_cgroup_escape_marker (cleaned up automatically)
+
+XDR Detection Signatures:
+- mount -t cgroup from container process
+- Writes to release_agent files from container
+- chmod +x on scripts in container /tmp
+- echo to notify_on_release enabling cgroup notifications
+- cgroup.procs writes triggering release_agent execution
+- CVE-2022-0492 exploitation sequence detection
+- Script execution on host triggered by cgroup release
+- File creation in host /tmp from release_agent
+- mkdir in cgroup hierarchies from container
+- cat /etc/mtab for host overlay path discovery (Unit42)
+- cat /proc/self/mountinfo for mount namespace info (Unit42)
+- Parsing of overlay upperdir paths to find host filesystem
+- Host path discovery via overlay2 storage driver paths
+
+### T1611-MODULE - Kernel Module Escape
+
+Description:  
+Detects container escape potential via kernel module loading (CAP_SYS_MODULE). Executes module enumeration and ATTEMPTS TO LOAD SUSPICIOUS FAKE MODULES to generate XDR telemetry. modprobe commands for non-existent modules fail safely but trigger security alerts.
+
+How it works:
+1. Checks for CAP_SYS_MODULE capability
+2. Executes module enumeration commands
+3. ATTEMPTS modprobe for fake suspicious modules (signalbench_rootkit, signalbench_backdoor, signalbench_keylogger)
+4. Module loading FAILS SAFELY (modules do not exist) but generates security telemetry
+5. Identifies security modules and available module tools
+
+Commands Executed:
+```bash
+lsmod                                       # List loaded modules
+modinfo ip_tables                           # Module information
+cat /proc/modules                           # Kernel module information
+ls -la /lib/modules/$(uname -r)/            # Available kernel modules
+modprobe --show-depends vfat                # Show module dependencies (read-only, safe)
+head -50 /proc/kallsyms                     # Kernel symbol table sample
+modprobe signalbench_rootkit                # ATTEMPT SUSPICIOUS MODULE LOAD (fails safely)
+modprobe signalbench_backdoor               # ATTEMPT SUSPICIOUS MODULE LOAD (fails safely)
+modprobe signalbench_keylogger              # ATTEMPT SUSPICIOUS MODULE LOAD (fails safely)
+modprobe rootkit                            # ATTEMPT SUSPICIOUS MODULE LOAD (fails safely)
+```
+Note: modprobe attempts for fake modules ALWAYS FAIL (modules do not exist) but generate
+valuable XDR telemetry for detecting malicious module loading attempts. The suspicious
+module names (rootkit, backdoor, keylogger) should trigger security alerts.
+
+Parameters:
+- `output_dir`: Directory for kernel module escape simulation output
+- `enumerate_modules`: Enumerate currently loaded kernel modules
+- `test_insmod`: Attempt suspicious module loading (generates telemetry, always fails safely)
+
+Artefacts:
+- Loaded modules list (cleaned up automatically after execution)
+- Simulated rootkit source code (cleaned up automatically after execution)
+- Module escape report (cleaned up automatically after execution)
+
+XDR Detection Signatures:
+- modprobe commands with suspicious module names (rootkit, backdoor, keylogger)
+- Module loading attempts from container processes
+- lsmod and modinfo enumeration from containers
+- Access to /lib/modules/ directory from container
+- /proc/modules access patterns
+- /proc/kallsyms access (kernel symbol enumeration)
+- CAP_SYS_MODULE capability checks
+- insmod/modprobe execution from non-root namespaces
+
+### T1611-RECON - Container Environment Reconnaissance
+
+Description:  
+Comprehensive container environment enumeration inspired by deepce. Executes DNS queries, cloud metadata access, credential hunting, and network scanning to generate telemetry.
+
+How it works:
+1. Detects container runtime and environment
+2. Performs DNS lookups and network reconnaissance
+3. Accesses cloud metadata endpoints
+4. Hunts for credentials in environment variables and files
+
+Commands Executed:
+```bash
+dig +short kubernetes.default.svc.cluster.local  # Kubernetes DNS lookup
+nslookup kubernetes.default                 # Alternative DNS lookup
+curl -s http://169.254.169.254/latest/meta-data/  # AWS metadata endpoint
+curl -s http://169.254.169.254/computeMetadata/v1/  # GCP metadata endpoint
+curl -s http://169.254.169.254/metadata/instance  # Azure metadata endpoint
+env | grep -iE "(PASSWORD|SECRET|TOKEN|KEY|API|CREDENTIAL)"  # Credential hunt
+cat /var/run/secrets/kubernetes.io/serviceaccount/token  # K8s service account token
+cat /var/run/secrets/kubernetes.io/serviceaccount/ca.crt  # K8s CA certificate
+nc -zv $(ip route | grep default | awk '{print $3}') 22 2375 10250  # Gateway port scan
+cat ~/.aws/credentials                      # AWS credentials file
+cat ~/.docker/config.json                   # Docker config
+```
+
+Parameters:
+- `output_dir`: Directory for reconnaissance output
+- `scan_gateway`: Scan host gateway for common services
+- `credential_hunt`: Search for credentials in environment and files
+
+Artefacts:
+- Environment variables dump (redacted) (cleaned up automatically after execution)
+- DNS lookup results (cleaned up automatically after execution)
+- Cloud metadata responses (cleaned up automatically after execution)
+- Reconnaissance report (cleaned up automatically after execution)
+
+XDR Detection Signatures:
+- dig/nslookup DNS queries for Kubernetes services
+- curl requests to 169.254.169.254 metadata endpoints
+- env | grep patterns for credential hunting
+- Access to Kubernetes service account tokens
+- Port scanning of gateway IP addresses
+- Access to credential files (.aws, .docker)
+- ls -la /.dockerenv container detection (deepce)
+- cat /proc/1/cgroup for container ID extraction (deepce)
+- grep 'overlay|aufs' /proc/self/mountinfo (deepce)
+- cat /proc/self/status | grep Cap capability check (deepce)
+- ls -la /proc/1/ns/ namespace enumeration (deepce)
+- grep Seccomp /proc/self/status security check (deepce)
+- cat /proc/self/attr/current AppArmor profile check (deepce)
+- which docker crictl kubectl ctr tool discovery (deepce)
+- /var/run/docker.sock socket presence checks (deepce)
+- /dev/sda block device access detection (deepce)
+
+### T1611-PIDNS - Host PID Namespace Escape
+
+Description:  
+Detects container escape potential via shared host PID namespace (--pid=host). Executes process enumeration, ptrace attempts, and namespace escape commands. When escape succeeds, CREATES MARKER FILE ON HOST via nsenter.
+
+How it works:
+1. Checks for CAP_SYS_PTRACE capability
+2. Executes process enumeration commands
+3. Attempts ptrace operations against host processes
+4. Tests namespace escape via nsenter --target 1 --all
+5. ON SUCCESS: Creates marker file /tmp/signalbench_pidns_escape_marker on host via nsenter
+6. Cleans up marker file automatically via nsenter during cleanup
+
+Commands Executed:
+```bash
+ps aux                                      # Full process listing
+cat /proc/1/cmdline                         # PID 1 command line
+ls -la /proc/1                              # PID 1 directory listing
+readlink /proc/1/ns/pid                     # PID 1 namespace
+readlink /proc/self/ns/pid                  # Current PID namespace
+pstree -p                                   # Process tree with PIDs
+cat /proc/1/status                          # PID 1 status information
+timeout 1 strace -p 1                       # Attempt to trace PID 1
+timeout 2 gdb -p 1 -batch -ex quit          # Attempt to debug PID 1
+nsenter --target 1 --all -- id              # Namespace escape attempt
+nsenter --target 1 --all -- /bin/sh -c "echo 'SignalBench...' > /tmp/signalbench_pidns_escape_marker"  # ACTUAL HOST ACCESS
+cat /proc/1/environ                         # PID 1 environment variables
+```
+
+Parameters:
+- `output_dir`: Directory for PID namespace escape simulation output
+- `enumerate_processes`: Enumerate visible processes to detect host PID namespace
+- `test_ptrace`: Attempt ptrace operations against host processes
+
+Artefacts:
+- Process list dump (cleaned up automatically after execution)
+- PID 1 information files (cleaned up automatically after execution)
+- Ptrace escape commands (cleaned up automatically after execution)
+- PID namespace escape report (cleaned up automatically after execution)
+- Host marker file: /tmp/signalbench_pidns_escape_marker (cleaned up automatically via nsenter)
+
+XDR Detection Signatures:
+- nsenter --target 1 --all with command execution
+- File creation on host via namespace escape
+- ps aux and pstree commands from containers
+- Access to /proc/1/ files (cmdline, status, environ)
+- strace -p 1 and gdb -p 1 ptrace attempts
+- readlink on /proc/*/ns/pid namespace files
+- Containers started with --pid=host flag
+- CAP_SYS_PTRACE capability usage from container
+
+### T1611-SUID - SUID Privilege Escalation Escape
+
+Description:  
+Detects container escape potential via SUID binary manipulation on shared directories. When a host directory is mounted into a container with write access, setting the SUID bit on executables can lead to privilege escalation on the host when executed by host users.
+
+How it works:
+1. Checks if running as root (required to set SUID bit)
+2. Checks for same user namespace as host (required for SUID to work on host)
+3. Creates test SUID binary in output directory
+4. SETS SUID BIT using chmod u+s and chmod 4755
+5. Enumerates existing SUID and SGID binaries on system
+6. Tests SUID bit manipulation on shared mount points
+7. Identifies common dangerous SUID binaries
+8. Checks mount options for nosuid restrictions
+
+Commands Executed:
+```bash
+id                                          # Check current user/permissions
+readlink /proc/self/ns/user                 # Self user namespace
+readlink /proc/1/ns/user                    # Host user namespace (same = escape possible)
+chmod +x /tmp/signalbench_suid_test.sh      # Make test binary executable
+chmod u+s /tmp/signalbench_suid_test.sh     # SET SUID BIT (escape vector)
+chmod 4755 /tmp/signalbench_suid_test_alt   # Alternative SUID method
+ls -la /tmp/signalbench_suid_escape/        # Verify SUID bit with -rws pattern
+stat /tmp/signalbench_suid_test.sh          # Detailed file permissions
+find /usr -perm -4000 2>/dev/null | head -20  # Enumerate existing SUID binaries
+find /usr -perm -2000 2>/dev/null | head -10  # Enumerate existing SGID binaries
+mount | grep nosuid                         # Check nosuid mount restrictions
+chmod u+s /shared_mount/signalbench_suid_test  # SUID on shared directory (ACTUAL ESCAPE)
+```
+
+Parameters:
+- `output_dir`: Directory for SUID escape simulation output (default: /tmp/signalbench_suid_escape)
+- `test_shared_dirs`: Attempt SUID manipulation on detected shared mount points
+
+Artefacts:
+- SUID test binary (cleaned up automatically after execution)
+- SUID enumeration results (cleaned up automatically after execution)
+- SUID escape report (cleaned up automatically after execution)
+
+XDR Detection Signatures:
+- chmod u+s or chmod 4755 commands from container
+- SUID bit modifications on files in shared directories
+- find -perm -4000 SUID binary enumeration
+- find -perm -2000 SGID binary enumeration
+- readlink /proc/*/ns/user namespace comparison
+- File permission changes (setuid/setgid) on mount points
+- Container processes modifying file permissions to include 's' bit
+- Dangerous SUID binaries (python, bash, find, vim, nmap, etc.)
+
 ## EXFILTRATION Techniques
 
 ### T1048 - Exfiltration Over Alternative Protocol
 
 Description:  
-Simulates data exfiltration using alternative protocols such as DNS, ICMP, or HTTP.
+Executes REAL data exfiltration using alternative protocols such as DNS, ICMP, or HTTP.
 
 How it works:
 1. Creates a file with simulated sensitive data for exfiltration
@@ -1180,7 +1659,7 @@ Detection opportunities:
 ### T1119 - Automated Collection
 
 Description:  
-Performs REAL automated data collection by recursively enumerating and harvesting files from target directories. This supersized technique creates actual file archives containing collected data whilst maintaining 100% safety by only accessing non-sensitive test locations.
+Performs REAL automated data collection by recursively enumerating and harvesting files from target directories. This technique creates actual file archives containing collected data whilst maintaining 100% safety by only accessing non-sensitive test locations.
 
 How it works:
 1. Performs REAL recursive directory enumeration using find and ls -R
@@ -1239,7 +1718,7 @@ Detection opportunities:
 ### T1496 - Resource Hijacking
 
 Description:  
-Performs REAL resource hijacking by consuming CPU, memory, and disk I/O to simulate cryptomining or resource exhaustion attacks. This supersized technique uses actual system stress tools whilst maintaining 100% safety through controlled execution and automatic cleanup.
+Performs REAL resource hijacking by consuming CPU, memory, and disk I/O to simulate cryptomining or resource exhaustion attacks. This technique uses actual system stress tools whilst maintaining 100% safety through controlled execution and automatic cleanup.
 
 How it works:
 1. Implements REAL CPU consumption using stress-ng or custom CPU burners
@@ -1374,3 +1853,338 @@ Detection opportunities:
 **References:**
 - Mandiant Report: "Suspected APT Actors Leverage Bypass Techniques, Pulse Secure Zero-Day"
 - MITRE ATT&CK Software: https://attack.mitre.org/software/S1109/
+
+## PRIVILEGE ESCALATION - GTFOBins Integration
+
+### T1548-GTFOBINS - GTFOBins Privilege Escalation Probe
+
+**Attribution:** Based on GTFOBins (gtfobins.github.io), Traitor (liamg/traitor), and LinPEAS (carlospolop/PEASS-ng)
+
+Description:  
+Comprehensive read-only probe of 100+ GTFOBins binaries with sudo permission parsing and SUID bit detection. Identifies exploitable privilege escalation vectors without performing actual exploitation.
+
+GTFOBins categories scanned (100+ binaries):
+
+| Category | Example Binaries | Escape Method |
+|----------|------------------|---------------|
+| Direct shells | ash, bash, sh, zsh, dash, ksh | Direct shell spawn |
+| Interactive escape | less, more, man, ftp, psql | !sh / \! command |
+| Editor escape | vim, vi, nano, emacs, ed | :shell / !/bin/sh |
+| Scripting | python, perl, ruby, php, lua, node | os.system() / exec |
+| Text processing | awk, gawk, sed, find, xargs | System/exec calls |
+| Environment wrappers | env, nice, nohup, time, timeout | Shell spawn wrapper |
+| Package managers | apt, dpkg, pip, gem, npm | Changelog/install escape |
+| Compilers | gcc, make, cmake | Wrapper execution |
+| Network tools | nmap, socat, wget, curl | Script/write execution |
+| Container tools | docker, kubectl, lxc | Container mount escape |
+| System utilities | systemctl, journalctl, git | Pager escape (PAGER=) |
+| Archive tools | tar, zip, 7z | Checkpoint/action exec |
+| Capabilities | setcap, getcap, capsh | Capability manipulation |
+
+How it works:
+1. Loads database of 100+ GTFOBins entries with escape methods
+2. Scans /usr/bin, /usr/sbin, /bin, /sbin, /usr/local/bin for installed binaries
+3. Parses sudo -l -n output to identify sudo-allowed commands
+4. Detects SUID binaries via find -perm -4000 in each directory
+5. Cross-references installed binaries against GTFOBins database
+6. Reports exploitable vectors with escape commands (does NOT execute)
+7. Generates comprehensive report with severity assessment
+
+Commands executed:
+```bash
+sudo -l -n                                    # Parse sudo permissions
+find /usr/bin -perm -4000 -type f            # Find SUID binaries
+find /usr/sbin -perm -4000 -type f
+find /bin -perm -4000 -type f
+find /sbin -perm -4000 -type f
+find /usr/local/bin -perm -4000 -type f
+```
+
+Parameters:
+- `artefact_path`: Path to save probe results (default: /tmp/signalbench_gtfobins_probe.txt)
+- `check_sudo`: Whether to check sudo permissions (default: true)
+- `check_suid`: Whether to scan for SUID binaries (default: true)
+
+Artefacts:
+- GTFOBins probe results file (cleaned up automatically)
+
+Detection opportunities:
+- sudo -l enumeration attempts
+- find commands with -perm -4000 (SUID search)
+- Sequential stat/access to multiple system binaries
+- Pattern of privilege escalation reconnaissance
+- Reading of /etc/sudoers or sudo cache
+- File creation containing escalation findings
+
+## CONTAINER ESCAPE - Advanced Breakout Techniques
+
+### T1611-BREAKOUT - Advanced Container Breakout Vectors
+
+**Attribution:** Based on deepce, Unit42 research, LinPEAS, and CDK container exploitation toolkit
+
+Description:  
+READ-ONLY analysis of kernel-level container breakout vectors. Probes core_pattern, binfmt_misc handlers, uevent_helper, and related kernel parameters for escape potential. Uses permission checks (stat) to detect writability without modification.
+
+How it works:
+1. Core Pattern Analysis:
+   - Reads /proc/sys/kernel/core_pattern to check core dump handling
+   - Detects pipe handlers (|/path/to/handler) that could enable code execution
+   - Checks write permissions via stat() without modifying
+   - Queries sysctl kernel.core_pattern for verification
+2. Binfmt_misc Analysis:
+   - Checks if /proc/sys/fs/binfmt_misc is mounted
+   - Reads /proc/sys/fs/binfmt_misc/status
+   - Checks register file permissions for handler injection potential
+   - Lists existing handlers via ls -la
+3. Uevent Helper Analysis:
+   - Reads /sys/kernel/uevent_helper content
+   - Checks permissions for potential exploitation
+4. Additional Kernel Vectors:
+   - Reads /proc/sys/kernel/modprobe (module loader path)
+   - Reads /proc/sys/kernel/hotplug (hotplug helper)
+   - Reads /proc/sys/kernel/sysrq (magic SysRq status)
+
+Commands executed:
+```bash
+cat /proc/sys/kernel/core_pattern
+sysctl kernel.core_pattern
+ls -la /proc/sys/fs/binfmt_misc
+cat /proc/sys/fs/binfmt_misc/status
+cat /sys/kernel/uevent_helper
+cat /proc/sys/kernel/modprobe
+cat /proc/sys/kernel/hotplug
+cat /proc/sys/kernel/sysrq
+```
+
+Parameters:
+- `output_dir`: Directory for output files (default: /tmp/signalbench_breakout)
+- `test_core_pattern`: Analyse core_pattern configuration (default: true)
+- `test_binfmt`: Analyse binfmt_misc handlers (default: true)
+- `test_uevent`: Analyse uevent_helper settings (default: true)
+
+Artefacts:
+- Breakout analysis report (cleaned up automatically)
+
+Detection opportunities:
+- Reads of /proc/sys/kernel/core_pattern
+- sysctl queries for kernel.core_pattern
+- Directory listing of /proc/sys/fs/binfmt_misc
+- Access to /sys/kernel/uevent_helper
+- Reads of kernel modprobe/hotplug paths
+- CAP_SYS_ADMIN capability checks
+- Stat calls on kernel tunable paths
+
+### T1611-CVE - Container Runtime CVE Checks
+
+**Attribution:** Based on LinPEAS, Traitor, and deepce vulnerability checks
+
+Description:  
+Checks for known container runtime vulnerabilities including CVE-2019-5736 (runc /proc/self/exe overwrite), CVE-2020-15257 (containerd abstract socket hijacking), CVE-2022-0847 (Dirty Pipe), and CVE-2016-5195 (Dirty COW). Performs version detection and vulnerability assessment without exploitation.
+
+CVEs checked:
+
+| CVE | Component | Vulnerable Versions | Description |
+|-----|-----------|---------------------|-------------|
+| CVE-2019-5736 | runc | < 1.0.0-rc6 | Container escape via /proc/self/exe overwrite |
+| CVE-2020-15257 | containerd | < 1.3.9, 1.4.x < 1.4.3 | Abstract socket hijacking escape |
+| CVE-2022-0847 | Kernel | 5.8 - 5.16.11 | Dirty Pipe arbitrary file overwrite |
+| CVE-2016-5195 | Kernel | < 4.8.3 | Dirty COW copy-on-write race condition |
+
+How it works:
+1. Checks runc version at /usr/bin/runc, /usr/sbin/runc, /usr/local/bin/runc
+2. Parses version to detect CVE-2019-5736 vulnerable versions
+3. Checks containerd version for CVE-2020-15257
+4. Parses kernel version for Dirty Pipe and Dirty COW vulnerabilities
+5. Queries Docker daemon version
+6. Reports [VULNERABLE] or [SAFE] status for each component
+7. Generates comprehensive vulnerability report
+
+Commands executed:
+```bash
+runc --version
+containerd --version
+uname -r
+cat /proc/version
+docker version --format "{{.Server.Version}}"
+```
+
+Parameters:
+- `output_dir`: Directory for output files (default: /tmp/signalbench_cve)
+
+Artefacts:
+- CVE check results log (cleaned up automatically)
+
+Detection opportunities:
+- Version enumeration commands (runc --version, containerd --version)
+- Kernel version enumeration (uname -r, /proc/version access)
+- Docker daemon queries
+- Sequential runtime version checks
+- CVE reconnaissance patterns
+
+### T1611-NS - Namespace Escape Detection
+
+Description:  
+Probes Linux namespace isolation boundaries to detect shared namespaces between container and host. Compares namespace inodes between current process and init (PID 1) to identify escape vectors.
+
+Namespaces checked:
+- cgroup - Control group namespace
+- ipc - Inter-process communication namespace
+- mnt - Mount namespace (most critical for escape)
+- net - Network namespace
+- pid - Process ID namespace
+- user - User namespace
+- uts - UTS (hostname) namespace
+
+How it works:
+1. Reads namespace symlinks from /proc/self/ns/* for current process
+2. Reads namespace symlinks from /proc/1/ns/* for init (PID 1)
+3. Extracts and compares inode numbers from symlink targets
+4. Identifies shared namespaces (same inode = shared with host)
+5. If PID namespace shared, attempts nsenter to demonstrate access
+6. Lists namespace details via ls -la
+7. Reports escape vectors based on shared namespaces
+
+Commands executed:
+```bash
+readlink /proc/self/ns/{cgroup,ipc,mnt,net,pid,user,uts}
+readlink /proc/1/ns/{cgroup,ipc,mnt,net,pid,user,uts}
+ls -la /proc/self/ns
+nsenter --target 1 --pid -- ps aux   # If PID namespace shared
+```
+
+Parameters:
+- `output_dir`: Directory for output files (default: /tmp/signalbench_ns)
+
+Artefacts:
+- Namespace enumeration results (cleaned up automatically)
+- Host process list if escape succeeds (cleaned up automatically)
+
+Detection opportunities:
+- Reading /proc/self/ns/* and /proc/1/ns/* symlinks
+- Namespace inode comparisons
+- nsenter execution targeting PID 1
+- ls commands on /proc/self/ns directory
+- Capability enumeration for namespace operations
+
+## COMMAND AND CONTROL - IOC-Based Detection
+
+### T1071-IOC - Suspicious Domain Connections
+
+**Attribution:** Based on ttp-bench IOC patterns and threat intelligence feeds
+
+Description:  
+Connects to known malicious and suspicious domains to generate C2-like network telemetry. Includes connections to suspicious TLDs (.tk, .ru, .cn), DGA-like high-entropy domains, and TEST-NET IP addresses per RFC 5737 for safe testing.
+
+Domains and IPs tested:
+
+| Target | Category |
+|--------|----------|
+| signalbench-c2-test.tk | Suspicious TLD (.tk) |
+| signalbench-malware.ru | Suspicious TLD (.ru) |
+| signalbench-backdoor.cn | Suspicious TLD (.cn) |
+| signalbench-rat.xyz | Suspicious TLD (.xyz) |
+| signalbench-payload.top | Suspicious TLD (.top) |
+| xk8f2m9p3q.t1071.signalbench.sigre.xyz | DGA-like pattern |
+| a1b2c3d4e5f6.t1071.signalbench.sigre.xyz | DGA-like pattern |
+| q9w8e7r6t5.t1071.signalbench.sigre.xyz | DGA-like pattern |
+| update.signalbench-services.com | Update masquerading |
+| cdn.signalbench-delivery.net | CDN masquerading |
+| api.signalbench-auth.io | API masquerading |
+| 192.0.2.1 | TEST-NET-1 IP (RFC 5737) |
+| 198.51.100.1 | TEST-NET-2 IP (RFC 5737) |
+| 203.0.113.1 | TEST-NET-3 IP (RFC 5737) |
+| signalbench.onion.link | Tor proxy pattern |
+| pool.signalbench-mining.com | Mining pool pattern |
+| stratum.signalbench-crypto.net | Stratum protocol pattern |
+
+How it works:
+1. Displays all target domains/IPs to console before testing
+2. Attempts HTTP connections to 17 suspicious domains/IPs via curl
+3. Performs DNS lookups via dig for each target
+4. Logs connection results (HTTP code, timing, resolved IP)
+5. Reports success/failure status for each connection in real-time
+6. Generates comprehensive connection log for analysis
+
+Commands executed:
+```bash
+curl -s -o /dev/null -w "%{http_code},%{time_total},%{remote_ip}" --max-time 3 --connect-timeout 3 http://{target}
+dig +short +time=1 +tries=1 {target}
+```
+
+Parameters:
+- `log_file`: Path to save connection log (default: /tmp/signalbench_suspicious_domains.log)
+- `timeout`: Connection timeout in seconds (default: 3)
+
+Artefacts:
+- Connection attempt log (cleaned up automatically)
+
+Detection opportunities:
+- DNS queries to suspicious TLDs (.tk, .ru, .cn, .xyz, .top)
+- Connections to known malicious infrastructure patterns
+- High-entropy domain name patterns (DGA detection)
+- Beaconing behaviour patterns
+- Mining pool connection patterns (pool.*, stratum.*)
+- Tor proxy patterns (.onion.link)
+- Connections to TEST-NET IP ranges
+- CDN/API masquerading domain patterns
+
+## DEFENSE EVASION - Process Manipulation
+
+### T1036-PROC - Process Name Masquerading
+
+**Attribution:** Based on ttp-bench masquerading patterns
+
+Description:  
+Changes process name at runtime using prctl(PR_SET_NAME) to mimic legitimate system processes like [kworker], [migration], sshd, or systemd. Demonstrates how malware evades process listing detection.
+
+How it works:
+1. Records original process name from /proc/self/comm
+2. Uses prctl(PR_SET_NAME) to change process name
+3. Writes directly to /proc/self/comm as alternative method
+4. Spawns child processes with masqueraded names
+5. Restores original process name after demonstration
+6. Generates telemetry for process monitoring detection
+
+Parameters:
+- `log_file`: Path to save masquerading log
+- `target_name`: Process name to masquerade as (default: [kworker/0:1])
+
+Artefacts:
+- Masquerading log file (cleaned up automatically)
+
+Detection opportunities:
+- prctl syscalls with PR_SET_NAME
+- Writes to /proc/self/comm
+- Mismatched process names vs executable paths
+- Kernel thread names from userspace processes
+- Comm field changes in process accounting
+
+### T1070.004-SELF - Self-Deleting Binary Pattern
+
+**Attribution:** Based on ttp-bench evasion techniques
+
+Description:  
+Demonstrates the self-deleting binary evasion technique where a running process unlinks its own executable from disk, leaving only the in-memory image. This is a common malware technique to evade forensic analysis.
+
+How it works:
+1. Creates test shell script that deletes itself while running
+2. Monitors /proc/self/exe for "(deleted)" indicator
+3. Compiles C program that calls unlink() on argv[0]
+4. Demonstrates continued execution after self-deletion
+5. Records process state before and after deletion
+6. Generates telemetry for forensic detection
+
+Parameters:
+- `log_file`: Path to save execution log
+- `work_dir`: Working directory for test binaries
+
+Artefacts:
+- Test binaries and scripts (cleaned up automatically)
+- Marker files showing deletion status (cleaned up automatically)
+
+Detection opportunities:
+- unlink syscalls on /proc/self/exe paths
+- Processes with "(deleted)" in exe link
+- File deletions immediately after execution
+- Missing executable files for running processes
+- Process execution from memory without disk backing

