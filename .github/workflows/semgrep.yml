@@ -21,7 +21,7 @@ jobs:
       - name: Run Semgrep
         env:
           SEMGREP_APP_TOKEN: ${{ secrets.SEMGREP_APP_TOKEN }}
-          SEMGREP_REPO_DISPLAY_NAME: gocortexio_spellbook
+          SEMGREP_REPO_DISPLAY_NAME: ${{ secrets.SEMGREP_REPO_DISPLAY_NAME }}
         run: |
           docker run --rm \
             -e SEMGREP_APP_TOKEN \
