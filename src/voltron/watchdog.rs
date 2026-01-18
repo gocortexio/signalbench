@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: GoCortexIO
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 use std::fs;
 use std::io;
 
@@ -18,10 +21,10 @@ impl ResourceMonitor {
 
     pub fn check_memory(&self) -> Result<ResourceStatus, io::Error> {
         let meminfo = fs::read_to_string("/proc/meminfo")?;
-        
+
         let mut mem_total = 0u64;
         let mut mem_available = 0u64;
-        
+
         for line in meminfo.lines() {
             if line.starts_with("MemTotal:") {
                 mem_total = parse_meminfo_line(line);
@@ -29,13 +32,13 @@ impl ResourceMonitor {
                 mem_available = parse_meminfo_line(line);
             }
         }
-        
+
         if mem_total == 0 {
             return Ok(ResourceStatus::Unknown);
         }
-        
+
         let usage = 1.0 - (mem_available as f32 / mem_total as f32);
-        
+
         if usage > self.memory_threshold {
             Ok(ResourceStatus::Critical(format!(
                 "Memory usage at {:.1}%",
@@ -53,10 +56,10 @@ impl ResourceMonitor {
 
     pub fn check_file_descriptors(&self) -> Result<ResourceStatus, io::Error> {
         let fd_count = fs::read_dir("/proc/self/fd")?.count();
-        
+
         let limits = fs::read_to_string("/proc/self/limits")?;
         let mut max_fds = 1024u64;
-        
+
         for line in limits.lines() {
             if line.starts_with("Max open files") {
                 let parts: Vec<&str> = line.split_whitespace().collect();
@@ -67,9 +70,9 @@ impl ResourceMonitor {
                 }
             }
         }
-        
+
         let usage = fd_count as f32 / max_fds as f32;
-        
+
         if usage > self.fd_threshold {
             Ok(ResourceStatus::Critical(format!(
                 "File descriptor usage at {:.1}% ({}/{})",
@@ -92,15 +95,15 @@ impl ResourceMonitor {
     pub fn check_load_average(&self) -> Result<ResourceStatus, io::Error> {
         let loadavg = fs::read_to_string("/proc/loadavg")?;
         let parts: Vec<&str> = loadavg.split_whitespace().collect();
-        
+
         if parts.is_empty() {
             return Ok(ResourceStatus::Unknown);
         }
-        
+
         if let Ok(load_1min) = parts[0].parse::<f32>() {
             let cpu_count = num_cpus::get() as f32;
             let load_per_cpu = load_1min / cpu_count;
-            
+
             if load_per_cpu > 2.0 {
                 Ok(ResourceStatus::Critical(format!(
                     "Load average {:.2} (per-CPU: {:.2})",
@@ -121,19 +124,19 @@ impl ResourceMonitor {
 
     pub fn check_all(&self) -> Vec<(String, ResourceStatus)> {
         let mut results = Vec::new();
-        
+
         if let Ok(status) = self.check_memory() {
             results.push(("memory".to_string(), status));
         }
-        
+
         if let Ok(status) = self.check_file_descriptors() {
             results.push(("file_descriptors".to_string(), status));
         }
-        
+
         if let Ok(status) = self.check_load_average() {
             results.push(("load_average".to_string(), status));
         }
-        
+
         results
     }
 }

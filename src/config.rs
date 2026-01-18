@@ -1,8 +1,11 @@
+// SPDX-FileCopyrightText: GoCortexIO
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
+use log::debug;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
-use log::debug;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct TechniqueConfig {
@@ -27,8 +30,7 @@ impl Default for TechniqueConfig {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Serialize, Deserialize, Default)]
 pub struct SimulatorConfig {
     pub techniques: HashMap<String, TechniqueConfig>,
     pub global: GlobalConfig,
@@ -53,27 +55,26 @@ impl Default for GlobalConfig {
     }
 }
 
-
 pub fn load_config(path: Option<&Path>) -> Result<SimulatorConfig, String> {
     match path {
         Some(config_path) => {
             if !config_path.exists() {
                 return Err(format!("Config file not found: {config_path:?}"));
             }
-            
+
             let config_content = match fs::read_to_string(config_path) {
                 Ok(content) => content,
                 Err(e) => return Err(format!("Failed to read config file: {e}")),
             };
-            
+
             match serde_json::from_str(&config_content) {
                 Ok(config) => {
                     debug!("Loaded configuration from {config_path:?}");
                     Ok(config)
-                },
+                }
                 Err(e) => Err(format!("Failed to parse config file: {e}")),
             }
-        },
+        }
         None => {
             debug!("No config file provided, using default configuration");
             Ok(SimulatorConfig::default())
@@ -81,10 +82,7 @@ pub fn load_config(path: Option<&Path>) -> Result<SimulatorConfig, String> {
     }
 }
 
-pub fn get_technique_config(
-    technique_id: &str, 
-    config: &SimulatorConfig
-) -> TechniqueConfig {
+pub fn get_technique_config(technique_id: &str, config: &SimulatorConfig) -> TechniqueConfig {
     match config.techniques.get(technique_id) {
         Some(technique_config) => technique_config.clone(),
         None => {
@@ -107,12 +105,12 @@ pub fn save_config(config: &SimulatorConfig, path: &Path) -> Result<(), String> 
         Ok(json) => json,
         Err(e) => return Err(format!("Failed to serialize config: {e}")),
     };
-    
+
     match fs::write(path, config_json) {
         Ok(_) => {
             debug!("Configuration saved to {path:?}");
             Ok(())
-        },
+        }
         Err(e) => Err(format!("Failed to write config file: {e}")),
     }
 }

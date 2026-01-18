@@ -1,31 +1,35 @@
+// SPDX-FileCopyrightText: GoCortexIO
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // SIGNALBENCH - Technique Modules
 // Techniques module configuration
-// 
+//
 // This module organises attack techniques according to the MITRE ATT&CK framework
 // Developed by Simon Sigre (simon@gocortex.io)
 // Part of the GoCortex.io platform for security testing and validation
 
-pub mod persistence;
-pub mod privilege_escalation;
-pub mod defense_evasion;
-pub mod credential_access;
-pub mod discovery;
-pub mod lateral_movement;
-pub mod protocol_lateral_movement;
-pub mod execution;
-pub mod network;
+pub mod collection;
 pub mod command_and_control;
 pub mod command_interpreter;
-pub mod defense_evasion_obfuscation;
-pub mod persistence_system_process;
-pub mod process_injection;
-pub mod dnscat_c2;
-pub mod dns_recon;
-pub mod software;
-pub mod collection;
-pub mod impact;
 pub mod container_escape;
+pub mod credential_access;
+pub mod defense_evasion;
+pub mod defense_evasion_obfuscation;
+pub mod discovery;
+pub mod dns_recon;
+pub mod dnscat_c2;
+pub mod execution;
 pub mod gtfobins;
+pub mod impact;
+pub mod kernel_exploits;
+pub mod lateral_movement;
+pub mod network;
+pub mod persistence;
+pub mod persistence_system_process;
+pub mod privilege_escalation;
+pub mod process_injection;
+pub mod protocol_lateral_movement;
+pub mod software;
 
 use crate::config::TechniqueConfig;
 use async_trait::async_trait;
@@ -36,24 +40,24 @@ use std::pin::Pin;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Technique {
-    pub id: String,           // MITRE ATT&CK ID (e.g., T1547.001)
-    pub name: String,         // Human-readable name
-    pub description: String,  // Brief description
-    pub category: String,     // Attack category
-    pub parameters: Vec<TechniqueParameter>,  // Parameters needed for this technique
-    pub detection: String,    // How this technique can be detected
-    pub cleanup_support: bool, // Whether this technique supports cleanup
-    pub platforms: Vec<String>, // Supported platforms (e.g., ["Linux"])
-    pub permissions: Vec<String>, // Required permissions (e.g., ["root"])
+    pub id: String,                          // MITRE ATT&CK ID (e.g., T1547.001)
+    pub name: String,                        // Human-readable name
+    pub description: String,                 // Brief description
+    pub category: String,                    // Attack category
+    pub parameters: Vec<TechniqueParameter>, // Parameters needed for this technique
+    pub detection: String,                   // How this technique can be detected
+    pub cleanup_support: bool,               // Whether this technique supports cleanup
+    pub platforms: Vec<String>,              // Supported platforms (e.g., ["Linux"])
+    pub permissions: Vec<String>,            // Required permissions (e.g., ["root"])
     #[serde(default)]
-    pub voltron_only: bool,   // Whether this technique can only run in Voltron mode
+    pub voltron_only: bool, // Whether this technique can only run in Voltron mode
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TechniqueParameter {
-    pub name: String,         // Parameter name
-    pub description: String,  // Parameter description
-    pub required: bool,       // Whether this parameter is required
+    pub name: String,            // Parameter name
+    pub description: String,     // Parameter description
+    pub required: bool,          // Whether this parameter is required
     pub default: Option<String>, // Default value, if any
 }
 
@@ -73,21 +77,18 @@ impl fmt::Display for Technique {
 }
 
 // Define a type alias for our async function return types to make the code cleaner
-pub type ExecuteFuture<'a> = Pin<Box<dyn Future<Output = Result<SimulationResult, String>> + Send + 'a>>;
+pub type ExecuteFuture<'a> =
+    Pin<Box<dyn Future<Output = Result<SimulationResult, String>> + Send + 'a>>;
 pub type CleanupFuture<'a> = Pin<Box<dyn Future<Output = Result<(), String>> + Send + 'a>>;
 
 #[async_trait]
 pub trait AttackTechnique: Send + Sync {
     /// Returns the technique information
     fn info(&self) -> Technique;
-    
+
     /// Executes the technique with the given configuration
-    fn execute<'a>(
-        &'a self,
-        config: &'a TechniqueConfig,
-        dry_run: bool,
-    ) -> ExecuteFuture<'a>;
-    
+    fn execute<'a>(&'a self, config: &'a TechniqueConfig, dry_run: bool) -> ExecuteFuture<'a>;
+
     /// Cleans up any artifacts created by the technique
     fn cleanup<'a>(&'a self, artifacts: &'a [String]) -> CleanupFuture<'a>;
 }
@@ -100,7 +101,6 @@ pub fn get_all_techniques() -> Vec<Box<dyn AttackTechnique>> {
         Box::new(persistence::CronJob {}),
         Box::new(persistence::WebShellDeployment {}),
         Box::new(persistence::AccountManipulation {}),
-        
         // Privilege escalation techniques
         Box::new(privilege_escalation::SudoersModification {}),
         Box::new(privilege_escalation::SuidBinary {}),
@@ -108,7 +108,9 @@ pub fn get_all_techniques() -> Vec<Box<dyn AttackTechnique>> {
         Box::new(privilege_escalation::PrivilegeEscalationExploit {}),
         Box::new(privilege_escalation::SudoUnsignedIntegerEscalation {}),
         Box::new(gtfobins::GtfobinsProbe {}),
-        
+        Box::new(kernel_exploits::NftablesExploit {}),
+        Box::new(kernel_exploits::PosixCpuTimerRace {}),
+        Box::new(kernel_exploits::Ext4XattrUnderflow {}),
         // Container escape techniques (T1611)
         Box::new(container_escape::DockerSocketEscape {}),
         Box::new(container_escape::PrivilegedContainerEscape {}),
@@ -121,7 +123,9 @@ pub fn get_all_techniques() -> Vec<Box<dyn AttackTechnique>> {
         Box::new(container_escape::AdvancedContainerBreakout {}),
         Box::new(container_escape::RuntimeCveCheck {}),
         Box::new(container_escape::NamespaceEscapeDetection {}),
-        
+        Box::new(container_escape::RunCMaskedPathEscape {}),
+        Box::new(container_escape::RunCConsoleEscape {}),
+        Box::new(container_escape::RunCProcfsEscape {}),
         // Defense evasion techniques
         Box::new(defense_evasion::DisableAuditLogs {}),
         Box::new(defense_evasion::ClearBashHistory {}),
@@ -130,7 +134,6 @@ pub fn get_all_techniques() -> Vec<Box<dyn AttackTechnique>> {
         Box::new(defense_evasion::FileDeletion {}),
         Box::new(defense_evasion::ProcessMasquerading {}),
         Box::new(defense_evasion::SelfDeletingBinary {}),
-        
         // Credential access techniques
         Box::new(credential_access::MemoryDumping {}),
         Box::new(credential_access::KeyloggerSimulation {}),
@@ -138,58 +141,44 @@ pub fn get_all_techniques() -> Vec<Box<dyn AttackTechnique>> {
         Box::new(credential_access::ProcFilesystemCredentialDumping {}),
         Box::new(credential_access::SSHBruteForce {}),
         Box::new(credential_access::EtcPasswdShadow {}),
-        
         // Discovery techniques
         Box::new(discovery::SystemInformationDiscovery {}),
         Box::new(discovery::NetworkDiscovery {}),
         Box::new(discovery::NetworkConnectionsDiscovery {}),
         Box::new(network::NetworkServiceDiscovery {}),
-        
         // Lateral movement techniques
         Box::new(lateral_movement::SshLateralMovement {}),
         Box::new(lateral_movement::VncLateralMovement {}),
         Box::new(protocol_lateral_movement::VncProtoLateralMovement {}),
         Box::new(protocol_lateral_movement::SshProtoLateralMovement {}),
-        
         // Execution techniques
         Box::new(execution::CommandLineInterface {}),
         Box::new(execution::ScriptExecution {}),
         Box::new(execution::UncommonRemoteShellCommands {}),
-        
         // Exfiltration techniques
         Box::new(network::ExfiltrationOverAlternativeProtocol {}),
-        
         // Command and Control techniques
         Box::new(network::NonApplicationLayerProtocol {}),
         Box::new(command_and_control::IngressToolTransfer {}),
         Box::new(command_and_control::TrafficSignaling {}),
         Box::new(command_and_control::SuspiciousGitHubToolTransfer {}),
         Box::new(command_and_control::SuspiciousDomainConnections {}),
-        
         // Advanced Command Interpreter
         Box::new(command_interpreter::AdvancedCommandExecution {}),
-        
         // Defense Evasion - Obfuscation
         Box::new(defense_evasion_obfuscation::ObfuscatedFilesAndInformation {}),
-        
         // Process Injection
         Box::new(process_injection::ProcessInjection {}),
-        
         // System Process Persistence
         Box::new(persistence_system_process::CreateOrModifySystemProcess {}),
-        
         // DNS reconnaissance via DNSRecon
         Box::new(dns_recon::DNSReconTest {}),
-        
         // Possible C2 via dnscat2
         Box::new(dnscat_c2::DnscatC2Test {}),
-        
         // Software simulations
         Box::new(software::S1109Pacemaker {}),
-        
         // Collection techniques
         Box::new(collection::AutomatedCollection {}),
-        
         // Impact techniques
         Box::new(impact::ResourceHijacking {}),
     ]
@@ -202,22 +191,23 @@ pub fn get_technique_by_id_or_name(id_or_name: &str) -> Option<Box<dyn AttackTec
         let info = t.info();
         info.name.to_lowercase() == id_or_name.to_lowercase().replace("_", " ")
     });
-    
+
     if exact_name_match.is_some() {
         return exact_name_match;
     }
-    
+
     // If no exact name match, try ID or slugified name as before
     get_all_techniques().into_iter().find(|t| {
         let info = t.info();
-        info.id.to_lowercase() == id_or_name.to_lowercase() || 
-        info.name.to_lowercase().replace(" ", "_") == id_or_name.to_lowercase()
+        info.id.to_lowercase() == id_or_name.to_lowercase()
+            || info.name.to_lowercase().replace(" ", "_") == id_or_name.to_lowercase()
     })
 }
 
 // Helper function to get all techniques in a category
 pub fn get_techniques_by_category(category: &str) -> Vec<Box<dyn AttackTechnique>> {
-    get_all_techniques().into_iter()
+    get_all_techniques()
+        .into_iter()
         .filter(|t| t.info().category.to_lowercase() == category.to_lowercase())
         .collect()
 }

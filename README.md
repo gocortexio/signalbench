@@ -2,7 +2,7 @@
   <img src="assets/signalbench-logo-baby.png" alt="SignalBench Logo" width="600"/>
 </div>
 
-# SignalBench v1.6.41: Nobody Puts ~~Baby~~ SignalBox In A ~~Corner~~ Container
+# SignalBench v1.6.47: Nobody Puts ~~Baby~~ SignalBox In A ~~Corner~~ Container
 
 Endpoint Telemetry Generator from GoCortex.io
 
@@ -119,11 +119,11 @@ signalbench voltron list
 
 ### Telemetry Coverage
 
-58 techniques across:
+63 techniques across:
 
 - Discovery: System/network reconnaissance, security tool detection, user/group enumeration
 - Credential Access: Memory dumping, keylogging, credential file harvesting, password hash extraction
-- Privilege Escalation: SUID binaries, sudo manipulation, local account creation, container escape (T1611)
+- Privilege Escalation: SUID binaries, sudo manipulation, local account creation, kernel exploits (T1068.001 CVE-2024-1086 nftables, T1068.002 CVE-2025-38352 POSIX timer race, T1068.003 CVE-2025-40190 ext4 xattr)
 - Defence Evasion: PATH hijacking, audit log manipulation, command history clearing, process masquerading, web shells
 - Execution: Reverse shells, Python reconnaissance, command injection, script execution
 - Command and Control: Port knocking, DNS tunnelling, ICMP beaconing, tool transfer
@@ -132,7 +132,7 @@ signalbench voltron list
 - Persistence: Cron jobs, startup scripts, systemd services, SSH keys
 - Collection: Automated file collection, recursive directory enumeration
 - Impact: Resource hijacking, file deletion, anti-forensics
-- Container Escape: Docker socket abuse (T1611-SOCK), privileged container breakout (T1611-PRIV), sensitive mount exploitation (T1611-MOUNT), cgroup escape (T1611-CGROUP), kernel module loading (T1611-MODULE), container reconnaissance (T1611-RECON), PID namespace escape (T1611-PIDNS), SUID binary exploitation (T1611-SUID), chroot breakout (T1611-BREAKOUT), kernel CVE checks (T1611-CVE), namespace escape (T1611-NS)
+- Container Escape: Docker socket abuse (T1611-SOCK), privileged container breakout (T1611-PRIV), sensitive mount exploitation (T1611-MOUNT), cgroup escape (T1611-CGROUP), kernel module loading (T1611-MODULE), container reconnaissance (T1611-RECON), PID namespace escape (T1611-PIDNS), SUID binary exploitation (T1611-SUID), chroot breakout (T1611-BREAKOUT), kernel CVE checks (T1611-CVE), namespace escape (T1611-NS), RunC masked path escape (T1611.012), RunC console escape (T1611.013), RunC procfs escape (T1611.014)
 
 Network techniques (T1046, T1095, T1048) target the Palo Alto sinkhole address (198.135.184.22) by default for realistic external network telemetry. Lateral movement techniques (T1021.004, T1021.005) use localhost for service-dependent testing.
 
@@ -160,14 +160,14 @@ SignalBench provides pre-built binaries for maximum compatibility across Linux d
 For Universal Linux Compatibility (Recommended):
 ```bash
 # Download static binary that works on any Linux distribution
-wget https://github.com/gocortex/signalbench/releases/download/v1.6.41/signalbench-1.6.41-linux-musl-x86_64
-chmod +x signalbench-1.6.41-linux-musl-x86_64
-sudo mv signalbench-1.6.41-linux-musl-x86_64 /usr/local/bin/signalbench
+wget https://github.com/gocortex/signalbench/releases/download/v1.6.47/signalbench-1.6.47-linux-musl-x86_64
+chmod +x signalbench-1.6.47-linux-musl-x86_64
+sudo mv signalbench-1.6.47-linux-musl-x86_64 /usr/local/bin/signalbench
 
 # For ARM64 systems (Apple Silicon, ARM servers)
-wget https://github.com/gocortex/signalbench/releases/download/v1.6.41/signalbench-1.6.41-linux-musl-aarch64
-chmod +x signalbench-1.6.41-linux-musl-aarch64
-sudo mv signalbench-1.6.41-linux-musl-aarch64 /usr/local/bin/signalbench
+wget https://github.com/gocortex/signalbench/releases/download/v1.6.47/signalbench-1.6.47-linux-musl-aarch64
+chmod +x signalbench-1.6.47-linux-musl-aarch64
+sudo mv signalbench-1.6.47-linux-musl-aarch64 /usr/local/bin/signalbench
 ```
 
 ### Option 2: Build from Source
@@ -179,6 +179,19 @@ sudo mv signalbench-1.6.41-linux-musl-aarch64 /usr/local/bin/signalbench
 ```bash
 cargo build --release
 ```
+
+### Optional System Dependencies
+
+SignalBench includes built-in fallbacks for most external tools. However, for **test systems** where you want comprehensive technique coverage, consider installing:
+
+| Package | Purpose | Fallback Available |
+|---------|---------|-------------------|
+| `binutils` | Memory dump string extraction (strings command) | Yes (Rust implementation) |
+| `attr` | Extended attribute manipulation (setfattr command) | Yes (libc syscalls) |
+| `gcc` | Some runtime compilation techniques | No |
+| `gcore` | Process memory dumping | Partial (dd fallback) |
+
+**Note:** These are only required on test systems running SignalBench. Production systems being monitored do **not** need these packages installed.
 
 ## Usage
 

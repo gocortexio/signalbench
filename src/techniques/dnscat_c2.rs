@@ -1,18 +1,23 @@
+// SPDX-FileCopyrightText: GoCortexIO
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // SIGNALBENCH - DNS C2 Technique
 // Dnscat2 C2 Telemetry (T1059 - Command and Scripting Interpreter)
-// 
+//
 // This module generates telemetry for C2 detection via dnscat2
 // Developed by Simon Sigre (simon@gocortex.io)
 // Part of the GoCortex.io platform for security testing and validation
 
 use crate::config::TechniqueConfig;
-use crate::techniques::{AttackTechnique, CleanupFuture, ExecuteFuture, SimulationResult, Technique, TechniqueParameter};
+use crate::techniques::{
+    AttackTechnique, CleanupFuture, ExecuteFuture, SimulationResult, Technique, TechniqueParameter,
+};
 use async_trait::async_trait;
+use log::{error, info};
 use std::fs::File;
 use std::io::Write;
 use std::path::Path;
 use tokio::process::Command;
-use log::{error, info};
 
 // ======================================
 // T1059 - Possible C2 via dnscat2
@@ -25,7 +30,8 @@ impl AttackTechnique for DnscatC2Test {
         Technique {
             id: "T1059".to_string(),
             name: "Possible C2 via dnscat2".to_string(),
-            description: "Generates telemetry for C2 communications via dnscat2-style activities".to_string(),
+            description: "Generates telemetry for C2 communications via dnscat2-style activities"
+                .to_string(),
             category: "COMMAND_AND_CONTROL".to_string(),
             detection: "Monitor for unexpected binary downloads and execution".to_string(),
             cleanup_support: true,
@@ -37,7 +43,9 @@ impl AttackTechnique for DnscatC2Test {
                     name: "download_url".to_string(),
                     description: "URL to download the dnscat2 test binary".to_string(),
                     required: false,
-                    default: Some("https://wildfire.paloaltonetworks.com/publicapi/test/elf".to_string()),
+                    default: Some(
+                        "https://wildfire.paloaltonetworks.com/publicapi/test/elf".to_string(),
+                    ),
                 },
                 TechniqueParameter {
                     name: "output_dir".to_string(),
@@ -55,26 +63,26 @@ impl AttackTechnique for DnscatC2Test {
             .get("output_dir")
             .unwrap_or(&"/tmp/signalbench_dnscat2".to_string())
             .clone();
-            
+
         let download_url = config
             .parameters
             .get("download_url")
             .unwrap_or(&"https://wildfire.paloaltonetworks.com/publicapi/test/elf".to_string())
             .clone();
-            
+
         Box::pin(async move {
             // Create output directory if it doesn't exist
             if !Path::new(&output_dir).exists() {
                 std::fs::create_dir_all(&output_dir)
                     .map_err(|e| format!("Failed to create output directory: {e}"))?;
             }
-            
+
             let output_file = format!("{output_dir}/dnscat2");
-            
+
             if dry_run {
                 info!("[DRY RUN] Would download file from {download_url} to {output_file}");
                 info!("[DRY RUN] Would execute dnscat2 client to generate C2 telemetry");
-                
+
                 return Ok(SimulationResult {
                     technique_id: self.info().id,
                     success: true,
@@ -83,10 +91,10 @@ impl AttackTechnique for DnscatC2Test {
                     cleanup_required: false,
                 });
             }
-            
+
             // Download the file using curl
             info!("Downloading dnscat2 C2 test client from {download_url}");
-            
+
             let curl_output = Command::new("curl")
                 .arg("-s")
                 .arg("-L")
@@ -96,49 +104,52 @@ impl AttackTechnique for DnscatC2Test {
                 .output()
                 .await
                 .map_err(|e| format!("Failed to download file with curl: {e}"))?;
-                
+
             if !curl_output.status.success() {
                 let stderr = String::from_utf8_lossy(&curl_output.stderr);
                 return Err(format!("Failed to download file: {stderr}"));
             }
-            
+
             info!("Successfully downloaded file to {output_file}");
-                
+
             // Make the file executable
-            std::fs::set_permissions(&output_file, std::os::unix::fs::PermissionsExt::from_mode(0o755))
-                .map_err(|e| format!("Failed to set file permissions: {e}"))?;
-                
+            std::fs::set_permissions(
+                &output_file,
+                std::os::unix::fs::PermissionsExt::from_mode(0o755),
+            )
+            .map_err(|e| format!("Failed to set file permissions: {e}"))?;
+
             info!("Downloaded file to {output_file}");
-            
+
             // Execute the file
             info!("Executing dnscat2 binary (simulation)");
-            
+
             let output = Command::new(&output_file)
                 .args(["--help"])
                 .output()
                 .await
                 .map_err(|e| format!("Failed to execute file: {e}"))?;
-                
+
             let stdout = String::from_utf8_lossy(&output.stdout);
             let stderr = String::from_utf8_lossy(&output.stderr);
-            
+
             // Log output for analysis
             let log_file = format!("{output_dir}/execution_log.txt");
-            let mut log = File::create(&log_file)
-                .map_err(|e| format!("Failed to create log file: {e}"))?;
-                
+            let mut log =
+                File::create(&log_file).map_err(|e| format!("Failed to create log file: {e}"))?;
+
             writeln!(log, "=== Dnscat2 C2 Simulation Log ===")
                 .map_err(|e| format!("Failed to write to log file: {e}"))?;
-                
+
             writeln!(log, "Exit Code: {}", output.status.code().unwrap_or(-1))
                 .map_err(|e| format!("Failed to write to log file: {e}"))?;
-                
+
             writeln!(log, "=== STDOUT ===\n{stdout}")
                 .map_err(|e| format!("Failed to write to log file: {e}"))?;
-                
+
             writeln!(log, "=== STDERR ===\n{stderr}")
                 .map_err(|e| format!("Failed to write to log file: {e}"))?;
-                
+
             Ok(SimulationResult {
                 technique_id: self.info().id,
                 success: true,
@@ -151,12 +162,12 @@ impl AttackTechnique for DnscatC2Test {
 
     fn cleanup<'a>(&'a self, artifacts: &'a [String]) -> CleanupFuture<'a> {
         let artifacts = artifacts.to_vec();
-        
+
         Box::pin(async move {
             for artifact in &artifacts {
                 if Path::new(artifact).exists() {
                     info!("Removing artifact: {artifact}");
-                    
+
                     // Check if artifact is a directory
                     if Path::new(artifact).is_dir() {
                         if let Err(e) = std::fs::remove_dir_all(artifact) {
@@ -167,7 +178,7 @@ impl AttackTechnique for DnscatC2Test {
                     }
                 }
             }
-            
+
             // Try to remove the parent directory if it's empty
             if !artifacts.is_empty() {
                 if let Some(dir) = Path::new(&artifacts[0]).parent() {
@@ -176,7 +187,11 @@ impl AttackTechnique for DnscatC2Test {
                             Ok(entries) => {
                                 if entries.count() == 0 {
                                     if let Err(e) = std::fs::remove_dir(dir) {
-                                        error!("Failed to remove directory {}: {}", dir.display(), e);
+                                        error!(
+                                            "Failed to remove directory {}: {}",
+                                            dir.display(),
+                                            e
+                                        );
                                     }
                                 }
                             }
@@ -185,7 +200,7 @@ impl AttackTechnique for DnscatC2Test {
                     }
                 }
             }
-            
+
             Ok(())
         })
     }

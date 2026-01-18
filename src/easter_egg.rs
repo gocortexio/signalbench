@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: GoCortexIO
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // SignalBench - EDR Test Framework
 // Easter egg animation module by Simon Sigre (GoCortex.io)
 
@@ -8,7 +11,7 @@ use std::{thread, time::Duration};
 pub fn jurassic_park_animation() {
     // Clear the screen
     print!("\x1B[2J\x1B[1;1H");
-    
+
     let face1 = r#"
       .---.
      /     \
@@ -17,7 +20,7 @@ pub fn jurassic_park_animation() {
     |   v   |
      \_____/
     "#;
-    
+
     let face2 = r#"
       .---.
      /     \
@@ -26,31 +29,33 @@ pub fn jurassic_park_animation() {
     |   -   |
      \_____/
     "#;
-    
-    let colors = [Color::Red,
+
+    let colors = [
+        Color::Red,
         Color::Yellow,
         Color::Green,
         Color::Cyan,
         Color::Blue,
-        Color::Magenta];
-    
+        Color::Magenta,
+    ];
+
     let message = "Ah ah ah, you didn't say the magic word!";
-    
+
     for i in 0..10 {
         let color = colors[i % colors.len()];
         let face = if i % 2 == 0 { face1 } else { face2 };
-        
+
         println!("{face}");
         println!("{}", message.color(color).bold());
-        
+
         thread::sleep(Duration::from_millis(300));
-        
+
         // Clear for next animation frame
         print!("\x1B[2J\x1B[1;1H");
     }
-    
+
     println!("ACCESS DENIED: Your security clearance is not sufficient.");
     println!("This incident will be reported to GoCortex.io Security.");
-    
+
     thread::sleep(Duration::from_secs(1));
 }

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: GoCortexIO
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 use std::env;
 use std::fs::File;
 use std::io::{Write, Read};

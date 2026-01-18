@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: GoCortexIO
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -31,23 +34,22 @@ pub struct ScenarioStep {
 impl Scenario {
     pub fn load_from_file<P: AsRef<Path>>(path: P) -> Result<Self, ScenarioError> {
         let contents = fs::read_to_string(&path)?;
-        
+
         // Support both JSON and YAML formats based on file extension
         let path_str = path.as_ref().to_string_lossy();
         let scenario: Scenario = if path_str.ends_with(".yml") || path_str.ends_with(".yaml") {
-            serde_yaml::from_str(&contents)
-                .map_err(|e| ScenarioError::Yaml(e.to_string()))?
+            serde_yaml::from_str(&contents).map_err(|e| ScenarioError::Yaml(e.to_string()))?
         } else {
             serde_json::from_str(&contents)?
         };
-        
+
         scenario.validate()?;
         Ok(scenario)
     }
 
     pub fn validate(&self) -> Result<(), ScenarioError> {
         let step_ids: HashSet<_> = self.steps.iter().map(|s| s.id.as_str()).collect();
-        
+
         for step in &self.steps {
             for dep_id in &step.depends_on {
                 if !step_ids.contains(dep_id.as_str()) {
@@ -58,9 +60,9 @@ impl Scenario {
                 }
             }
         }
-        
+
         self.check_cycles()?;
-        
+
         Ok(())
     }
 
@@ -70,7 +72,12 @@ impl Scenario {
         let deps: HashMap<_, _> = self
             .steps
             .iter()
-            .map(|s| (s.id.as_str(), s.depends_on.iter().map(|d| d.as_str()).collect::<Vec<_>>()))
+            .map(|s| {
+                (
+                    s.id.as_str(),
+                    s.depends_on.iter().map(|d| d.as_str()).collect::<Vec<_>>(),
+                )
+            })
             .collect();
 
         for step in &self.steps {
@@ -112,10 +119,9 @@ impl Scenario {
 
     pub fn parse_delay(delay_str: &str) -> Result<std::time::Duration, ScenarioError> {
         if let Some(secs) = delay_str.strip_suffix('s') {
-            Ok(std::time::Duration::from_secs(
-                secs.parse()
-                    .map_err(|_| ScenarioError::InvalidDelay(delay_str.to_string()))?,
-            ))
+            Ok(std::time::Duration::from_secs(secs.parse().map_err(
+                |_| ScenarioError::InvalidDelay(delay_str.to_string()),
+            )?))
         } else if let Some(mins) = delay_str.strip_suffix('m') {
             Ok(std::time::Duration::from_secs(
                 mins.parse::<u64>()

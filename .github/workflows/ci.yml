@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: GoCortexIO
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
       name: Continuous Integration
 
       on:
@@ -64,6 +67,7 @@
         documentation:
           name: Documentation Check
           runs-on: ubuntu-latest
+          if: startsWith(github.ref, 'refs/tags/')
 
           steps:
           - name: Checkout code
@@ -71,6 +75,12 @@
 
           - name: Install Rust
             uses: dtolnay/rust-toolchain@stable
+
+          - name: Build pacemaker helper binary
+            run: |
+              cd helpers/pacemaker && cargo build --release
+              mkdir -p embedded_binaries
+              cp target/release/pacemaker_helper ../../embedded_binaries/pacemaker_helper
 
           - name: Check documentation
             run: cargo doc --all-features --no-deps

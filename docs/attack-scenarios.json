@@ -1,6 +1,6 @@
 {
-  "version": "1.5.22",
-  "generated_at": "2025-11-15T00:00:00Z",
+  "version": "1.6.47",
+  "generated_at": "2026-01-18T00:00:00Z",
   "scenarios": [
     {
       "techniqueId": "T1119",
@@ -547,6 +547,84 @@
       "fullCommand": "signalbench run S1109",
       "estimatedDuration": "3-10s",
       "category": "Software"
+    },
+    {
+      "techniqueId": "T1068.001",
+      "name": "CVE-2024-1086 Nftables Exploit",
+      "description": "Executes nftables exploit pattern using user namespace creation and verdict manipulation.",
+      "fullDescription": "Creates user namespaces via unshare, adds nftables tables/chains/rules with verdict patterns that trigger CVE-2024-1086 double-free behaviour. Executes actual nft commands generating syscall and netfilter telemetry. Force mode bypasses pre-checks. Complete cleanup removes all created rules and namespaces.",
+      "tactic": "Privilege Escalation",
+      "severity": "Critical",
+      "platform": "Linux",
+      "command": "run T1068.001",
+      "fullCommand": "signalbench run T1068.001",
+      "estimatedDuration": "3-10s",
+      "category": "Privilege Escalation"
+    },
+    {
+      "techniqueId": "T1068.002",
+      "name": "CVE-2025-38352 POSIX CPU Timer Race",
+      "description": "Executes POSIX CPU timer race condition exploit pattern with process forking and ptrace.",
+      "fullDescription": "Creates and compiles C program using timer_create syscall, forks configurable child processes, attempts timer deletion race conditions, and uses ptrace operations. Generates process creation, compilation, and syscall telemetry. Force mode bypasses checks. Complete cleanup kills child processes and removes temp files.",
+      "tactic": "Privilege Escalation",
+      "severity": "Critical",
+      "platform": "Linux",
+      "command": "run T1068.002",
+      "fullCommand": "signalbench run T1068.002",
+      "estimatedDuration": "4-12s",
+      "category": "Privilege Escalation"
+    },
+    {
+      "techniqueId": "T1068.003",
+      "name": "CVE-2025-40190 Ext4 Xattr Underflow",
+      "description": "Executes ext4 extended attribute manipulation exploit pattern targeting refcount underflow.",
+      "fullDescription": "Creates test files, uses setfattr to set extended attributes with specific patterns, performs rapid xattr manipulation iterations simulating refcount operations, and uses getfattr to read back. Generates filesystem and xattr syscall telemetry. Force mode bypasses filesystem checks. Complete cleanup removes test files.",
+      "tactic": "Privilege Escalation",
+      "severity": "High",
+      "platform": "Linux",
+      "command": "run T1068.003",
+      "fullCommand": "signalbench run T1068.003",
+      "estimatedDuration": "3-8s",
+      "category": "Privilege Escalation"
+    },
+    {
+      "techniqueId": "T1611.012",
+      "name": "RunC Masked Path Escape",
+      "description": "Executes CVE-2025-31133 runC masked path escape using symlink and mount manipulation.",
+      "fullDescription": "Creates symlinks from /dev/null to sensitive paths like /proc/sys/kernel/core_pattern, attempts bind mount operations, probes masked path accessibility, and attempts writes to exposed paths. Generates filesystem, mount, and symlink telemetry detectable by container security tools. Force mode bypasses container detection. Complete cleanup removes symlinks and unmounts.",
+      "tactic": "Container Escape",
+      "severity": "Critical",
+      "platform": "Linux",
+      "command": "run T1611.012",
+      "fullCommand": "signalbench run T1611.012",
+      "estimatedDuration": "3-10s",
+      "category": "Container Escape"
+    },
+    {
+      "techniqueId": "T1611.013",
+      "name": "RunC Console Escape",
+      "description": "Executes CVE-2025-52565 runC console escape using /dev/pts symlinks and console binding.",
+      "fullDescription": "Enumerates /dev/pts entries, creates symlinks to console targets (/dev/console, /dev/tty, /dev/ptmx), attempts console bind mount operations, probes console access patterns, and attempts pty manipulation. Generates console access and mount telemetry. Force mode bypasses container checks. Complete cleanup removes symlinks and unmounts.",
+      "tactic": "Container Escape",
+      "severity": "Critical",
+      "platform": "Linux",
+      "command": "run T1611.013",
+      "fullCommand": "signalbench run T1611.013",
+      "estimatedDuration": "3-10s",
+      "category": "Container Escape"
+    },
+    {
+      "techniqueId": "T1611.014",
+      "name": "RunC Procfs Escape",
+      "description": "Executes CVE-2025-52881 runC procfs escape using shared mount manipulation and /proc writes.",
+      "fullDescription": "Attempts shared mount manipulation via mount --make-shared, creates symlinks targeting /proc/sys/kernel/* paths, probes procfs write accessibility, attempts writes to kernel parameters, and enumerates sysctl entries. Generates mount and procfs telemetry. Force mode bypasses namespace checks. Complete cleanup restores original values and reverts mount propagation.",
+      "tactic": "Container Escape",
+      "severity": "Critical",
+      "platform": "Linux",
+      "command": "run T1611.014",
+      "fullCommand": "signalbench run T1611.014",
+      "estimatedDuration": "3-10s",
+      "category": "Container Escape"
     }
   ]
 }

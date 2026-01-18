@@ -1,5 +1,5 @@
 {
-  "_comment": "SignalBench v1.6.40 - Complete configuration matching ALL_CAPS mode execution",
+  "_comment": "SignalBench v1.6.47 - Complete configuration matching ALL_CAPS mode execution",
   "_description": "This configuration file contains all technique parameters that would be used when running: signalbench category ALL_CAPS",
   "_usage": "signalbench --config config-example.json category discovery",
   
@@ -508,6 +508,58 @@
       "parameters": {
         "output_dir": "/tmp/signalbench_ns_escape",
         "enumerate_namespaces": "true"
+      },
+      "cleanup_after": true
+    },
+    
+    "T1068.001": {
+      "parameters": {
+        "output_dir": "/tmp/signalbench_nftables_exploit",
+        "rule_iterations": "50",
+        "fork_attempts": "10"
+      },
+      "cleanup_after": true
+    },
+    
+    "T1068.002": {
+      "parameters": {
+        "output_dir": "/tmp/signalbench_timer_race",
+        "child_count": "5",
+        "race_iterations": "100",
+        "use_ptrace": "true"
+      },
+      "cleanup_after": true
+    },
+    
+    "T1068.003": {
+      "parameters": {
+        "output_dir": "/tmp/signalbench_xattr_exploit",
+        "test_file_count": "5",
+        "xattr_iterations": "50"
+      },
+      "cleanup_after": true
+    },
+    
+    "T1611.012": {
+      "parameters": {
+        "output_dir": "/tmp/signalbench_runc_masked",
+        "target_paths": "/proc/sys/kernel/core_pattern,/proc/sysrq-trigger"
+      },
+      "cleanup_after": true
+    },
+    
+    "T1611.013": {
+      "parameters": {
+        "output_dir": "/tmp/signalbench_runc_console",
+        "console_targets": "/dev/console,/dev/tty,/dev/ptmx"
+      },
+      "cleanup_after": true
+    },
+    
+    "T1611.014": {
+      "parameters": {
+        "output_dir": "/tmp/signalbench_runc_procfs",
+        "proc_targets": "/proc/sys/kernel/hostname,/proc/sys/kernel/core_pattern"
       },
       "cleanup_after": true
     },

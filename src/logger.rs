@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: GoCortexIO
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 use chrono::Utc;
 use env_logger::{Builder, Env};
 use log::LevelFilter;
@@ -6,7 +9,7 @@ use std::io::Write;
 /// Initialise the logger with UTC ISO8601 timestamps and coloured output
 pub fn init_logger(debug: bool) {
     let filter_level = if debug { "debug" } else { "info" };
-    
+
     Builder::from_env(Env::default().default_filter_or(filter_level))
         .format(|buf, record| {
             writeln!(
@@ -44,16 +47,18 @@ pub fn set_log_level(level: &str) {
 /// Log to both console and a file
 #[allow(dead_code)]
 pub fn setup_file_logger(log_file: &str) -> Result<(), String> {
-    let log_dir = std::path::Path::new(log_file).parent().unwrap_or_else(|| std::path::Path::new("."));
-    
+    let log_dir = std::path::Path::new(log_file)
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."));
+
     if !log_dir.exists() {
         if let Err(e) = std::fs::create_dir_all(log_dir) {
             return Err(format!("Failed to create log directory: {e}"));
         }
     }
-    
+
     // Logging will continue to the console via env_logger
     // This just adds file logging as well
-    
+
     Ok(())
 }

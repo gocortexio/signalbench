@@ -1,18 +1,23 @@
+// SPDX-FileCopyrightText: GoCortexIO
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // SNELLEN - EDR Testing Framework
 // Process Injection techniques (T1055)
-// 
+//
 // This module implements process injection techniques for Linux
 // Developed by Simon Sigre (simon@gocortex.io)
 // Part of the GoCortex.io platform for security testing and validation
 
 use crate::config::TechniqueConfig;
-use crate::techniques::{AttackTechnique, CleanupFuture, ExecuteFuture, SimulationResult, Technique, TechniqueParameter};
+use crate::techniques::{
+    AttackTechnique, CleanupFuture, ExecuteFuture, SimulationResult, Technique, TechniqueParameter,
+};
 use async_trait::async_trait;
+use log::{debug, error, info};
 use std::fs::File;
 use std::io::Write;
 use std::path::Path;
 use tokio::process::Command;
-use log::{debug, error, info};
 
 // ======================================
 // T1055 - Process Injection
@@ -61,14 +66,10 @@ impl AttackTechnique for ProcessInjection {
         }
     }
 
-    fn execute<'a>(
-        &'a self,
-        config: &'a TechniqueConfig,
-        dry_run: bool,
-    ) -> ExecuteFuture<'a> {
+    fn execute<'a>(&'a self, config: &'a TechniqueConfig, dry_run: bool) -> ExecuteFuture<'a> {
         Box::pin(async move {
             let technique_info = self.info();
-            
+
             // Get parameters from config or use defaults
             let technique_type = config
                 .parameters
@@ -76,28 +77,28 @@ impl AttackTechnique for ProcessInjection {
                 .unwrap_or(&"ptrace".to_string())
                 .clone()
                 .to_lowercase();
-                
+
             let target_process = config
                 .parameters
                 .get("target_process")
                 .unwrap_or(&"self".to_string())
                 .clone();
-                
+
             let output_dir = config
                 .parameters
                 .get("output_dir")
                 .unwrap_or(&"/tmp/snellen_injection".to_string())
                 .clone();
-                
+
             let log_file = config
                 .parameters
                 .get("log_file")
                 .unwrap_or(&"/tmp/snellen_injection.log".to_string())
                 .clone();
-                
+
             // Create artifact list for cleanup
             let mut artifacts = vec![log_file.clone(), output_dir.clone()];
-            
+
             if dry_run {
                 return Ok(SimulationResult {
                     technique_id: technique_info.id,
@@ -107,17 +108,17 @@ impl AttackTechnique for ProcessInjection {
                     cleanup_required: true,
                 });
             }
-            
+
             // Create output directory
             if !Path::new(&output_dir).exists() {
                 std::fs::create_dir_all(&output_dir)
                     .map_err(|e| format!("Failed to create output directory: {e}"))?;
             }
-            
+
             // Create log file
-            let mut log_file_handle = File::create(&log_file)
-                .map_err(|e| format!("Failed to create log file: {e}"))?;
-                
+            let mut log_file_handle =
+                File::create(&log_file).map_err(|e| format!("Failed to create log file: {e}"))?;
+
             // Write header
             writeln!(log_file_handle, "# SNELLEN Process Injection Simulation").unwrap();
             writeln!(log_file_handle, "# MITRE ATT&CK Technique: T1055").unwrap();
@@ -125,32 +126,32 @@ impl AttackTechnique for ProcessInjection {
             writeln!(log_file_handle, "# Target Process: {target_process}").unwrap();
             writeln!(log_file_handle, "# Output Directory: {output_dir}").unwrap();
             writeln!(log_file_handle, "# Timestamp: {}", chrono::Local::now()).unwrap();
-            writeln!(log_file_handle, "# --------------------------------------------------------").unwrap();
-            
+            writeln!(
+                log_file_handle,
+                "# --------------------------------------------------------"
+            )
+            .unwrap();
+
             // Check for required build tools
             let check_cmd = "which gcc g++ make";
-            let check_output = Command::new("bash")
-                .arg("-c")
-                .arg(check_cmd)
-                .output()
-                .await;
-                
+            let check_output = Command::new("bash").arg("-c").arg(check_cmd).output().await;
+
             let has_build_tools = match check_output {
                 Ok(output) => output.status.success(),
                 Err(_) => false,
             };
-            
+
             writeln!(log_file_handle, "Build tools available: {has_build_tools}").unwrap();
-            
+
             if !has_build_tools {
                 writeln!(log_file_handle, "WARNING: Required build tools (gcc, g++, make) not found. Some techniques may not work correctly.").unwrap();
             }
-            
+
             // Different injection techniques
             match technique_type.as_str() {
                 "ptrace" => {
                     writeln!(log_file_handle, "\n## Ptrace Process Injection").unwrap();
-                    
+
                     // Create a simple C program that uses ptrace to inject code
                     let ptrace_injector_file = format!("{output_dir}/ptrace_injector.c");
                     let ptrace_injector_code = r#"
@@ -287,9 +288,10 @@ int main(int argc, char *argv[]) {
     return inject(pid);
 }
 "#;
-                    
+
                     if let Err(e) = std::fs::write(&ptrace_injector_file, ptrace_injector_code) {
-                        writeln!(log_file_handle, "Failed to write ptrace injector code: {e}").unwrap();
+                        writeln!(log_file_handle, "Failed to write ptrace injector code: {e}")
+                            .unwrap();
                         return Ok(SimulationResult {
                             technique_id: technique_info.id,
                             success: false,
@@ -298,36 +300,38 @@ int main(int argc, char *argv[]) {
                             cleanup_required: true,
                         });
                     }
-                    
+
                     artifacts.push(ptrace_injector_file.clone());
                     artifacts.push("/tmp/snellen_injection_success".to_string());
-                    
+
                     // Compile the injector
                     writeln!(log_file_handle, "Compiling ptrace injector...").unwrap();
-                    
-                    let compile_cmd = format!("gcc -o {output_dir}/ptrace_injector {ptrace_injector_file}");
+
+                    let compile_cmd =
+                        format!("gcc -o {output_dir}/ptrace_injector {ptrace_injector_file}");
                     let compile_output = Command::new("bash")
                         .arg("-c")
                         .arg(&compile_cmd)
                         .output()
                         .await;
-                        
+
                     match compile_output {
                         Ok(output) => {
                             let exit_code = output.status.code().unwrap_or(-1);
                             let stderr = String::from_utf8_lossy(&output.stderr);
-                            
+
                             if exit_code == 0 {
                                 writeln!(log_file_handle, "Compilation successful").unwrap();
-                                
+
                                 let injector_bin = format!("{output_dir}/ptrace_injector");
                                 artifacts.push(injector_bin.clone());
-                                
+
                                 // Determine which PID to inject into
                                 let target_pid = if target_process == "self" {
                                     // Create a simple target process that runs for a while
-                                    writeln!(log_file_handle, "Creating a target process...").unwrap();
-                                    
+                                    writeln!(log_file_handle, "Creating a target process...")
+                                        .unwrap();
+
                                     let target_file = format!("{output_dir}/target_process.sh");
                                     let target_script = r#"#!/bin/bash
 echo "Target process started with PID $$"
@@ -335,20 +339,26 @@ echo "Sleeping for 30 seconds to allow injection..."
 sleep 30
 echo "Target process completing"
 "#;
-                                    
+
                                     if let Err(e) = std::fs::write(&target_file, target_script) {
-                                        writeln!(log_file_handle, "Failed to write target script: {e}").unwrap();
+                                        writeln!(
+                                            log_file_handle,
+                                            "Failed to write target script: {e}"
+                                        )
+                                        .unwrap();
                                         return Ok(SimulationResult {
                                             technique_id: technique_info.id,
                                             success: false,
-                                            message: format!("Failed to create target process: {e}"),
+                                            message: format!(
+                                                "Failed to create target process: {e}"
+                                            ),
                                             artifacts,
                                             cleanup_required: true,
                                         });
                                     }
-                                    
+
                                     artifacts.push(target_file.clone());
-                                    
+
                                     // Make executable
                                     let chmod_cmd = format!("chmod +x {target_file}");
                                     let _ = Command::new("bash")
@@ -356,31 +366,44 @@ echo "Target process completing"
                                         .arg(&chmod_cmd)
                                         .output()
                                         .await;
-                                    
+
                                     // Start the target process
                                     let target_log = format!("{output_dir}/target_process.log");
-                                    let run_target_cmd = format!("{target_file} > {target_log} 2>&1 & echo $!");
-                                    
+                                    let run_target_cmd =
+                                        format!("{target_file} > {target_log} 2>&1 & echo $!");
+
                                     artifacts.push(target_log.clone());
-                                    
+
                                     let target_output = Command::new("bash")
                                         .arg("-c")
                                         .arg(&run_target_cmd)
                                         .output()
                                         .await;
-                                        
+
                                     match target_output {
                                         Ok(output) => {
-                                            let pid_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
-                                            writeln!(log_file_handle, "Target process started with PID {pid_str}").unwrap();
+                                            let pid_str = String::from_utf8_lossy(&output.stdout)
+                                                .trim()
+                                                .to_string();
+                                            writeln!(
+                                                log_file_handle,
+                                                "Target process started with PID {pid_str}"
+                                            )
+                                            .unwrap();
                                             pid_str
-                                        },
+                                        }
                                         Err(e) => {
-                                            writeln!(log_file_handle, "Failed to start target process: {e}").unwrap();
+                                            writeln!(
+                                                log_file_handle,
+                                                "Failed to start target process: {e}"
+                                            )
+                                            .unwrap();
                                             return Ok(SimulationResult {
                                                 technique_id: technique_info.id,
                                                 success: false,
-                                                message: format!("Failed to start target process: {e}"),
+                                                message: format!(
+                                                    "Failed to start target process: {e}"
+                                                ),
                                                 artifacts,
                                                 cleanup_required: true,
                                             });
@@ -391,32 +414,49 @@ echo "Target process completing"
                                     target_process.clone()
                                 } else {
                                     // User specified a process name, try to find its PID
-                                    let find_pid_cmd = format!("pgrep -f \"{target_process}\" | head -1");
+                                    let find_pid_cmd =
+                                        format!("pgrep -f \"{target_process}\" | head -1");
                                     let find_pid_output = Command::new("bash")
                                         .arg("-c")
                                         .arg(&find_pid_cmd)
                                         .output()
                                         .await;
-                                        
+
                                     match find_pid_output {
                                         Ok(output) => {
-                                            let pid_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                                            let pid_str = String::from_utf8_lossy(&output.stdout)
+                                                .trim()
+                                                .to_string();
                                             if pid_str.is_empty() {
-                                                writeln!(log_file_handle, "Could not find process: {target_process}").unwrap();
+                                                writeln!(
+                                                    log_file_handle,
+                                                    "Could not find process: {target_process}"
+                                                )
+                                                .unwrap();
                                                 return Ok(SimulationResult {
                                                     technique_id: technique_info.id,
                                                     success: false,
-                                                    message: format!("Process not found: {target_process}"),
+                                                    message: format!(
+                                                        "Process not found: {target_process}"
+                                                    ),
                                                     artifacts,
                                                     cleanup_required: true,
                                                 });
                                             } else {
-                                                writeln!(log_file_handle, "Found {target_process} with PID {pid_str}").unwrap();
+                                                writeln!(
+                                                    log_file_handle,
+                                                    "Found {target_process} with PID {pid_str}"
+                                                )
+                                                .unwrap();
                                                 pid_str
                                             }
-                                        },
+                                        }
                                         Err(e) => {
-                                            writeln!(log_file_handle, "Failed to find process PID: {e}").unwrap();
+                                            writeln!(
+                                                log_file_handle,
+                                                "Failed to find process PID: {e}"
+                                            )
+                                            .unwrap();
                                             return Ok(SimulationResult {
                                                 technique_id: technique_info.id,
                                                 success: false,
@@ -427,31 +467,39 @@ echo "Target process completing"
                                         }
                                     }
                                 };
-                                
+
                                 // Run the injector
-                                writeln!(log_file_handle, "Running ptrace injector on PID {target_pid}...").unwrap();
-                                
+                                writeln!(
+                                    log_file_handle,
+                                    "Running ptrace injector on PID {target_pid}..."
+                                )
+                                .unwrap();
+
                                 let run_injector_cmd = format!("{injector_bin} {target_pid}");
                                 let injector_output = Command::new("bash")
                                     .arg("-c")
                                     .arg(&run_injector_cmd)
                                     .output()
                                     .await;
-                                    
+
                                 match injector_output {
                                     Ok(output) => {
                                         let exit_code = output.status.code().unwrap_or(-1);
                                         let stdout = String::from_utf8_lossy(&output.stdout);
                                         let stderr = String::from_utf8_lossy(&output.stderr);
-                                        
-                                        writeln!(log_file_handle, "Injector exit code: {exit_code}").unwrap();
+
+                                        writeln!(
+                                            log_file_handle,
+                                            "Injector exit code: {exit_code}"
+                                        )
+                                        .unwrap();
                                         if !stdout.is_empty() {
                                             writeln!(log_file_handle, "STDOUT: {stdout}").unwrap();
                                         }
                                         if !stderr.is_empty() {
                                             writeln!(log_file_handle, "STDERR: {stderr}").unwrap();
                                         }
-                                        
+
                                         // Check if the injection created our marker file
                                         let check_cmd = "test -f /tmp/snellen_injection_success && echo 'Success' || echo 'Failed'";
                                         let check_output = Command::new("bash")
@@ -459,33 +507,49 @@ echo "Target process completing"
                                             .arg(check_cmd)
                                             .output()
                                             .await;
-                                            
+
                                         match check_output {
                                             Ok(check_result) => {
-                                                let result_str = String::from_utf8_lossy(&check_result.stdout).trim().to_string();
-                                                writeln!(log_file_handle, "Injection result: {result_str}").unwrap();
-                                            },
+                                                let result_str =
+                                                    String::from_utf8_lossy(&check_result.stdout)
+                                                        .trim()
+                                                        .to_string();
+                                                writeln!(
+                                                    log_file_handle,
+                                                    "Injection result: {result_str}"
+                                                )
+                                                .unwrap();
+                                            }
                                             Err(e) => {
-                                                writeln!(log_file_handle, "Failed to check injection result: {e}").unwrap();
+                                                writeln!(
+                                                    log_file_handle,
+                                                    "Failed to check injection result: {e}"
+                                                )
+                                                .unwrap();
                                             }
                                         }
-                                    },
+                                    }
                                     Err(e) => {
-                                        writeln!(log_file_handle, "Failed to run injector: {e}").unwrap();
+                                        writeln!(log_file_handle, "Failed to run injector: {e}")
+                                            .unwrap();
                                     }
                                 }
                             } else {
-                                writeln!(log_file_handle, "Compilation failed with code {exit_code}: {stderr}").unwrap();
+                                writeln!(
+                                    log_file_handle,
+                                    "Compilation failed with code {exit_code}: {stderr}"
+                                )
+                                .unwrap();
                             }
-                        },
+                        }
                         Err(e) => {
                             writeln!(log_file_handle, "Compilation error: {e}").unwrap();
                         }
                     }
-                },
+                }
                 "ld_preload" => {
                     writeln!(log_file_handle, "\n## LD_PRELOAD Injection").unwrap();
-                    
+
                     // Create a shared library that hooks functions
                     let library_file = format!("{output_dir}/libsnellen_hook.c");
                     let library_code = r#"
@@ -533,7 +597,7 @@ __attribute__((constructor)) void library_init() {
     create_marker_file();
 }
 "#;
-                    
+
                     if let Err(e) = std::fs::write(&library_file, library_code) {
                         writeln!(log_file_handle, "Failed to write library code: {e}").unwrap();
                         return Ok(SimulationResult {
@@ -544,32 +608,34 @@ __attribute__((constructor)) void library_init() {
                             cleanup_required: true,
                         });
                     }
-                    
+
                     artifacts.push(library_file.clone());
                     artifacts.push("/tmp/snellen_injection_success".to_string());
                     artifacts.push("/tmp/snellen_ld_preload.log".to_string());
-                    
+
                     // Compile the shared library
                     writeln!(log_file_handle, "Compiling shared library...").unwrap();
-                    
-                    let compile_cmd = format!("gcc -shared -fPIC -o {output_dir}/libsnellen_hook.so {library_file}");
+
+                    let compile_cmd = format!(
+                        "gcc -shared -fPIC -o {output_dir}/libsnellen_hook.so {library_file}"
+                    );
                     let compile_output = Command::new("bash")
                         .arg("-c")
                         .arg(&compile_cmd)
                         .output()
                         .await;
-                        
+
                     match compile_output {
                         Ok(output) => {
                             let exit_code = output.status.code().unwrap_or(-1);
                             let stderr = String::from_utf8_lossy(&output.stderr);
-                            
+
                             if exit_code == 0 {
                                 writeln!(log_file_handle, "Compilation successful").unwrap();
-                                
+
                                 let library_bin = format!("{output_dir}/libsnellen_hook.so");
                                 artifacts.push(library_bin.clone());
-                                
+
                                 // Create a test program that uses fopen
                                 let test_file = format!("{output_dir}/test_program.c");
                                 let test_code = r#"
@@ -597,55 +663,80 @@ int main() {
     return 0;
 }
 "#;
-                                
+
                                 if let Err(e) = std::fs::write(&test_file, test_code) {
-                                    writeln!(log_file_handle, "Failed to write test program: {e}").unwrap();
+                                    writeln!(log_file_handle, "Failed to write test program: {e}")
+                                        .unwrap();
                                 } else {
                                     artifacts.push(test_file.clone());
-                                    
+
                                     // Compile the test program
-                                    let compile_test_cmd = format!("gcc -o {output_dir}/test_program {test_file}");
+                                    let compile_test_cmd =
+                                        format!("gcc -o {output_dir}/test_program {test_file}");
                                     let compile_test_output = Command::new("bash")
                                         .arg("-c")
                                         .arg(&compile_test_cmd)
                                         .output()
                                         .await;
-                                        
+
                                     match compile_test_output {
                                         Ok(output) => {
                                             let exit_code = output.status.code().unwrap_or(-1);
                                             let stderr = String::from_utf8_lossy(&output.stderr);
-                                            
+
                                             if exit_code == 0 {
-                                                writeln!(log_file_handle, "Test program compiled successfully").unwrap();
-                                                
+                                                writeln!(
+                                                    log_file_handle,
+                                                    "Test program compiled successfully"
+                                                )
+                                                .unwrap();
+
                                                 let test_bin = format!("{output_dir}/test_program");
                                                 artifacts.push(test_bin.clone());
-                                                
+
                                                 // Run the test program with LD_PRELOAD
-                                                writeln!(log_file_handle, "Running test program with LD_PRELOAD...").unwrap();
-                                                
+                                                writeln!(
+                                                    log_file_handle,
+                                                    "Running test program with LD_PRELOAD..."
+                                                )
+                                                .unwrap();
+
                                                 let run_test_cmd = format!("LD_PRELOAD={output_dir}/libsnellen_hook.so {output_dir}/test_program");
                                                 let test_output = Command::new("bash")
                                                     .arg("-c")
                                                     .arg(&run_test_cmd)
                                                     .output()
                                                     .await;
-                                                    
+
                                                 match test_output {
                                                     Ok(output) => {
-                                                        let exit_code = output.status.code().unwrap_or(-1);
-                                                        let stdout = String::from_utf8_lossy(&output.stdout);
-                                                        let stderr = String::from_utf8_lossy(&output.stderr);
-                                                        
-                                                        writeln!(log_file_handle, "Test program exit code: {exit_code}").unwrap();
+                                                        let exit_code =
+                                                            output.status.code().unwrap_or(-1);
+                                                        let stdout =
+                                                            String::from_utf8_lossy(&output.stdout);
+                                                        let stderr =
+                                                            String::from_utf8_lossy(&output.stderr);
+
+                                                        writeln!(
+                                                            log_file_handle,
+                                                            "Test program exit code: {exit_code}"
+                                                        )
+                                                        .unwrap();
                                                         if !stdout.is_empty() {
-                                                            writeln!(log_file_handle, "STDOUT: {stdout}").unwrap();
+                                                            writeln!(
+                                                                log_file_handle,
+                                                                "STDOUT: {stdout}"
+                                                            )
+                                                            .unwrap();
                                                         }
                                                         if !stderr.is_empty() {
-                                                            writeln!(log_file_handle, "STDERR: {stderr}").unwrap();
+                                                            writeln!(
+                                                                log_file_handle,
+                                                                "STDERR: {stderr}"
+                                                            )
+                                                            .unwrap();
                                                         }
-                                                        
+
                                                         // Check if the preload worked by looking for the marker file
                                                         let check_cmd = "test -f /tmp/snellen_injection_success && echo 'Success' || echo 'Failed'";
                                                         let check_output = Command::new("bash")
@@ -653,62 +744,81 @@ int main() {
                                                             .arg(check_cmd)
                                                             .output()
                                                             .await;
-                                                            
+
                                                         match check_output {
                                                             Ok(check_result) => {
-                                                                let result_str = String::from_utf8_lossy(&check_result.stdout).trim().to_string();
+                                                                let result_str =
+                                                                    String::from_utf8_lossy(
+                                                                        &check_result.stdout,
+                                                                    )
+                                                                    .trim()
+                                                                    .to_string();
                                                                 writeln!(log_file_handle, "LD_PRELOAD result: {result_str}").unwrap();
-                                                                
+
                                                                 if result_str == "Success" {
                                                                     // Show the contents of the log file
                                                                     let cat_cmd = "cat /tmp/snellen_ld_preload.log";
-                                                                    let cat_output = Command::new("bash")
-                                                                        .arg("-c")
-                                                                        .arg(cat_cmd)
-                                                                        .output()
-                                                                        .await;
-                                                                        
+                                                                    let cat_output =
+                                                                        Command::new("bash")
+                                                                            .arg("-c")
+                                                                            .arg(cat_cmd)
+                                                                            .output()
+                                                                            .await;
+
                                                                     match cat_output {
                                                                         Ok(cat_result) => {
                                                                             let log_content = String::from_utf8_lossy(&cat_result.stdout).trim().to_string();
                                                                             writeln!(log_file_handle, "LD_PRELOAD Log:\n{log_content}").unwrap();
-                                                                        },
+                                                                        }
                                                                         Err(e) => {
                                                                             writeln!(log_file_handle, "Failed to read log file: {e}").unwrap();
                                                                         }
                                                                     }
                                                                 }
-                                                            },
+                                                            }
                                                             Err(e) => {
                                                                 writeln!(log_file_handle, "Failed to check preload result: {e}").unwrap();
                                                             }
                                                         }
-                                                    },
+                                                    }
                                                     Err(e) => {
-                                                        writeln!(log_file_handle, "Failed to run test program: {e}").unwrap();
+                                                        writeln!(
+                                                            log_file_handle,
+                                                            "Failed to run test program: {e}"
+                                                        )
+                                                        .unwrap();
                                                     }
                                                 }
                                             } else {
-                                                writeln!(log_file_handle, "Test program compilation failed: {stderr}").unwrap();
+                                                writeln!(
+                                                    log_file_handle,
+                                                    "Test program compilation failed: {stderr}"
+                                                )
+                                                .unwrap();
                                             }
-                                        },
+                                        }
                                         Err(e) => {
-                                            writeln!(log_file_handle, "Test program compilation error: {e}").unwrap();
+                                            writeln!(
+                                                log_file_handle,
+                                                "Test program compilation error: {e}"
+                                            )
+                                            .unwrap();
                                         }
                                     }
                                 }
                             } else {
-                                writeln!(log_file_handle, "Library compilation failed: {stderr}").unwrap();
+                                writeln!(log_file_handle, "Library compilation failed: {stderr}")
+                                    .unwrap();
                             }
-                        },
+                        }
                         Err(e) => {
                             writeln!(log_file_handle, "Library compilation error: {e}").unwrap();
                         }
                     }
-                },
+                }
                 "shared_library" => {
                     writeln!(log_file_handle, "\n## Shared Library Injection").unwrap();
-                    
+
                     // Create a C program that loads a shared library into another process
                     let injector_file = format!("{output_dir}/library_injector.c");
                     let injector_code = r#"
@@ -787,7 +897,7 @@ int main(int argc, char *argv[]) {
     return inject_library(pid, lib_path);
 }
 "#;
-                    
+
                     if let Err(e) = std::fs::write(&injector_file, injector_code) {
                         writeln!(log_file_handle, "Failed to write library injector: {e}").unwrap();
                         return Ok(SimulationResult {
@@ -798,10 +908,10 @@ int main(int argc, char *argv[]) {
                             cleanup_required: true,
                         });
                     }
-                    
+
                     artifacts.push(injector_file.clone());
                     artifacts.push("/tmp/snellen_injection_success".to_string());
-                    
+
                     // Create a malicious shared library
                     let evil_lib_file = format!("{output_dir}/evil_library.c");
                     let evil_lib_code = r#"
@@ -833,7 +943,7 @@ void evil_function() {
     printf("Evil function called\n");
 }
 "#;
-                    
+
                     if let Err(e) = std::fs::write(&evil_lib_file, evil_lib_code) {
                         writeln!(log_file_handle, "Failed to write evil library: {e}").unwrap();
                         return Ok(SimulationResult {
@@ -844,74 +954,89 @@ void evil_function() {
                             cleanup_required: true,
                         });
                     }
-                    
+
                     artifacts.push(evil_lib_file.clone());
                     artifacts.push("/tmp/snellen_evil_lib_executed".to_string());
-                    
+
                     // Compile both files
-                    writeln!(log_file_handle, "Compiling library injector and evil library...").unwrap();
-                    
-                    let compile_injector_cmd = format!("gcc -o {output_dir}/library_injector {injector_file}");
-                    let compile_lib_cmd = format!("gcc -shared -fPIC -o {output_dir}/evil_library.so {evil_lib_file}");
-                    
+                    writeln!(
+                        log_file_handle,
+                        "Compiling library injector and evil library..."
+                    )
+                    .unwrap();
+
+                    let compile_injector_cmd =
+                        format!("gcc -o {output_dir}/library_injector {injector_file}");
+                    let compile_lib_cmd = format!(
+                        "gcc -shared -fPIC -o {output_dir}/evil_library.so {evil_lib_file}"
+                    );
+
                     let compile_injector_output = Command::new("bash")
                         .arg("-c")
                         .arg(&compile_injector_cmd)
                         .output()
                         .await;
-                        
+
                     let compile_lib_output = Command::new("bash")
                         .arg("-c")
                         .arg(&compile_lib_cmd)
                         .output()
                         .await;
-                        
+
                     let injector_success = match compile_injector_output {
                         Ok(output) => {
                             let exit_code = output.status.code().unwrap_or(-1);
                             let stderr = String::from_utf8_lossy(&output.stderr);
-                            
+
                             if exit_code == 0 {
-                                writeln!(log_file_handle, "Injector compilation successful").unwrap();
+                                writeln!(log_file_handle, "Injector compilation successful")
+                                    .unwrap();
                                 artifacts.push(format!("{output_dir}/library_injector"));
                                 true
                             } else {
-                                writeln!(log_file_handle, "Injector compilation failed: {stderr}").unwrap();
+                                writeln!(log_file_handle, "Injector compilation failed: {stderr}")
+                                    .unwrap();
                                 false
                             }
-                        },
+                        }
                         Err(e) => {
                             writeln!(log_file_handle, "Injector compilation error: {e}").unwrap();
                             false
                         }
                     };
-                    
+
                     let lib_success = match compile_lib_output {
                         Ok(output) => {
                             let exit_code = output.status.code().unwrap_or(-1);
                             let stderr = String::from_utf8_lossy(&output.stderr);
-                            
+
                             if exit_code == 0 {
-                                writeln!(log_file_handle, "Evil library compilation successful").unwrap();
+                                writeln!(log_file_handle, "Evil library compilation successful")
+                                    .unwrap();
                                 artifacts.push(format!("{output_dir}/evil_library.so"));
                                 true
                             } else {
-                                writeln!(log_file_handle, "Evil library compilation failed: {stderr}").unwrap();
+                                writeln!(
+                                    log_file_handle,
+                                    "Evil library compilation failed: {stderr}"
+                                )
+                                .unwrap();
                                 false
                             }
-                        },
+                        }
                         Err(e) => {
-                            writeln!(log_file_handle, "Evil library compilation error: {e}").unwrap();
+                            writeln!(log_file_handle, "Evil library compilation error: {e}")
+                                .unwrap();
                             false
                         }
                     };
-                    
+
                     if injector_success && lib_success {
                         // Determine target process
                         let target_pid = if target_process == "self" {
                             // Create a simple target process
                             writeln!(log_file_handle, "Creating a target process...").unwrap();
-                            
+
                             let target_file = format!("{output_dir}/target_process.sh");
                             let target_script = r#"#!/bin/bash
 echo "Target process started with PID $$"
@@ -919,9 +1044,10 @@ echo "Sleeping for 30 seconds to allow injection..."
 sleep 30
 echo "Target process completing"
 "#;
-                            
+
                             if let Err(e) = std::fs::write(&target_file, target_script) {
-                                writeln!(log_file_handle, "Failed to write target script: {e}").unwrap();
+                                writeln!(log_file_handle, "Failed to write target script: {e}")
+                                    .unwrap();
                                 return Ok(SimulationResult {
                                     technique_id: technique_info.id,
                                     success: false,
@@ -930,9 +1056,9 @@ echo "Target process completing"
                                     cleanup_required: true,
                                 });
                             }
-                            
+
                             artifacts.push(target_file.clone());
-                            
+
                             // Make executable
                             let chmod_cmd = format!("chmod +x {target_file}");
                             let _ = Command::new("bash")
@@ -940,27 +1066,37 @@ echo "Target process completing"
                                 .arg(&chmod_cmd)
                                 .output()
                                 .await;
-                            
+
                             // Start the target process
                             let target_log = format!("{output_dir}/target_process.log");
-                            let run_target_cmd = format!("{target_file} > {target_log} 2>&1 & echo $!");
-                            
+                            let run_target_cmd =
+                                format!("{target_file} > {target_log} 2>&1 & echo $!");
+
                             artifacts.push(target_log.clone());
-                            
+
                             let target_output = Command::new("bash")
                                 .arg("-c")
                                 .arg(&run_target_cmd)
                                 .output()
                                 .await;
-                                
+
                             match target_output {
                                 Ok(output) => {
-                                    let pid_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
-                                    writeln!(log_file_handle, "Target process started with PID {pid_str}").unwrap();
+                                    let pid_str =
+                                        String::from_utf8_lossy(&output.stdout).trim().to_string();
+                                    writeln!(
+                                        log_file_handle,
+                                        "Target process started with PID {pid_str}"
+                                    )
+                                    .unwrap();
                                     pid_str
-                                },
+                                }
                                 Err(e) => {
-                                    writeln!(log_file_handle, "Failed to start target process: {e}").unwrap();
+                                    writeln!(
+                                        log_file_handle,
+                                        "Failed to start target process: {e}"
+                                    )
+                                    .unwrap();
                                     return Ok(SimulationResult {
                                         technique_id: technique_info.id,
                                         success: false,
@@ -981,12 +1117,17 @@ echo "Target process completing"
                                 .arg(&find_pid_cmd)
                                 .output()
                                 .await;
-                                
+
                             match find_pid_output {
                                 Ok(output) => {
-                                    let pid_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                                    let pid_str =
+                                        String::from_utf8_lossy(&output.stdout).trim().to_string();
                                     if pid_str.is_empty() {
-                                        writeln!(log_file_handle, "Could not find process: {target_process}").unwrap();
+                                        writeln!(
+                                            log_file_handle,
+                                            "Could not find process: {target_process}"
+                                        )
+                                        .unwrap();
                                         return Ok(SimulationResult {
                                             technique_id: technique_info.id,
                                             success: false,
@@ -995,12 +1136,17 @@ echo "Target process completing"
                                             cleanup_required: true,
                                         });
                                     } else {
-                                        writeln!(log_file_handle, "Found {target_process} with PID {pid_str}").unwrap();
+                                        writeln!(
+                                            log_file_handle,
+                                            "Found {target_process} with PID {pid_str}"
+                                        )
+                                        .unwrap();
                                         pid_str
                                     }
-                                },
+                                }
                                 Err(e) => {
-                                    writeln!(log_file_handle, "Failed to find process PID: {e}").unwrap();
+                                    writeln!(log_file_handle, "Failed to find process PID: {e}")
+                                        .unwrap();
                                     return Ok(SimulationResult {
                                         technique_id: technique_info.id,
                                         success: false,
@@ -1011,73 +1157,93 @@ echo "Target process completing"
                                 }
                             }
                         };
-                        
+
                         // Run the injector
-                        writeln!(log_file_handle, "Running library injector on PID {target_pid}...").unwrap();
-                        
+                        writeln!(
+                            log_file_handle,
+                            "Running library injector on PID {target_pid}..."
+                        )
+                        .unwrap();
+
                         let injector_bin = format!("{output_dir}/library_injector");
                         let evil_lib = format!("{output_dir}/evil_library.so");
                         let run_injector_cmd = format!("{injector_bin} {target_pid} {evil_lib}");
-                        
+
                         let injector_output = Command::new("bash")
                             .arg("-c")
                             .arg(&run_injector_cmd)
                             .output()
                             .await;
-                            
+
                         match injector_output {
                             Ok(output) => {
                                 let exit_code = output.status.code().unwrap_or(-1);
                                 let stdout = String::from_utf8_lossy(&output.stdout);
                                 let stderr = String::from_utf8_lossy(&output.stderr);
-                                
-                                writeln!(log_file_handle, "Injector exit code: {exit_code}").unwrap();
+
+                                writeln!(log_file_handle, "Injector exit code: {exit_code}")
+                                    .unwrap();
                                 if !stdout.is_empty() {
                                     writeln!(log_file_handle, "STDOUT: {stdout}").unwrap();
                                 }
                                 if !stderr.is_empty() {
                                     writeln!(log_file_handle, "STDERR: {stderr}").unwrap();
                                 }
-                                
+
                                 // Check if the injection was successful
                                 let check_cmd = "test -f /tmp/snellen_injection_success && echo 'Success' || echo 'Failed'";
-                                let check_output = Command::new("bash")
-                                    .arg("-c")
-                                    .arg(check_cmd)
-                                    .output()
-                                    .await;
-                                    
+                                let check_output =
+                                    Command::new("bash").arg("-c").arg(check_cmd).output().await;
+
                                 match check_output {
                                     Ok(check_result) => {
-                                        let result_str = String::from_utf8_lossy(&check_result.stdout).trim().to_string();
-                                        writeln!(log_file_handle, "Injection result: {result_str}").unwrap();
-                                    },
+                                        let result_str =
+                                            String::from_utf8_lossy(&check_result.stdout)
+                                                .trim()
+                                                .to_string();
+                                        writeln!(log_file_handle, "Injection result: {result_str}")
+                                            .unwrap();
+                                    }
                                     Err(e) => {
-                                        writeln!(log_file_handle, "Failed to check injection result: {e}").unwrap();
+                                        writeln!(
+                                            log_file_handle,
+                                            "Failed to check injection result: {e}"
+                                        )
+                                        .unwrap();
                                     }
                                 }
-                            },
+                            }
                             Err(e) => {
                                 writeln!(log_file_handle, "Failed to run injector: {e}").unwrap();
                             }
                         }
                     }
-                },
+                }
                 _ => {
-                    writeln!(log_file_handle, "\n## ERROR: Unsupported technique '{technique_type}'").unwrap();
-                    writeln!(log_file_handle, "Supported techniques: ptrace, ld_preload, shared_library").unwrap();
+                    writeln!(
+                        log_file_handle,
+                        "\n## ERROR: Unsupported technique '{technique_type}'"
+                    )
+                    .unwrap();
+                    writeln!(
+                        log_file_handle,
+                        "Supported techniques: ptrace, ld_preload, shared_library"
+                    )
+                    .unwrap();
                 }
             }
-            
+
             // Close log file
             drop(log_file_handle);
-            
+
             info!("Process injection test complete, logs saved to {log_file}");
-            
+
             Ok(SimulationResult {
                 technique_id: technique_info.id,
                 success: true,
-                message: format!("Process injection ({technique_type}) test completed. Logs: {log_file}"),
+                message: format!(
+                    "Process injection ({technique_type}) test completed. Logs: {log_file}"
+                ),
                 artifacts,
                 cleanup_required: true,
             })
@@ -1088,12 +1254,8 @@ echo "Target process completing"
         Box::pin(async move {
             // Kill any processes we might have started
             let kill_cmd = "pkill -f snellen_injection || true";
-            let _ = Command::new("bash")
-                .arg("-c")
-                .arg(kill_cmd)
-                .output()
-                .await;
-            
+            let _ = Command::new("bash").arg("-c").arg(kill_cmd).output().await;
+
             for artifact in artifacts {
                 if Path::new(artifact).exists() {
                     // If it's a directory, try to remove it recursively

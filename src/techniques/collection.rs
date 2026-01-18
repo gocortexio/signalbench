@@ -1,13 +1,16 @@
+// SPDX-FileCopyrightText: GoCortexIO
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // SIGNALBENCH - Collection Techniques
 // Collection techniques for the MITRE ATT&CK framework
-// 
+//
 // This module implements techniques for gathering data from target systems
 // Developed by Simon Sigre (simon@gocortex.io)
 // Part of the GoCortex.io platform for security testing and validation
 
 use crate::config::TechniqueConfig;
 use crate::techniques::{AttackTechnique, SimulationResult, Technique, TechniqueParameter};
-use crate::techniques::{ExecuteFuture, CleanupFuture};
+use crate::techniques::{CleanupFuture, ExecuteFuture};
 use async_trait::async_trait;
 use log::{info, warn};
 use std::fs::{self, File};
@@ -55,11 +58,7 @@ impl AttackTechnique for AutomatedCollection {
         }
     }
 
-    fn execute<'a>(
-        &'a self,
-        config: &'a TechniqueConfig,
-        dry_run: bool,
-    ) -> ExecuteFuture<'a> {
+    fn execute<'a>(&'a self, config: &'a TechniqueConfig, dry_run: bool) -> ExecuteFuture<'a> {
         Box::pin(async move {
             let max_files = config
                 .parameters
@@ -67,46 +66,71 @@ impl AttackTechnique for AutomatedCollection {
                 .unwrap_or(&"50".to_string())
                 .parse::<usize>()
                 .unwrap_or(50);
-            
+
             let max_file_size = config
                 .parameters
                 .get("max_file_size")
                 .unwrap_or(&"1048576".to_string())
                 .parse::<u64>()
                 .unwrap_or(1048576);
-            
+
             let output_report = config
                 .parameters
                 .get("output_report")
                 .unwrap_or(&"/tmp/signalbench_collection_report.json".to_string())
                 .clone();
-            
+
             let session_id = Uuid::new_v4().to_string().replace("-", "");
             let staging_dir = format!("/tmp/signalbench_collection_{session_id}");
             let archive_path = format!("{staging_dir}/collection_archive.tar.gz");
-            
+
             let search_dirs = vec![
-                format!("{}/", std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string())),
-                format!("{}/.ssh/", std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string())),
+                format!(
+                    "{}/",
+                    std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string())
+                ),
+                format!(
+                    "{}/.ssh/",
+                    std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string())
+                ),
                 "/tmp/".to_string(),
                 "/var/log/".to_string(),
                 "/opt/".to_string(),
                 "/etc/".to_string(),
                 "/root/.ssh/".to_string(),
             ];
-            
+
             let target_patterns = vec![
-                "*.key", "*.pem", "*.conf", "*.db", "*.sql", 
-                "*secret*", "*password*", "*.env", "*.cfg",
-                "*.config", "*.ini", "*.yaml", "*.yml", "*.json",
-                "*id_rsa*", "*id_ed25519*", "*authorized_keys*", "*known_hosts*",
-                "*shadow*", "*passwd*", "*sudoers*",
+                "*.key",
+                "*.pem",
+                "*.conf",
+                "*.db",
+                "*.sql",
+                "*secret*",
+                "*password*",
+                "*.env",
+                "*.cfg",
+                "*.config",
+                "*.ini",
+                "*.yaml",
+                "*.yml",
+                "*.json",
+                "*id_rsa*",
+                "*id_ed25519*",
+                "*authorized_keys*",
+                "*known_hosts*",
+                "*shadow*",
+                "*passwd*",
+                "*sudoers*",
             ];
-            
+
             if dry_run {
                 info!("[DRY RUN] Would perform automated file collection:");
                 info!("[DRY RUN]   Search directories: {}", search_dirs.join(", "));
-                info!("[DRY RUN]   Target patterns: {}", target_patterns.join(", "));
+                info!(
+                    "[DRY RUN]   Target patterns: {}",
+                    target_patterns.join(", ")
+                );
                 info!("[DRY RUN]   Max files: {max_files}, Max size: {max_file_size} bytes");
                 info!("[DRY RUN]   Staging: {staging_dir}");
                 info!("[DRY RUN]   Archive: {archive_path}");
@@ -121,56 +145,54 @@ impl AttackTechnique for AutomatedCollection {
 
             info!("Starting automated collection (Session: {session_id})...");
             info!("Creating staging directory: {staging_dir}");
-            
+
             fs::create_dir_all(&staging_dir)
                 .map_err(|e| format!("Failed to create staging directory: {e}"))?;
-            
+
             let mut artifacts = vec![staging_dir.clone(), output_report.clone()];
             let mut collected_files = Vec::new();
             let mut collection_metadata = Vec::new();
             let mut total_size = 0u64;
-            
+
             // Phase 1: File Discovery and Collection
             info!("Phase 1: Discovering and collecting files...");
-            
+
             for search_dir in &search_dirs {
                 if !Path::new(search_dir).exists() {
                     warn!("Directory does not exist or not accessible: {search_dir}");
                     continue;
                 }
-                
+
                 info!("Searching directory: {search_dir}");
-                
+
                 if let Ok(entries) = fs::read_dir(search_dir) {
                     for entry in entries.flatten() {
                         if collected_files.len() >= max_files {
                             info!("Reached maximum file limit ({max_files})");
                             break;
                         }
-                        
+
                         let path = entry.path();
-                        
+
                         // Skip if not a file
                         if !path.is_file() {
                             continue;
                         }
-                        
+
                         // Get file metadata
                         let metadata = match fs::metadata(&path) {
                             Ok(m) => m,
                             Err(_) => continue,
                         };
-                        
+
                         // Skip if file is too large
                         if metadata.len() > max_file_size {
                             continue;
                         }
-                        
+
                         // Check if file matches any pattern
-                        let file_name = path.file_name()
-                            .and_then(|n| n.to_str())
-                            .unwrap_or("");
-                        
+                        let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+
                         let mut matches = false;
                         for pattern in &target_patterns {
                             let pattern_str = pattern.replace("*", "");
@@ -184,31 +206,32 @@ impl AttackTechnique for AutomatedCollection {
                                     matches = true;
                                     break;
                                 }
-                            } else if pattern.ends_with('*')
-                                && file_name.starts_with(&pattern_str) {
-                                    matches = true;
-                                    break;
-                                }
+                            } else if pattern.ends_with('*') && file_name.starts_with(&pattern_str)
+                            {
+                                matches = true;
+                                break;
+                            }
                         }
-                        
+
                         if !matches {
                             continue;
                         }
-                        
+
                         // Collect file metadata
-                        let modified = metadata.modified()
+                        let modified = metadata
+                            .modified()
                             .ok()
                             .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
                             .map(|d| d.as_secs())
                             .unwrap_or(0);
-                        
+
                         let permissions = format!("{:o}", metadata.permissions().mode() & 0o777);
-                        
+
                         // Copy file to staging directory
                         let dest_path = format!("{staging_dir}/{file_name}");
                         if fs::copy(&path, &dest_path).is_ok() {
                             info!("Collected: {} ({} bytes)", path.display(), metadata.len());
-                            
+
                             collection_metadata.push(serde_json::json!({
                                 "original_path": path.to_string_lossy(),
                                 "file_name": file_name,
@@ -217,51 +240,58 @@ impl AttackTechnique for AutomatedCollection {
                                 "permissions": permissions,
                                 "copied_to": dest_path,
                             }));
-                            
+
                             collected_files.push(dest_path);
                             total_size += metadata.len();
                         }
                     }
                 }
-                
+
                 if collected_files.len() >= max_files {
                     break;
                 }
             }
-            
-            info!("Collected {} files ({} bytes total)", collected_files.len(), total_size);
-            
+
+            info!(
+                "Collected {} files ({} bytes total)",
+                collected_files.len(),
+                total_size
+            );
+
             // Phase 2: Create tar archive
             info!("Phase 2: Creating tar.gz archive...");
-            
+
             if !collected_files.is_empty() {
                 let tar_output = Command::new("tar")
                     .args(["czf", &archive_path, "-C", &staging_dir, "."])
                     .output()
                     .await;
-                
+
                 match tar_output {
                     Ok(output) if output.status.success() => {
                         info!("Archive created successfully: {archive_path}");
                         artifacts.push(archive_path.clone());
-                        
+
                         // Get archive size
                         if let Ok(archive_metadata) = fs::metadata(&archive_path) {
                             info!("Archive size: {} bytes", archive_metadata.len());
                         }
                     }
                     Ok(output) => {
-                        warn!("tar command failed: {}", String::from_utf8_lossy(&output.stderr));
+                        warn!(
+                            "tar command failed: {}",
+                            String::from_utf8_lossy(&output.stderr)
+                        );
                     }
                     Err(e) => {
                         warn!("Failed to execute tar: {e}");
                     }
                 }
             }
-            
+
             // Phase 3: Generate comprehensive collection report
             info!("Phase 3: Generating collection report...");
-            
+
             let report = serde_json::json!({
                 "technique_id": "T1119",
                 "technique_name": "Automated Collection",
@@ -279,17 +309,20 @@ impl AttackTechnique for AutomatedCollection {
                 "archive_path": archive_path,
                 "collected_files": collection_metadata,
             });
-            
+
             let mut report_file = File::create(&output_report)
                 .map_err(|e| format!("Failed to create report file: {e}"))?;
-            
-            report_file.write_all(serde_json::to_string_pretty(&report)
-                .unwrap_or_else(|_| "{}".to_string())
-                .as_bytes())
+
+            report_file
+                .write_all(
+                    serde_json::to_string_pretty(&report)
+                        .unwrap_or_else(|_| "{}".to_string())
+                        .as_bytes(),
+                )
                 .map_err(|e| format!("Failed to write report: {e}"))?;
-            
+
             info!("Collection report saved to: {output_report}");
-            
+
             Ok(SimulationResult {
                 technique_id: self.info().id,
                 success: true,
@@ -307,7 +340,7 @@ impl AttackTechnique for AutomatedCollection {
     fn cleanup<'a>(&'a self, artifacts: &'a [String]) -> CleanupFuture<'a> {
         Box::pin(async move {
             info!("Starting cleanup of automated collection artifacts...");
-            
+
             for artifact in artifacts {
                 if Path::new(artifact).exists() {
                     if Path::new(artifact).is_dir() {
@@ -323,7 +356,7 @@ impl AttackTechnique for AutomatedCollection {
                     }
                 }
             }
-            
+
             info!("Automated collection cleanup completed");
             Ok(())
         })

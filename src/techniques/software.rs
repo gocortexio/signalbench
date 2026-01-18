@@ -1,10 +1,13 @@
+// SPDX-FileCopyrightText: GoCortexIO
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // SOFTWARE category: Simulations of known malware families from MITRE ATT&CK
 // EXPERIMENTAL: These implementations represent research-grade malware behaviour simulations
 // designed to match YARA signatures and documented techniques for security analytics research
 
 use crate::config::TechniqueConfig;
 use crate::techniques::{AttackTechnique, SimulationResult, Technique, TechniqueParameter};
-use crate::techniques::{ExecuteFuture, CleanupFuture};
+use crate::techniques::{CleanupFuture, ExecuteFuture};
 use async_trait::async_trait;
 use log::{info, warn};
 use std::fs::{self, OpenOptions};
@@ -53,33 +56,29 @@ impl AttackTechnique for S1109Pacemaker {
         }
     }
 
-    fn execute<'a>(
-        &'a self,
-        config: &'a TechniqueConfig,
-        dry_run: bool,
-    ) -> ExecuteFuture<'a> {
+    fn execute<'a>(&'a self, config: &'a TechniqueConfig, dry_run: bool) -> ExecuteFuture<'a> {
         Box::pin(async move {
             let binary_path = "/tmp/signalbench_sim-pacemaker";
             let launcher_path = "/tmp/signalbench_sim-pacemaker-launcher.sh";
-            
+
             let timeout = config
                 .parameters
                 .get("timeout")
                 .unwrap_or(&"3".to_string())
                 .clone();
-                
+
             let memory_size = config
                 .parameters
                 .get("memory_size")
                 .unwrap_or(&"16".to_string())
                 .clone();
-                
+
             let scan_interval = config
                 .parameters
                 .get("scan_interval")
                 .unwrap_or(&"2".to_string())
                 .clone();
-            
+
             let cred_files = vec![
                 "/tmp/signalbench_sim_dsactiveuser.statementcounters",
                 "/tmp/signalbench_sim_dsstartssh.statementcounters",
@@ -100,7 +99,7 @@ impl AttackTechnique for S1109Pacemaker {
                     binary_path, timeout, memory_size, scan_interval,
                     cred_files[0], cred_files[1], cred_files[2]
                 );
-                
+
                 return Ok(SimulationResult {
                     technique_id: self.info().id,
                     success: true,
@@ -116,8 +115,11 @@ impl AttackTechnique for S1109Pacemaker {
                 });
             }
 
-            info!("Extracting embedded PACEMAKER simulation binary ({} bytes)", PACEMAKER_BINARY.len());
-            
+            info!(
+                "Extracting embedded PACEMAKER simulation binary ({} bytes)",
+                PACEMAKER_BINARY.len()
+            );
+
             // Securely create the binary file using create_new() and O_NOFOLLOW to prevent symlink attacks
             // O_NOFOLLOW ensures that symlinks are rejected, even if they point to non-existent files
             // This will fail if the file already exists or if the path is a symlink
@@ -137,14 +139,15 @@ impl AttackTechnique for S1109Pacemaker {
                     }
                 })?;
 
-            binary_file.write_all(PACEMAKER_BINARY)
+            binary_file
+                .write_all(PACEMAKER_BINARY)
                 .map_err(|e| format!("Failed to write PACEMAKER binary content: {e}"))?;
-            
+
             // Explicitly drop the file handle to close it before execution
             drop(binary_file);
 
             info!("Creating PACEMAKER launcher script");
-            
+
             // Securely create the launcher script using create_new() and O_NOFOLLOW to prevent symlink attacks
             let launcher_script = format!(
                 "#!/bin/bash\n\
@@ -152,7 +155,7 @@ impl AttackTechnique for S1109Pacemaker {
                 # Based on Mandiant report: SHA256 4c5555955b2e6dc55f52b0c1a3326f3d07b325b112060329c503b294208960ec\n\
                 {binary_path} -t $1 -m 16 -s 2 &\n"
             );
-            
+
             let mut launcher_file = OpenOptions::new()
                 .write(true)
                 .create_new(true)
@@ -169,14 +172,15 @@ impl AttackTechnique for S1109Pacemaker {
                     }
                 })?;
 
-            launcher_file.write_all(launcher_script.as_bytes())
+            launcher_file
+                .write_all(launcher_script.as_bytes())
                 .map_err(|e| format!("Failed to write launcher script content: {e}"))?;
-            
+
             // Explicitly drop the file handle to close it before execution
             drop(launcher_file);
 
             info!("Executing PACEMAKER simulation (timeout: {timeout}s, memory: {memory_size}MB, interval: {scan_interval}s)");
-            
+
             // Execute the binary with parameters matching Mandiant report
             let output = Command::new(binary_path)
                 .args(["-t", &timeout, "-m", &memory_size, "-s", &scan_interval])
@@ -246,7 +250,7 @@ impl AttackTechnique for S1109Pacemaker {
                 "/tmp/signalbench_sim_dsstartssh.statementcounters",
                 "/tmp/signalbench_sim_dsserver-check.statementcounters",
             ];
-            
+
             for file in &additional_files {
                 if std::path::Path::new(file).exists() {
                     if let Err(e) = fs::remove_file(file) {

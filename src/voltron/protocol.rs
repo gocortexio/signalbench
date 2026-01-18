@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: GoCortexIO
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 use serde::{Deserialize, Serialize};
 use std::io;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -246,16 +249,16 @@ where
     W: AsyncWriteExt + Unpin,
 {
     let json = serde_json::to_vec(req)?;
-    
+
     if json.len() > MAX_MESSAGE_SIZE {
         return Err(VoltronError::MessageTooLarge(json.len()));
     }
-    
+
     let len = json.len() as u32;
     writer.write_all(&len.to_be_bytes()).await?;
     writer.write_all(&json).await?;
     writer.flush().await?;
-    
+
     Ok(())
 }
 
@@ -265,16 +268,16 @@ where
     W: AsyncWriteExt + Unpin,
 {
     let json = serde_json::to_vec(resp)?;
-    
+
     if json.len() > MAX_MESSAGE_SIZE {
         return Err(VoltronError::MessageTooLarge(json.len()));
     }
-    
+
     let len = json.len() as u32;
     writer.write_all(&len.to_be_bytes()).await?;
     writer.write_all(&json).await?;
     writer.flush().await?;
-    
+
     Ok(())
 }
 
@@ -285,39 +288,39 @@ where
     let mut len_bytes = [0u8; 4];
     reader.read_exact(&mut len_bytes).await?;
     let len = u32::from_be_bytes(len_bytes) as usize;
-    
+
     if len > MAX_MESSAGE_SIZE {
         return Err(VoltronError::MessageTooLarge(len));
     }
-    
+
     let mut buffer = vec![0u8; len];
     reader.read_exact(&mut buffer).await?;
-    
+
     let req: JsonRpcRequest = serde_json::from_slice(&buffer)?;
-    
+
     if req.jsonrpc != RPC_VERSION {
         return Err(VoltronError::InvalidJsonRpc(format!(
             "Invalid JSON-RPC version: expected '{}', got '{}'",
             RPC_VERSION, req.jsonrpc
         )));
     }
-    
+
     if let Some(ref id) = req.id {
         if !id.is_string() && !id.is_number() && !id.is_null() {
             return Err(VoltronError::InvalidJsonRpc(
-                "Request id must be string, number, or null".to_string()
+                "Request id must be string, number, or null".to_string(),
             ));
         }
     }
-    
+
     if let Some(ref params) = req.params {
         if !params.is_object() && !params.is_array() {
             return Err(VoltronError::InvalidJsonRpc(
-                "Request params must be an object or array".to_string()
+                "Request params must be an object or array".to_string(),
             ));
         }
     }
-    
+
     Ok(req)
 }
 
@@ -329,53 +332,53 @@ where
     let mut len_bytes = [0u8; 4];
     reader.read_exact(&mut len_bytes).await?;
     let len = u32::from_be_bytes(len_bytes) as usize;
-    
+
     if len > MAX_MESSAGE_SIZE {
         return Err(VoltronError::MessageTooLarge(len));
     }
-    
+
     let mut buffer = vec![0u8; len];
     reader.read_exact(&mut buffer).await?;
-    
+
     let resp: JsonRpcResponse = serde_json::from_slice(&buffer)?;
-    
+
     if resp.jsonrpc != RPC_VERSION {
         return Err(VoltronError::InvalidJsonRpc(format!(
             "Invalid JSON-RPC version: expected '{}', got '{}'",
             RPC_VERSION, resp.jsonrpc
         )));
     }
-    
+
     if let Some(ref id) = resp.id {
         if !id.is_string() && !id.is_number() && !id.is_null() {
             return Err(VoltronError::InvalidJsonRpc(
-                "Response id must be string, number, or null".to_string()
+                "Response id must be string, number, or null".to_string(),
             ));
         }
     }
-    
+
     match (&resp.result, &resp.error) {
         (Some(_), Some(_)) => {
             return Err(VoltronError::InvalidJsonRpc(
-                "Response cannot have both result and error".to_string()
+                "Response cannot have both result and error".to_string(),
             ));
         }
         (None, None) => {
             return Err(VoltronError::InvalidJsonRpc(
-                "Response must have either result or error".to_string()
+                "Response must have either result or error".to_string(),
             ));
         }
         _ => {}
     }
-    
+
     if resp.error.is_some() || resp.result.is_some() {
         if resp.id.is_none() {
             return Err(VoltronError::InvalidJsonRpc(
-                "Response to request must include id field".to_string()
+                "Response to request must include id field".to_string(),
             ));
         }
     }
-    
+
     Ok(resp)
 }
 
@@ -401,7 +404,7 @@ mod tests {
         assert_eq!(decoded.method, METHOD_REGISTER);
         assert_eq!(decoded.id, Some(serde_json::Value::Number(1.into())));
     }
-    
+
     #[tokio::test]
     async fn test_json_rpc_request_without_params() {
         let req = JsonRpcRequest::new(METHOD_HEARTBEAT, None, 2);
@@ -416,7 +419,7 @@ mod tests {
         assert_eq!(decoded.method, METHOD_HEARTBEAT);
         assert!(decoded.params.is_none());
     }
-    
+
     #[tokio::test]
     async fn test_invalid_json_rpc_version_request() {
         let bad_json = r#"{"jsonrpc":"1.0","method":"test","id":1}"#;
@@ -424,14 +427,17 @@ mod tests {
         let mut buffer = Vec::new();
         buffer.extend_from_slice(&len);
         buffer.extend_from_slice(bad_json.as_bytes());
-        
+
         let mut cursor = std::io::Cursor::new(buffer);
         let result = read_request(&mut cursor).await;
-        
+
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), VoltronError::InvalidJsonRpc(_)));
+        assert!(matches!(
+            result.unwrap_err(),
+            VoltronError::InvalidJsonRpc(_)
+        ));
     }
-    
+
     #[tokio::test]
     async fn test_invalid_json_rpc_version_response() {
         let bad_json = r#"{"jsonrpc":"1.0","result":true,"id":1}"#;
@@ -439,29 +445,36 @@ mod tests {
         let mut buffer = Vec::new();
         buffer.extend_from_slice(&len);
         buffer.extend_from_slice(bad_json.as_bytes());
-        
+
         let mut cursor = std::io::Cursor::new(buffer);
         let result = read_response(&mut cursor).await;
-        
+
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), VoltronError::InvalidJsonRpc(_)));
+        assert!(matches!(
+            result.unwrap_err(),
+            VoltronError::InvalidJsonRpc(_)
+        ));
     }
-    
+
     #[tokio::test]
     async fn test_response_with_both_result_and_error() {
-        let bad_json = r#"{"jsonrpc":"2.0","result":true,"error":{"code":-32600,"message":"err"},"id":1}"#;
+        let bad_json =
+            r#"{"jsonrpc":"2.0","result":true,"error":{"code":-32600,"message":"err"},"id":1}"#;
         let len = (bad_json.len() as u32).to_be_bytes();
         let mut buffer = Vec::new();
         buffer.extend_from_slice(&len);
         buffer.extend_from_slice(bad_json.as_bytes());
-        
+
         let mut cursor = std::io::Cursor::new(buffer);
         let result = read_response(&mut cursor).await;
-        
+
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), VoltronError::InvalidJsonRpc(_)));
+        assert!(matches!(
+            result.unwrap_err(),
+            VoltronError::InvalidJsonRpc(_)
+        ));
     }
-    
+
     #[tokio::test]
     async fn test_response_with_neither_result_nor_error() {
         let bad_json = r#"{"jsonrpc":"2.0","id":1}"#;
@@ -469,27 +482,33 @@ mod tests {
         let mut buffer = Vec::new();
         buffer.extend_from_slice(&len);
         buffer.extend_from_slice(bad_json.as_bytes());
-        
+
         let mut cursor = std::io::Cursor::new(buffer);
         let result = read_response(&mut cursor).await;
-        
+
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), VoltronError::InvalidJsonRpc(_)));
+        assert!(matches!(
+            result.unwrap_err(),
+            VoltronError::InvalidJsonRpc(_)
+        ));
     }
-    
+
     #[tokio::test]
     async fn test_message_too_large() {
         let huge_len = (2 * 1024 * 1024u32).to_be_bytes();
         let mut buffer = Vec::new();
         buffer.extend_from_slice(&huge_len);
-        
+
         let mut cursor = std::io::Cursor::new(buffer);
         let result = read_request(&mut cursor).await;
-        
+
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), VoltronError::MessageTooLarge(_)));
+        assert!(matches!(
+            result.unwrap_err(),
+            VoltronError::MessageTooLarge(_)
+        ));
     }
-    
+
     #[tokio::test]
     async fn test_invalid_request_id_array() {
         let bad_json = r#"{"jsonrpc":"2.0","method":"test","id":[1,2,3]}"#;
@@ -497,14 +516,17 @@ mod tests {
         let mut buffer = Vec::new();
         buffer.extend_from_slice(&len);
         buffer.extend_from_slice(bad_json.as_bytes());
-        
+
         let mut cursor = std::io::Cursor::new(buffer);
         let result = read_request(&mut cursor).await;
-        
+
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), VoltronError::InvalidJsonRpc(_)));
+        assert!(matches!(
+            result.unwrap_err(),
+            VoltronError::InvalidJsonRpc(_)
+        ));
     }
-    
+
     #[tokio::test]
     async fn test_invalid_request_id_object() {
         let bad_json = r#"{"jsonrpc":"2.0","method":"test","id":{"foo":"bar"}}"#;
@@ -512,14 +534,17 @@ mod tests {
         let mut buffer = Vec::new();
         buffer.extend_from_slice(&len);
         buffer.extend_from_slice(bad_json.as_bytes());
-        
+
         let mut cursor = std::io::Cursor::new(buffer);
         let result = read_request(&mut cursor).await;
-        
+
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), VoltronError::InvalidJsonRpc(_)));
+        assert!(matches!(
+            result.unwrap_err(),
+            VoltronError::InvalidJsonRpc(_)
+        ));
     }
-    
+
     #[tokio::test]
     async fn test_invalid_response_id_array() {
         let bad_json = r#"{"jsonrpc":"2.0","result":true,"id":[1,2,3]}"#;
@@ -527,14 +552,17 @@ mod tests {
         let mut buffer = Vec::new();
         buffer.extend_from_slice(&len);
         buffer.extend_from_slice(bad_json.as_bytes());
-        
+
         let mut cursor = std::io::Cursor::new(buffer);
         let result = read_response(&mut cursor).await;
-        
+
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), VoltronError::InvalidJsonRpc(_)));
+        assert!(matches!(
+            result.unwrap_err(),
+            VoltronError::InvalidJsonRpc(_)
+        ));
     }
-    
+
     #[tokio::test]
     async fn test_invalid_params_string() {
         let bad_json = r#"{"jsonrpc":"2.0","method":"test","params":"invalid","id":1}"#;
@@ -542,14 +570,17 @@ mod tests {
         let mut buffer = Vec::new();
         buffer.extend_from_slice(&len);
         buffer.extend_from_slice(bad_json.as_bytes());
-        
+
         let mut cursor = std::io::Cursor::new(buffer);
         let result = read_request(&mut cursor).await;
-        
+
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), VoltronError::InvalidJsonRpc(_)));
+        assert!(matches!(
+            result.unwrap_err(),
+            VoltronError::InvalidJsonRpc(_)
+        ));
     }
-    
+
     #[tokio::test]
     async fn test_invalid_params_number() {
         let bad_json = r#"{"jsonrpc":"2.0","method":"test","params":42,"id":1}"#;
@@ -557,12 +588,15 @@ mod tests {
         let mut buffer = Vec::new();
         buffer.extend_from_slice(&len);
         buffer.extend_from_slice(bad_json.as_bytes());
-        
+
         let mut cursor = std::io::Cursor::new(buffer);
         let result = read_request(&mut cursor).await;
-        
+
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), VoltronError::InvalidJsonRpc(_)));
+        assert!(matches!(
+            result.unwrap_err(),
+            VoltronError::InvalidJsonRpc(_)
+        ));
     }
 
     #[tokio::test]
@@ -583,8 +617,12 @@ mod tests {
 
     #[test]
     fn test_json_rpc_error() {
-        let resp = JsonRpcResponse::error(-32600, "Invalid Request".to_string(), Some(serde_json::Value::Number(1.into())));
-        
+        let resp = JsonRpcResponse::error(
+            -32600,
+            "Invalid Request".to_string(),
+            Some(serde_json::Value::Number(1.into())),
+        );
+
         assert_eq!(resp.jsonrpc, "2.0");
         assert!(resp.result.is_none());
         assert!(resp.error.is_some());

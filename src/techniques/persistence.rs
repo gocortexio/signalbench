@@ -1,6 +1,9 @@
+// SPDX-FileCopyrightText: GoCortexIO
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 use crate::config::TechniqueConfig;
 use crate::techniques::{AttackTechnique, SimulationResult, Technique, TechniqueParameter};
-use crate::techniques::{ExecuteFuture, CleanupFuture};
+use crate::techniques::{CleanupFuture, ExecuteFuture};
 use async_trait::async_trait;
 use log::{debug, info, warn};
 use std::fs::{self, File};
@@ -8,7 +11,6 @@ use std::io::Write;
 use std::path::Path;
 use tokio::process::Command;
 use uuid::Uuid;
-
 
 pub struct StartupFolder {}
 
@@ -36,25 +38,27 @@ impl AttackTechnique for StartupFolder {
         }
     }
 
-    fn execute<'a>(
-        &'a self,
-        config: &'a TechniqueConfig,
-        dry_run: bool,
-    ) -> ExecuteFuture<'a> {
+    fn execute<'a>(&'a self, config: &'a TechniqueConfig, dry_run: bool) -> ExecuteFuture<'a> {
         Box::pin(async move {
-            let command = config.parameters.get("command").unwrap_or(&"echo \"SignalBench boot: $(date)\" >> /tmp/signalbench_boot.log".to_string()).clone();
-            
+            let command = config
+                .parameters
+                .get("command")
+                .unwrap_or(
+                    &"echo \"SignalBench boot: $(date)\" >> /tmp/signalbench_boot.log".to_string(),
+                )
+                .clone();
+
             let id = Uuid::new_v4().simple().to_string();
             let home_dir = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
-            
+
             let bashrc = format!("{home_dir}/.bashrc");
             let bash_profile = format!("{home_dir}/.bash_profile");
             let profile_d = "/etc/profile.d/99-signalbench.sh";
-            
+
             let bashrc_backup = format!("/tmp/signalbench_bashrc_backup_{id}");
             let bash_profile_backup = format!("/tmp/signalbench_bash_profile_backup_{id}");
             let profile_d_backup = format!("/tmp/signalbench_profiled_backup_{id}");
-            
+
             if dry_run {
                 info!("[DRY RUN] Would modify REAL shell startup files:");
                 info!("[DRY RUN]   - ~/.bashrc");
@@ -88,20 +92,20 @@ impl AttackTechnique for StartupFolder {
                 fs::copy(&bashrc, &bashrc_backup)
                     .map_err(|e| format!("Failed to backup .bashrc: {e}"))?;
                 artifacts.push(bashrc_backup.clone());
-                
+
                 let mut content = fs::read_to_string(&bashrc)
                     .map_err(|e| format!("Failed to read .bashrc: {e}"))?;
                 content.push_str(&persistence_block);
-                
+
                 fs::write(&bashrc, content.as_bytes())
                     .map_err(|e| format!("Failed to write .bashrc: {e}"))?;
-                
+
                 artifacts.push(bashrc.clone());
                 files_modified.push("~/.bashrc");
             } else {
                 info!("Creating new ~/.bashrc with persistence");
-                let mut file = File::create(&bashrc)
-                    .map_err(|e| format!("Failed to create .bashrc: {e}"))?;
+                let mut file =
+                    File::create(&bashrc).map_err(|e| format!("Failed to create .bashrc: {e}"))?;
                 file.write_all(persistence_block.as_bytes())
                     .map_err(|e| format!("Failed to write .bashrc: {e}"))?;
                 artifacts.push(format!("new_bashrc_{id}"));
@@ -114,14 +118,14 @@ impl AttackTechnique for StartupFolder {
                 fs::copy(&bash_profile, &bash_profile_backup)
                     .map_err(|e| format!("Failed to backup .bash_profile: {e}"))?;
                 artifacts.push(bash_profile_backup.clone());
-                
+
                 let mut content = fs::read_to_string(&bash_profile)
                     .map_err(|e| format!("Failed to read .bash_profile: {e}"))?;
                 content.push_str(&persistence_block);
-                
+
                 fs::write(&bash_profile, content.as_bytes())
                     .map_err(|e| format!("Failed to write .bash_profile: {e}"))?;
-                
+
                 artifacts.push(bash_profile.clone());
                 files_modified.push("~/.bash_profile");
             } else {
@@ -137,23 +141,23 @@ impl AttackTechnique for StartupFolder {
 
             if is_root {
                 info!("Creating system-wide persistence in /etc/profile.d/99-signalbench.sh");
-                
+
                 if Path::new(profile_d).exists() {
                     fs::copy(profile_d, &profile_d_backup)
                         .map_err(|e| format!("Failed to backup profile.d script: {e}"))?;
                     artifacts.push(profile_d_backup.clone());
                 }
-                
+
                 let profile_d_content = format!(
                     "#!/bin/sh\n\
                     # SignalBench System-Wide Persistence Test - Session {id}\n\
                     # MITRE ATT&CK T1547.002\n\
                     {command}\n"
                 );
-                
+
                 fs::write(profile_d, profile_d_content.as_bytes())
                     .map_err(|e| format!("Failed to write profile.d script: {e}"))?;
-                
+
                 artifacts.push(profile_d.to_string());
                 files_modified.push("/etc/profile.d/99-signalbench.sh");
             }
@@ -163,29 +167,36 @@ impl AttackTechnique for StartupFolder {
                 .args(["-c", &format!("source {bashrc} 2>&1")])
                 .output()
                 .await;
-            
+
             match test_result {
                 Ok(output) if output.status.success() => {
                     info!("[OK] Verified: .bashrc sources without errors");
                 }
                 Ok(output) => {
                     let stderr = String::from_utf8_lossy(&output.stderr);
-                    warn!("⚠ Warning: .bashrc source test had output: {stderr}");
+                    warn!("[WARN] Warning: .bashrc source test had output: {stderr}");
                 }
                 Err(e) => {
-                    warn!("⚠ Warning: Could not test .bashrc: {e}");
+                    warn!("[WARN] Warning: Could not test .bashrc: {e}");
                 }
             }
-            
+
             // Track boot log file that will be created by the persistence command
             artifacts.push("/tmp/signalbench_boot.log".to_string());
-            
-            info!("Persistence installed in {} shell startup files", files_modified.len());
-            
+
+            info!(
+                "Persistence installed in {} shell startup files",
+                files_modified.len()
+            );
+
             Ok(SimulationResult {
                 technique_id: self.info().id,
                 success: true,
-                message: format!("Successfully modified REAL shell startup files: {} (session: {})", files_modified.join(", "), id),
+                message: format!(
+                    "Successfully modified REAL shell startup files: {} (session: {})",
+                    files_modified.join(", "),
+                    id
+                ),
                 artifacts,
                 cleanup_required: true,
             })
@@ -198,7 +209,7 @@ impl AttackTechnique for StartupFolder {
             let bashrc = format!("{home_dir}/.bashrc");
             let bash_profile = format!("{home_dir}/.bash_profile");
             let profile_d = "/etc/profile.d/99-signalbench.sh";
-            
+
             for artifact in artifacts {
                 if artifact.ends_with("/.bashrc") || artifact.ends_with("/.bash_profile") {
                     continue;
@@ -242,12 +253,13 @@ impl AttackTechnique for StartupFolder {
                         fs::remove_file(&bashrc).ok();
                     }
                 } else if artifact.starts_with("new_bash_profile_")
-                    && Path::new(&bash_profile).exists() {
-                        info!("Removing created ~/.bash_profile");
-                        fs::remove_file(&bash_profile).ok();
-                    }
+                    && Path::new(&bash_profile).exists()
+                {
+                    info!("Removing created ~/.bash_profile");
+                    fs::remove_file(&bash_profile).ok();
+                }
             }
-            
+
             let boot_log = "/tmp/signalbench_boot.log";
             if Path::new(boot_log).exists() {
                 match fs::remove_file(boot_log) {
@@ -255,7 +267,7 @@ impl AttackTechnique for StartupFolder {
                     Err(e) => debug!("Could not remove boot log: {e}"),
                 }
             }
-            
+
             Ok(())
         })
     }
@@ -293,20 +305,27 @@ impl AttackTechnique for CronJob {
         }
     }
 
-    fn execute<'a>(
-        &'a self,
-        config: &'a TechniqueConfig,
-        dry_run: bool,
-    ) -> ExecuteFuture<'a> {
+    fn execute<'a>(&'a self, config: &'a TechniqueConfig, dry_run: bool) -> ExecuteFuture<'a> {
         Box::pin(async move {
-            let cron_expression = config.parameters.get("cron_expression").unwrap_or(&"* * * * *".to_string()).clone();
-            let command = config.parameters.get("command").unwrap_or(&"/bin/echo 'SignalBench cron executed' >> /tmp/signalbench_cron.log".to_string()).clone();
-            
+            let cron_expression = config
+                .parameters
+                .get("cron_expression")
+                .unwrap_or(&"* * * * *".to_string())
+                .clone();
+            let command = config
+                .parameters
+                .get("command")
+                .unwrap_or(
+                    &"/bin/echo 'SignalBench cron executed' >> /tmp/signalbench_cron.log"
+                        .to_string(),
+                )
+                .clone();
+
             let id = Uuid::new_v4().simple().to_string();
             let system_cron_file = "/etc/cron.d/99-signalbench-test";
             let backup_file = format!("/tmp/signalbench_cron_backup_{id}");
             let user_cron_backup = format!("/tmp/signalbench_user_cron_backup_{id}");
-            
+
             if dry_run {
                 info!("[DRY RUN] Would create REAL cron jobs:");
                 info!("[DRY RUN]   - System cron: {system_cron_file}");
@@ -330,14 +349,14 @@ impl AttackTechnique for CronJob {
 
             if is_root {
                 info!("Creating system-wide cron job in {system_cron_file}");
-                
+
                 if Path::new(system_cron_file).exists() {
                     info!("Backing up existing {system_cron_file}");
                     fs::copy(system_cron_file, &backup_file)
                         .map_err(|e| format!("Failed to backup system cron file: {e}"))?;
                     artifacts.push(backup_file.clone());
                 }
-                
+
                 let system_cron_content = format!(
                     "# SignalBench Test Cron Job - Session {id}\n\
                     # This is a benign test for EDR detection\n\
@@ -346,20 +365,20 @@ impl AttackTechnique for CronJob {
                     \n\
                     {cron_expression} root {command}\n"
                 );
-                
+
                 fs::write(system_cron_file, system_cron_content.as_bytes())
                     .map_err(|e| format!("Failed to write system cron file: {e}"))?;
-                
+
                 artifacts.push(system_cron_file.to_string());
                 methods_used.push("system cron file".to_string());
-                
+
                 if Path::new(system_cron_file).exists() {
                     info!("[OK] Verified: {system_cron_file} created successfully");
                 }
             } else {
                 info!("Not root - skipping /etc/cron.d/ modification");
             }
-            
+
             info!("Adding user crontab entry");
             let current_crontab = Command::new("crontab")
                 .args(["-l"])
@@ -369,56 +388,63 @@ impl AttackTechnique for CronJob {
                 .await
                 .map(|output| String::from_utf8_lossy(&output.stdout).to_string())
                 .unwrap_or_default();
-            
+
             fs::write(&user_cron_backup, current_crontab.as_bytes())
                 .map_err(|e| format!("Failed to backup user crontab: {e}"))?;
             artifacts.push(user_cron_backup.clone());
-            
+
             let new_crontab = format!(
                 "{current_crontab}\n# SignalBench Test - Session {id}\n{cron_expression} {command}\n"
             );
-            
+
             let temp_cron = format!("/tmp/signalbench_new_cron_{id}");
             fs::write(&temp_cron, new_crontab.as_bytes())
                 .map_err(|e| format!("Failed to write new crontab: {e}"))?;
-            
+
             let install_status = Command::new("crontab")
                 .arg(&temp_cron)
                 .status()
                 .await
                 .map_err(|e| format!("Failed to install crontab: {e}"))?;
-                
+
             fs::remove_file(&temp_cron).ok();
-            
+
             if !install_status.success() {
                 return Err("Failed to install user crontab".to_string());
             }
-            
+
             artifacts.push(format!("user_crontab_{id}"));
             methods_used.push("user crontab".to_string());
-            
+
             let verify_output = Command::new("crontab")
                 .args(["-l"])
                 .output()
                 .await
                 .map_err(|e| format!("Failed to verify crontab: {e}"))?;
-                
+
             let verify_content = String::from_utf8_lossy(&verify_output.stdout);
             if verify_content.contains(&id) {
                 info!("[OK] Verified: User crontab entry installed successfully");
             } else {
-                warn!("⚠ Warning: Could not verify crontab installation");
+                warn!("[WARN] Warning: Could not verify crontab installation");
             }
-            
+
             // Track cron log file that will be created by the cron job
             artifacts.push("/tmp/signalbench_cron.log".to_string());
-            
-            info!("Cron persistence installed using {} methods", methods_used.len());
-            
+
+            info!(
+                "Cron persistence installed using {} methods",
+                methods_used.len()
+            );
+
             Ok(SimulationResult {
                 technique_id: self.info().id,
                 success: true,
-                message: format!("Successfully created REAL cron jobs via {} (session: {})", methods_used.join(" + "), id),
+                message: format!(
+                    "Successfully created REAL cron jobs via {} (session: {})",
+                    methods_used.join(" + "),
+                    id
+                ),
                 artifacts,
                 cleanup_required: true,
             })
@@ -447,20 +473,18 @@ impl AttackTechnique for CronJob {
                 } else if artifact.starts_with("user_crontab_") {
                     let id = artifact.trim_start_matches("user_crontab_");
                     let backup_file = format!("/tmp/signalbench_user_cron_backup_{id}");
-                    
+
                     if Path::new(&backup_file).exists() {
                         info!("Restoring user crontab from backup");
                         match fs::read_to_string(&backup_file) {
                             Ok(content) => {
                                 let temp_restore = format!("/tmp/signalbench_restore_{id}");
                                 if fs::write(&temp_restore, content.as_bytes()).is_ok() {
-                                    let restore_status = Command::new("crontab")
-                                        .arg(&temp_restore)
-                                        .status()
-                                        .await;
-                                    
+                                    let restore_status =
+                                        Command::new("crontab").arg(&temp_restore).status().await;
+
                                     fs::remove_file(&temp_restore).ok();
-                                    
+
                                     if let Ok(status) = restore_status {
                                         if status.success() {
                                             info!("[OK] Restored user crontab from backup");
@@ -472,11 +496,13 @@ impl AttackTechnique for CronJob {
                         }
                         fs::remove_file(&backup_file).ok();
                     }
-                } else if artifact.starts_with("/tmp/signalbench_user_cron_backup_") || Path::new(artifact).exists() {
+                } else if artifact.starts_with("/tmp/signalbench_user_cron_backup_")
+                    || Path::new(artifact).exists()
+                {
                     fs::remove_file(artifact).ok();
                 }
             }
-            
+
             let cron_log = "/tmp/signalbench_cron.log";
             if Path::new(cron_log).exists() {
                 match fs::remove_file(cron_log) {
@@ -484,7 +510,7 @@ impl AttackTechnique for CronJob {
                     Err(e) => debug!("Could not remove cron log: {e}"),
                 }
             }
-            
+
             Ok(())
         })
     }
@@ -516,20 +542,16 @@ impl AttackTechnique for WebShellDeployment {
         }
     }
 
-    fn execute<'a>(
-        &'a self,
-        config: &'a TechniqueConfig,
-        dry_run: bool,
-    ) -> ExecuteFuture<'a> {
+    fn execute<'a>(&'a self, config: &'a TechniqueConfig, dry_run: bool) -> ExecuteFuture<'a> {
         Box::pin(async move {
             let web_root = config
                 .parameters
                 .get("web_root")
                 .unwrap_or(&"/tmp/signalbench_webshell".to_string())
                 .clone();
-            
+
             let id = Uuid::new_v4().simple().to_string();
-            
+
             if dry_run {
                 info!("[DRY RUN] Would create REAL PHP and Python web shells:");
                 info!("[DRY RUN]   - PHP simple shell with eval()");
@@ -546,7 +568,7 @@ impl AttackTechnique for WebShellDeployment {
             }
 
             info!("Creating web shell collection in {web_root}");
-            
+
             if !Path::new(&web_root).exists() {
                 fs::create_dir_all(&web_root)
                     .map_err(|e| format!("Failed to create web shell directory: {e}"))?;
@@ -581,7 +603,7 @@ impl AttackTechnique for WebShellDeployment {
                 <input type=\"text\" name=\"cmd\" placeholder=\"Command\">\n\
                 <input type=\"submit\" value=\"Execute\">\n\
                 </form>";
-            
+
             fs::write(&php_simple, php_simple_content.as_bytes())
                 .map_err(|e| format!("Failed to create simple PHP shell: {e}"))?;
             artifacts.push(php_simple.clone());
@@ -619,7 +641,7 @@ impl AttackTechnique for WebShellDeployment {
                     }\n\
                 }\n\
                 ?>";
-            
+
             fs::write(&php_obfuscated, php_obfuscated_content.as_bytes())
                 .map_err(|e| format!("Failed to create obfuscated PHP shell: {e}"))?;
             artifacts.push(php_obfuscated.clone());
@@ -652,7 +674,7 @@ impl AttackTechnique for WebShellDeployment {
                 <input type=\"file\" name=\"file\">\n\
                 <input type=\"submit\" value=\"Upload\">\n\
                 </form>";
-            
+
             fs::write(&php_multi, php_multi_content.as_bytes())
                 .map_err(|e| format!("Failed to create multi-function PHP shell: {e}"))?;
             artifacts.push(php_multi.clone());
@@ -690,7 +712,7 @@ impl AttackTechnique for WebShellDeployment {
                 if __name__ == '__main__':\n\
                     print('Content-Type: text/html\\n')\n\
                     main()";
-            
+
             fs::write(&py_simple, py_simple_content.as_bytes())
                 .map_err(|e| format!("Failed to create Python shell: {e}"))?;
             artifacts.push(py_simple.clone());
@@ -739,21 +761,29 @@ impl AttackTechnique for WebShellDeployment {
                 if 'cmd=' in query:\n\
                     cmd = query.split('cmd=')[1]\n\
                     backdoor.execute_system(cmd)";
-            
+
             fs::write(&py_advanced, py_advanced_content.as_bytes())
                 .map_err(|e| format!("Failed to create advanced Python shell: {e}"))?;
             artifacts.push(py_advanced.clone());
             shells_created.push("handler.py (advanced/base64/compile)");
 
-            info!("[OK] Created {} REAL web shells with malicious patterns", shells_created.len());
+            info!(
+                "[OK] Created {} REAL web shells with malicious patterns",
+                shells_created.len()
+            );
             for shell in &shells_created {
                 info!("  • {shell}");
             }
-            
+
             Ok(SimulationResult {
                 technique_id: self.info().id,
                 success: true,
-                message: format!("Successfully created {} REAL web shells: {} (session: {})", shells_created.len(), shells_created.join(", "), id),
+                message: format!(
+                    "Successfully created {} REAL web shells: {} (session: {})",
+                    shells_created.len(),
+                    shells_created.join(", "),
+                    id
+                ),
                 artifacts,
                 cleanup_required: true,
             })
@@ -824,43 +854,42 @@ impl AttackTechnique for AccountManipulation {
         }
     }
 
-    fn execute<'a>(
-        &'a self,
-        config: &'a TechniqueConfig,
-        dry_run: bool,
-    ) -> ExecuteFuture<'a> {
+    fn execute<'a>(&'a self, config: &'a TechniqueConfig, dry_run: bool) -> ExecuteFuture<'a> {
         Box::pin(async move {
             let test_username = config
                 .parameters
                 .get("test_username")
                 .unwrap_or(&"signalbench_testuser".to_string())
                 .clone();
-            
+
             let add_ssh_key = config
                 .parameters
                 .get("add_ssh_key")
                 .unwrap_or(&"true".to_string())
-                .to_lowercase() == "true";
-            
+                .to_lowercase()
+                == "true";
+
             let modify_shell = config
                 .parameters
                 .get("modify_shell")
                 .unwrap_or(&"true".to_string())
-                .to_lowercase() == "true";
-            
+                .to_lowercase()
+                == "true";
+
             let add_to_groups = config
                 .parameters
                 .get("add_to_groups")
                 .unwrap_or(&"true".to_string())
-                .to_lowercase() == "true";
-            
+                .to_lowercase()
+                == "true";
+
             let session_id = Uuid::new_v4().to_string().replace("-", "");
             let is_root = unsafe { libc::geteuid() == 0 };
-            
+
             if !is_root {
                 return Err("Account manipulation requires root privileges".to_string());
             }
-            
+
             if dry_run {
                 info!("[DRY RUN] Would perform account manipulation:");
                 info!("[DRY RUN]   Test user: {test_username}");
@@ -878,11 +907,11 @@ impl AttackTechnique for AccountManipulation {
 
             info!("Starting account manipulation (Session: {session_id})...");
             info!("Target user: {test_username}");
-            
+
             let mut artifacts = Vec::new();
             let artifacts_file = format!("/tmp/signalbench_account_manipulation_{session_id}.json");
             artifacts.push(artifacts_file.clone());
-            
+
             let mut manipulation_data = serde_json::json!({
                 "session_id": session_id,
                 "timestamp": chrono::Local::now().to_rfc3339(),
@@ -894,30 +923,32 @@ impl AttackTechnique for AccountManipulation {
                 "shell_modified": false,
                 "groups_added": [],
             });
-            
+
             // Phase 1: Check if user exists, create if needed
             info!("Phase 1: Checking user existence...");
-            
+
             let user_exists = Command::new("id")
                 .arg(&test_username)
                 .output()
                 .await
                 .map(|o| o.status.success())
                 .unwrap_or(false);
-            
+
             if !user_exists {
                 info!("User {test_username} does not exist, creating...");
-                
+
                 let useradd_output = Command::new("useradd")
                     .args([
                         "-m",
-                        "-s", "/bin/bash",
-                        "-c", &format!("SignalBench Test User {session_id}"),
-                        &test_username
+                        "-s",
+                        "/bin/bash",
+                        "-c",
+                        &format!("SignalBench Test User {session_id}"),
+                        &test_username,
                     ])
                     .output()
                     .await;
-                
+
                 match useradd_output {
                     Ok(output) if output.status.success() => {
                         info!("Successfully created user: {test_username}");
@@ -934,49 +965,52 @@ impl AttackTechnique for AccountManipulation {
             } else {
                 info!("User {test_username} already exists");
             }
-            
+
             // Get user's home directory
             let home_dir_output = Command::new("sh")
-                .args(["-c", &format!("grep '^{test_username}:' /etc/passwd | cut -d: -f6")])
+                .args([
+                    "-c",
+                    &format!("grep '^{test_username}:' /etc/passwd | cut -d: -f6"),
+                ])
                 .output()
                 .await
                 .map_err(|e| format!("Failed to get home directory: {e}"))?;
-            
+
             let home_dir = String::from_utf8_lossy(&home_dir_output.stdout)
                 .trim()
                 .to_string();
-            
+
             if home_dir.is_empty() {
                 return Err("Failed to determine user home directory".to_string());
             }
-            
+
             info!("User home directory: {home_dir}");
-            
+
             // Phase 2: SSH Authorised Keys Manipulation
             if add_ssh_key {
                 info!("Phase 2: Adding SSH authorised key...");
-                
+
                 let ssh_dir = format!("{home_dir}/.ssh");
                 let auth_keys_file = format!("{ssh_dir}/authorized_keys");
                 let backup_file = format!("/tmp/signalbench_authorized_keys_backup_{session_id}");
-                
+
                 // Create .ssh directory if it doesn't exist
                 fs::create_dir_all(&ssh_dir)
                     .map_err(|e| format!("Failed to create .ssh directory: {e}"))?;
-                
+
                 // Set proper permissions on .ssh directory
                 Command::new("chmod")
                     .args(["700", &ssh_dir])
                     .output()
                     .await
                     .ok();
-                
+
                 Command::new("chown")
                     .args([&test_username, &ssh_dir])
                     .output()
                     .await
                     .ok();
-                
+
                 // Backup existing authorized_keys if it exists
                 if Path::new(&auth_keys_file).exists() {
                     fs::copy(&auth_keys_file, &backup_file)
@@ -984,72 +1018,77 @@ impl AttackTechnique for AccountManipulation {
                     artifacts.push(backup_file.clone());
                     info!("Backed up existing authorized_keys to {backup_file}");
                 }
-                
+
                 // Generate a fake SSH public key (for demonstration)
                 let fake_ssh_key = format!(
                     "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQDSignalBenchTestKey{}== signalbench_test_key@signalbench\n",
                     &session_id[..16]
                 );
-                
+
                 // Append the key
                 let mut auth_keys_content = if Path::new(&auth_keys_file).exists() {
                     fs::read_to_string(&auth_keys_file).unwrap_or_default()
                 } else {
                     String::new()
                 };
-                
-                auth_keys_content.push_str(&format!("\n# SignalBench Test Key - Session {session_id}\n"));
+
+                auth_keys_content.push_str(&format!(
+                    "\n# SignalBench Test Key - Session {session_id}\n"
+                ));
                 auth_keys_content.push_str(&fake_ssh_key);
-                
+
                 fs::write(&auth_keys_file, auth_keys_content.as_bytes())
                     .map_err(|e| format!("Failed to write authorized_keys: {e}"))?;
-                
+
                 // Set proper permissions
                 Command::new("chmod")
                     .args(["600", &auth_keys_file])
                     .output()
                     .await
                     .ok();
-                
+
                 Command::new("chown")
                     .args([&test_username, &auth_keys_file])
                     .output()
                     .await
                     .ok();
-                
+
                 artifacts.push(auth_keys_file.clone());
                 manipulation_data["ssh_key_added"] = serde_json::json!(true);
                 manipulation_data["ssh_key_file"] = serde_json::json!(auth_keys_file);
                 manipulation_data["ssh_key_backup"] = serde_json::json!(backup_file);
-                
+
                 info!("[OK] Added SSH authorised key to {auth_keys_file}");
             }
-            
+
             // Phase 3: Shell Modification
             if modify_shell {
                 info!("Phase 3: Modifying user shell...");
-                
+
                 // Get original shell
                 let original_shell_output = Command::new("sh")
-                    .args(["-c", &format!("grep '^{test_username}:' /etc/passwd | cut -d: -f7")])
+                    .args([
+                        "-c",
+                        &format!("grep '^{test_username}:' /etc/passwd | cut -d: -f7"),
+                    ])
                     .output()
                     .await
                     .map_err(|e| format!("Failed to get original shell: {e}"))?;
-                
+
                 let original_shell = String::from_utf8_lossy(&original_shell_output.stdout)
                     .trim()
                     .to_string();
-                
+
                 manipulation_data["original_shell"] = serde_json::json!(original_shell);
-                
+
                 // Change shell to /bin/sh (different from typical /bin/bash)
                 let new_shell = "/bin/sh";
-                
+
                 let chsh_output = Command::new("usermod")
                     .args(["-s", new_shell, &test_username])
                     .output()
                     .await;
-                
+
                 match chsh_output {
                     Ok(output) if output.status.success() => {
                         info!("[OK] Changed shell from {original_shell} to {new_shell}");
@@ -1065,32 +1104,32 @@ impl AttackTechnique for AccountManipulation {
                     }
                 }
             }
-            
+
             // Phase 4: Group Membership Manipulation
             if add_to_groups {
                 info!("Phase 4: Modifying group memberships...");
-                
+
                 // Get original groups
                 let groups_output = Command::new("groups")
                     .arg(&test_username)
                     .output()
                     .await
                     .map_err(|e| format!("Failed to get user groups: {e}"))?;
-                
+
                 let groups_str = String::from_utf8_lossy(&groups_output.stdout);
                 let original_groups: Vec<String> = groups_str
                     .split_whitespace()
                     .skip(2)
                     .map(|s| s.to_string())
                     .collect();
-                
+
                 manipulation_data["original_groups"] = serde_json::json!(original_groups);
                 info!("Original groups: {}", original_groups.join(", "));
-                
+
                 // Try to add user to some common groups (that likely exist)
                 let test_groups = vec!["users", "cdrom", "audio", "video"];
                 let mut added_groups = Vec::new();
-                
+
                 for group in test_groups {
                     // Check if group exists
                     let group_exists = Command::new("getent")
@@ -1099,21 +1138,21 @@ impl AttackTechnique for AccountManipulation {
                         .await
                         .map(|o| o.status.success())
                         .unwrap_or(false);
-                    
+
                     if !group_exists {
                         continue;
                     }
-                    
+
                     // Check if user is already in group
                     if original_groups.contains(&group.to_string()) {
                         continue;
                     }
-                    
+
                     let usermod_output = Command::new("usermod")
                         .args(["-aG", group, &test_username])
                         .output()
                         .await;
-                    
+
                     match usermod_output {
                         Ok(output) if output.status.success() => {
                             info!("[OK] Added {test_username} to group: {group}");
@@ -1128,25 +1167,39 @@ impl AttackTechnique for AccountManipulation {
                         }
                     }
                 }
-                
+
                 manipulation_data["groups_added"] = serde_json::json!(added_groups);
-                info!("Added to {} groups: {}", added_groups.len(), added_groups.join(", "));
+                info!(
+                    "Added to {} groups: {}",
+                    added_groups.len(),
+                    added_groups.join(", ")
+                );
             }
-            
+
             // Save manipulation data for cleanup
-            fs::write(&artifacts_file, serde_json::to_string_pretty(&manipulation_data).unwrap())
-                .map_err(|e| format!("Failed to save manipulation data: {e}"))?;
-            
+            fs::write(
+                &artifacts_file,
+                serde_json::to_string_pretty(&manipulation_data).unwrap(),
+            )
+            .map_err(|e| format!("Failed to save manipulation data: {e}"))?;
+
             let summary = format!(
                 "Account manipulation complete: user={}, SSH_key={}, shell={}, groups_added={}",
                 test_username,
-                manipulation_data["ssh_key_added"].as_bool().unwrap_or(false),
-                manipulation_data["shell_modified"].as_bool().unwrap_or(false),
-                manipulation_data["groups_added"].as_array().map(|a| a.len()).unwrap_or(0)
+                manipulation_data["ssh_key_added"]
+                    .as_bool()
+                    .unwrap_or(false),
+                manipulation_data["shell_modified"]
+                    .as_bool()
+                    .unwrap_or(false),
+                manipulation_data["groups_added"]
+                    .as_array()
+                    .map(|a| a.len())
+                    .unwrap_or(0)
             );
-            
+
             info!("{summary}");
-            
+
             Ok(SimulationResult {
                 technique_id: self.info().id,
                 success: true,
@@ -1160,16 +1213,18 @@ impl AttackTechnique for AccountManipulation {
     fn cleanup<'a>(&'a self, artifacts: &'a [String]) -> CleanupFuture<'a> {
         Box::pin(async move {
             info!("Starting account manipulation cleanup...");
-            
+
             // Read manipulation data to understand what needs to be reverted
-            let artifacts_file = artifacts.iter().find(|a| a.contains("account_manipulation") && a.ends_with(".json"));
-            
+            let artifacts_file = artifacts
+                .iter()
+                .find(|a| a.contains("account_manipulation") && a.ends_with(".json"));
+
             if let Some(data_file) = artifacts_file {
                 if let Ok(content) = fs::read_to_string(data_file) {
                     if let Ok(data) = serde_json::from_str::<serde_json::Value>(&content) {
                         let username = data["username"].as_str().unwrap_or("");
                         let user_created = data["user_created"].as_bool().unwrap_or(false);
-                        
+
                         // Revert group memberships
                         if let Some(groups_added) = data["groups_added"].as_array() {
                             for group in groups_added {
@@ -1183,7 +1238,7 @@ impl AttackTechnique for AccountManipulation {
                                 }
                             }
                         }
-                        
+
                         // Revert shell
                         if data["shell_modified"].as_bool().unwrap_or(false) {
                             if let Some(original_shell) = data["original_shell"].as_str() {
@@ -1195,7 +1250,7 @@ impl AttackTechnique for AccountManipulation {
                                     .ok();
                             }
                         }
-                        
+
                         // Restore authorized_keys backup
                         if data["ssh_key_added"].as_bool().unwrap_or(false) {
                             if let Some(backup_file) = data["ssh_key_backup"].as_str() {
@@ -1207,8 +1262,12 @@ impl AttackTechnique for AccountManipulation {
                                         // Remove the added key manually
                                         info!("Removing added SSH key from authorized_keys");
                                         if let Ok(content) = fs::read_to_string(auth_keys_file) {
-                                            let filtered: Vec<&str> = content.lines()
-                                                .filter(|line| !line.contains("signalbench_test_key") && !line.contains("SignalBench Test Key"))
+                                            let filtered: Vec<&str> = content
+                                                .lines()
+                                                .filter(|line| {
+                                                    !line.contains("signalbench_test_key")
+                                                        && !line.contains("SignalBench Test Key")
+                                                })
                                                 .collect();
                                             fs::write(auth_keys_file, filtered.join("\n")).ok();
                                         }
@@ -1216,7 +1275,7 @@ impl AttackTechnique for AccountManipulation {
                                 }
                             }
                         }
-                        
+
                         // Delete user if it was created
                         if user_created {
                             info!("Removing created test user: {username}");
@@ -1229,7 +1288,7 @@ impl AttackTechnique for AccountManipulation {
                     }
                 }
             }
-            
+
             // Remove artifact files
             for artifact in artifacts {
                 if Path::new(artifact).exists() {
@@ -1239,7 +1298,7 @@ impl AttackTechnique for AccountManipulation {
                     }
                 }
             }
-            
+
             info!("Account manipulation cleanup complete");
             Ok(())
         })

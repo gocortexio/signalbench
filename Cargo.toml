@@ -1,12 +1,12 @@
 [package]
 name = "signalbench"
-version = "1.6.41"
+version = "1.6.47"
 edition = "2021"
 authors = ["Simon Sigre <info@gocortex.io>"]
 description = "Endpoint telemetry generator for security analytics, research, and training using MITRE ATT&CK techniques"
 homepage = "https://gocortex.io"
 repository = "https://github.com/gocortex/signalbench"
-license = "MIT"
+license = "AGPL-3.0-or-later"
 keywords = ["security", "telemetry", "mitre", "analytics", "research", "training"]
 categories = ["command-line-utilities", "development-tools"]
 

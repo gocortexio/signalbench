@@ -1,4 +1,7 @@
 #!/bin/bash
+# SPDX-FileCopyrightText: GoCortexIO
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
 # Build PACEMAKER helper as a fully static MUSL binary
 # This ensures it runs on any Linux distribution without dependencies
 
