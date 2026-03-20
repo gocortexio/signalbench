@@ -1,8 +1,8 @@
 <div align="center">
-  <img src="assets/signalbench-logo-baby.png" alt="SignalBench Logo" width="600"/>
+  <img src="assets/signalbench-logo-chainreaction.png" alt="SignalBench Logo" width="600"/>
 </div>
 
-# SignalBench v1.6.47: Nobody Puts ~~Baby~~ SignalBox In A ~~Corner~~ Container
+# SignalBench v1.7.0: I’m In The Middle Of A Chain Reaction
 
 Endpoint Telemetry Generator from GoCortex.io
 
@@ -126,7 +126,7 @@ signalbench voltron list
 - Privilege Escalation: SUID binaries, sudo manipulation, local account creation, kernel exploits (T1068.001 CVE-2024-1086 nftables, T1068.002 CVE-2025-38352 POSIX timer race, T1068.003 CVE-2025-40190 ext4 xattr)
 - Defence Evasion: PATH hijacking, audit log manipulation, command history clearing, process masquerading, web shells
 - Execution: Reverse shells, Python reconnaissance, command injection, script execution
-- Command and Control: Port knocking, DNS tunnelling, ICMP beaconing, tool transfer
+- Command and Control: Port knocking, DNS tunnelling, ICMP beaconing, tool transfer, suspicious domain connections (T1071-IOC with security protections)
 - Exfiltration: Network protocols, DNS tunnelling, ICMP data transfer
 - Lateral Movement: SSH connections, protocol-based movement (Voltron Mode)
 - Persistence: Cron jobs, startup scripts, systemd services, SSH keys
@@ -135,6 +135,18 @@ signalbench voltron list
 - Container Escape: Docker socket abuse (T1611-SOCK), privileged container breakout (T1611-PRIV), sensitive mount exploitation (T1611-MOUNT), cgroup escape (T1611-CGROUP), kernel module loading (T1611-MODULE), container reconnaissance (T1611-RECON), PID namespace escape (T1611-PIDNS), SUID binary exploitation (T1611-SUID), chroot breakout (T1611-BREAKOUT), kernel CVE checks (T1611-CVE), namespace escape (T1611-NS), RunC masked path escape (T1611.012), RunC console escape (T1611.013), RunC procfs escape (T1611.014)
 
 Network techniques (T1046, T1095, T1048) target the Palo Alto sinkhole address (198.135.184.22) by default for realistic external network telemetry. Lateral movement techniques (T1021.004, T1021.005) use localhost for service-dependent testing.
+
+### T1071-IOC Security Protections
+
+The suspicious domain connections technique (T1071-IOC) includes security protections to prevent IP exposure:
+
+- **Safe domains**: Connections to `*.sigre.xyz` (controlled infrastructure) and RFC 5737 TEST-NET IPs (192.0.2.x, 198.51.100.x, 203.0.113.x) are always tested
+- **Unowned domains**: Domains not controlled by GoCortex (e.g., `.tk`, `.ru`, `.cn` TLDs) are only tested if they resolve to 203.0.113.1
+- **Root mode**: When running as root, SignalBench automatically adds safe `/etc/hosts` entries pointing unowned domains to 203.0.113.1
+- **Non-root mode**: Skips unowned domains and displays a warning with instructions to configure `/etc/hosts` manually
+- **Cleanup**: Automatically removes any `/etc/hosts` entries added during execution
+
+This prevents accidental IP exposure to potentially malicious infrastructure whilst still allowing complete testing in controlled environments.
 
 ### Capabilities
 
@@ -160,14 +172,14 @@ SignalBench provides pre-built binaries for maximum compatibility across Linux d
 For Universal Linux Compatibility (Recommended):
 ```bash
 # Download static binary that works on any Linux distribution
-wget https://github.com/gocortex/signalbench/releases/download/v1.6.47/signalbench-1.6.47-linux-musl-x86_64
-chmod +x signalbench-1.6.47-linux-musl-x86_64
-sudo mv signalbench-1.6.47-linux-musl-x86_64 /usr/local/bin/signalbench
+wget https://github.com/gocortex/signalbench/releases/download/v1.7.0/signalbench-1.7.0-linux-musl-x86_64
+chmod +x signalbench-1.7.0-linux-musl-x86_64
+sudo mv signalbench-1.7.0-linux-musl-x86_64 /usr/local/bin/signalbench
 
 # For ARM64 systems (Apple Silicon, ARM servers)
-wget https://github.com/gocortex/signalbench/releases/download/v1.6.47/signalbench-1.6.47-linux-musl-aarch64
-chmod +x signalbench-1.6.47-linux-musl-aarch64
-sudo mv signalbench-1.6.47-linux-musl-aarch64 /usr/local/bin/signalbench
+wget https://github.com/gocortex/signalbench/releases/download/v1.7.0/signalbench-1.7.0-linux-musl-aarch64
+chmod +x signalbench-1.7.0-linux-musl-aarch64
+sudo mv signalbench-1.7.0-linux-musl-aarch64 /usr/local/bin/signalbench
 ```
 
 ### Option 2: Build from Source
@@ -222,6 +234,10 @@ signalbench run <technique_id_or_name> --force
 # Debug mode - verbose logging (replaces RUST_LOG=debug environment variable)
 signalbench run <technique_id_or_name> --debug
 
+# Chain mode - build a genuine parent/child process tree across techniques
+signalbench run <technique_id_or_name> --chain
+signalbench category <category> --chain
+
 # ALL_CAPS meta-category - run ALL techniques across ALL categories
 # Automatically enables force mode for maximum telemetry generation
 # (MF DOOM tribute - 1971-2020 - "JUST REMEMBER ALL CAPS WHEN YOU SPELL THE MAN NAME")
@@ -247,6 +263,30 @@ The `--debug` flag enables verbose logging without requiring environment variabl
 - Replaces `RUST_LOG=debug` environment variable
 - Shows detailed execution flow and command outputs
 - Useful for troubleshooting and understanding technique behaviour
+
+### Chain Execution Mode
+
+The `--chain` flag builds a genuine parent/child process tree across a sequence of techniques. Each technique spawns the next as a child process rather than running all within the same process, producing realistic multi-stage process genealogy visible in `ps`, `pstree`, and EDR process trees.
+
+```bash
+# Chain a single technique (renames the process to the TTP ID)
+signalbench run T1082 --chain
+
+# Chain all techniques in a category
+signalbench category credential_access --chain
+
+# Chain across multiple categories with force mode
+signalbench category discovery credential_access execution --chain --force
+```
+
+How it works:
+- All queued TTP IDs are written to a session file at `/tmp/signalbench_chain_<uuid>.txt`
+- Each process renames itself to the TTP ID (e.g. `T1003-001`) using `prctl(PR_SET_NAME)`
+- After executing, the process spawns its child with `argv[0]` set to the next TTP alias
+- All flags propagate to every child in the chain
+- The chain aborts if any child exits with a non-zero code; the session file is always cleaned up
+
+Available on `run` and `category` subcommands. Not available in Voltron Mode.
 
 ### Delay Cleanup Mode
 

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 use crate::voltron::VoltronError;
-use rand::Rng;
+use rand::RngCore;
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::Path;
@@ -17,9 +17,9 @@ pub struct PreSharedKey {
 impl PreSharedKey {
     /// Generate a new random pre-shared key
     pub fn generate() -> Self {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let mut secret = [0u8; 32];
-        rng.fill(&mut secret);
+        rng.fill_bytes(&mut secret);
 
         PreSharedKey { secret }
     }

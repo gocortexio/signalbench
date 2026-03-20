@@ -805,10 +805,18 @@ impl AttackTechnique for ExfiltrationOverAlternativeProtocol {
             writeln!(file, "  AWS: AKIA0123456789SAMPLE").unwrap();
             writeln!(file, "  Google: AIzaSyDSIMULATED_KEY_123456789").unwrap();
             writeln!(file, "Employee records:").unwrap();
-            for i in 1..6 {
+            let employees = [
+                ("Alice Carter", "1982"),
+                ("James Patel", "1979"),
+                ("Maria Okonkwo", "1991"),
+                ("David Nguyen", "1985"),
+                ("Sophie Braun", "1975"),
+            ];
+            for (idx, (name, dob_year)) in employees.iter().enumerate() {
+                let emp_num = idx + 1;
                 writeln!(
                     file,
-                    "  Employee #{i}: John Doe {i}, SSN: 123-45-678{i}, DOB: 01/0{i}/1980"
+                    "  Employee #{emp_num}: {name}, SSN: 123-45-678{emp_num}, DOB: 01/0{emp_num}/{dob_year}"
                 )
                 .unwrap();
             }

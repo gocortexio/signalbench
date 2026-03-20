@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: GoCortexIO
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-use rand::distributions::Alphanumeric;
-use rand::{thread_rng, Rng};
+use rand::distr::Alphanumeric;
+use rand::Rng;
 use std::fs::{self, File};
 use std::io::{Read, Write};
 use uuid::Uuid;
@@ -10,7 +10,7 @@ use uuid::Uuid;
 /// Generate a random string of specified length
 #[allow(dead_code)]
 pub fn random_string(length: usize) -> String {
-    thread_rng()
+    rand::rng()
         .sample_iter(&Alphanumeric)
         .take(length)
         .map(char::from)

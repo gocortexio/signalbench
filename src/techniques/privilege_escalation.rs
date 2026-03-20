@@ -107,14 +107,14 @@ impl AttackTechnique for SudoersModification {
             info!("Starting REAL sudoers modification - This will be detected by security tools!");
             info!("Target user: {username}");
 
-            // STEP 1: Create backup directory
-            info!("Step 1: Creating backup directory: {backup_dir}");
+            // Create backup directory
+            info!("Creating backup directory: {backup_dir}");
             fs::create_dir_all(&backup_dir)
                 .map_err(|e| format!("Failed to create backup directory: {e}"))?;
             info!("[OK] Backup directory created");
 
-            // STEP 2: List and backup existing /etc/sudoers.d/ files
-            info!("Step 2: Backing up existing /etc/sudoers.d/ files");
+            // List and backup existing /etc/sudoers.d/ files
+            info!("Backing up existing /etc/sudoers.d/ files");
             let sudoers_d_path = "/etc/sudoers.d";
             let mut backup_count = 0;
 
@@ -152,8 +152,8 @@ impl AttackTechnique for SudoersModification {
                 info!("[OK] No existing sudoers.d files to backup");
             }
 
-            // STEP 3: Create the sudoers file content
-            info!("Step 3: Creating sudoers configuration for {username}");
+            // Create the sudoers file content
+            info!("Creating sudoers configuration for {username}");
             let sudoers_content = format!(
                 "# Added by SignalBench - GoCortex.io - FOR TESTING ONLY\n\
                  # MITRE ATT&CK Technique: T1548.003 - Sudoers Modification\n\
@@ -173,8 +173,8 @@ impl AttackTechnique for SudoersModification {
 
             info!("[OK] Created temporary sudoers file for validation");
 
-            // STEP 4: Validate syntax using visudo
-            info!("Step 4: Validating sudoers syntax with visudo");
+            // Validate syntax using visudo
+            info!("Validating sudoers syntax with visudo");
             let status = Command::new("visudo")
                 .args(["-c", "-f", &temp_file])
                 .output()
@@ -189,8 +189,8 @@ impl AttackTechnique for SudoersModification {
 
             info!("[OK] Sudoers syntax validation passed");
 
-            // STEP 5: Move the validated file to /etc/sudoers.d/
-            info!("Step 5: Installing sudoers file to {sudoers_file}");
+            // Move the validated file to /etc/sudoers.d/
+            info!("Installing sudoers file to {sudoers_file}");
             let status = Command::new("mv")
                 .args([&temp_file, sudoers_file])
                 .status()
@@ -204,8 +204,8 @@ impl AttackTechnique for SudoersModification {
 
             info!("[OK] Sudoers file installed at {sudoers_file}");
 
-            // STEP 6: Set correct permissions (440)
-            info!("Step 6: Setting permissions to 440 (r--r-----)");
+            // Set correct permissions (440)
+            info!("Setting permissions to 440 (r--r-----)");
             let status = Command::new("chmod")
                 .args(["440", sudoers_file])
                 .status()
@@ -223,8 +223,8 @@ impl AttackTechnique for SudoersModification {
 
             info!("[OK] Permissions set to 440");
 
-            // STEP 7: Validate the installed file one more time
-            info!("Step 7: Final validation of installed sudoers file");
+            // Validate the installed file one more time
+            info!("Final validation of installed sudoers file");
             let status = Command::new("visudo")
                 .args(["-c", "-f", sudoers_file])
                 .output()
@@ -243,10 +243,10 @@ impl AttackTechnique for SudoersModification {
 
             info!("[OK] Final validation passed - sudoers file is active");
 
-            // STEP 8: Optional - Test sudo access
+            // Optional - Test sudo access
             let mut test_result = String::new();
             if test_sudo {
-                info!("Step 8: Testing sudo access with 'sudo -n whoami'");
+                info!("Testing sudo access with 'sudo -n whoami'");
                 let test_output = Command::new("sudo")
                     .args(["-n", "-u", &username, "whoami"])
                     .output()
@@ -315,9 +315,9 @@ impl AttackTechnique for SudoersModification {
                 }
             }
 
-            // STEP 1: Remove the sudoers file
+            // Remove the sudoers file
             if let Some(file) = &sudoers_file {
-                info!("Step 1: Removing sudoers file: {file}");
+                info!("Removing sudoers file: {file}");
                 if Path::new(file).exists() {
                     match fs::remove_file(file) {
                         Ok(_) => {
@@ -339,9 +339,9 @@ impl AttackTechnique for SudoersModification {
                 }
             }
 
-            // STEP 2: Restore from backup if needed (safety check)
+            // Restore from backup if needed (safety check)
             if let Some(backup_path) = &backup_dir {
-                info!("Step 2: Checking backup directory for any files to restore");
+                info!("Checking backup directory for any files to restore");
                 if Path::new(backup_path).exists() {
                     let mut restored_count = 0;
 
@@ -393,9 +393,9 @@ impl AttackTechnique for SudoersModification {
                 }
             }
 
-            // STEP 3: Remove backup directory
+            // Remove backup directory
             if let Some(backup_path) = &backup_dir {
-                info!("Step 3: Removing backup directory: {backup_path}");
+                info!("Removing backup directory: {backup_path}");
                 if Path::new(backup_path).exists() {
                     match fs::remove_dir_all(backup_path) {
                         Ok(_) => {
@@ -501,8 +501,8 @@ impl AttackTechnique for SuidBinary {
 
             info!("Starting REAL SUID binary creation - This will be detected by security tools!");
 
-            // STEP 1: Create C source code with privileged operations
-            info!("Step 1: Creating C source code: {source_file}");
+            // Create C source code with privileged operations
+            info!("Creating C source code: {source_file}");
             let c_source_code = r#"/*
  * SignalBench SUID Test Binary - GoCortex.io
  * MITRE ATT&CK Technique: T1548.001 - SUID Binary Creation
@@ -554,8 +554,8 @@ int main() {
 
             info!("[OK] Created C source file: {source_file}");
 
-            // STEP 2: Compile the C source code using gcc
-            info!("Step 2: Compiling C source with gcc");
+            // Compile the C source code using gcc
+            info!("Compiling C source with gcc");
             let compile_output = Command::new("gcc")
                 .args(["-o", &binary_file, &source_file])
                 .output()
@@ -577,8 +577,8 @@ int main() {
                 return Err(format!("Binary file was not created at {binary_file}"));
             }
 
-            // STEP 3: Change ownership to root:root
-            info!("Step 3: Changing ownership to root:root");
+            // Change ownership to root:root
+            info!("Changing ownership to root:root");
             let status = Command::new("chown")
                 .args(["root:root", &binary_file])
                 .status()
@@ -594,8 +594,8 @@ int main() {
 
             info!("[OK] Ownership changed to root:root");
 
-            // STEP 4: Set SUID bit
-            info!("Step 4: Setting SUID bit (chmod u+s)");
+            // Set SUID bit
+            info!("Setting SUID bit (chmod u+s)");
             let status = Command::new("chmod")
                 .args(["u+s", &binary_file])
                 .status()
@@ -611,8 +611,8 @@ int main() {
 
             info!("[OK] SUID bit set on binary");
 
-            // STEP 5: Verify SUID bit is set
-            info!("Step 5: Verifying SUID bit with ls -la");
+            // Verify SUID bit is set
+            info!("Verifying SUID bit with ls -la");
             let ls_output = Command::new("ls")
                 .args(["-la", &binary_file])
                 .output()
@@ -646,10 +646,10 @@ int main() {
                 }
             }
 
-            // STEP 6: Optional - Test execution
+            // Optional - Test execution
             let mut test_result = String::new();
             if test_execution {
-                info!("Step 6: Testing SUID binary execution to demonstrate privilege escalation");
+                info!("Testing SUID binary execution to demonstrate privilege escalation");
 
                 // Execute the SUID binary
                 let exec_output = Command::new(&binary_file).output().await;
@@ -730,10 +730,10 @@ int main() {
                 }
             }
 
-            // STEP 1: Remove SUID bit first (safety measure)
+            // Remove SUID bit first (safety measure)
             if let Some(binary) = &binary_file {
                 if Path::new(binary).exists() {
-                    info!("Step 1: Removing SUID bit from binary: {binary}");
+                    info!("Removing SUID bit from binary: {binary}");
                     let status = Command::new("chmod").args(["u-s", binary]).status().await;
 
                     match status {
@@ -766,9 +766,9 @@ int main() {
                 }
             }
 
-            // STEP 2: Delete the binary file
+            // Delete the binary file
             if let Some(binary) = &binary_file {
-                info!("Step 2: Deleting binary file: {binary}");
+                info!("Deleting binary file: {binary}");
                 if Path::new(binary).exists() {
                     match fs::remove_file(binary) {
                         Ok(_) => {
@@ -790,9 +790,9 @@ int main() {
                 }
             }
 
-            // STEP 3: Delete the source file
+            // Delete the source file
             if let Some(source) = &source_file {
-                info!("Step 3: Deleting source file: {source}");
+                info!("Deleting source file: {source}");
                 if Path::new(source).exists() {
                     match fs::remove_file(source) {
                         Ok(_) => {
@@ -891,7 +891,7 @@ impl AttackTechnique for LocalAccountCreation {
 
             info!("Creating REAL local user account: {username}");
 
-            // Step 1: Check if user already exists
+            // Check if user already exists
             let check_user = Command::new("id").arg(&username).output().await;
 
             if let Ok(output) = check_user {
@@ -900,8 +900,8 @@ impl AttackTechnique for LocalAccountCreation {
                 }
             }
 
-            // Step 2: Create user account with home directory
-            info!("Step 1: Creating user account {username} with home directory");
+            // Create user account with home directory
+            info!("Creating user account {username} with home directory");
             let status = Command::new("useradd")
                 .args(["-m", "-s", "/bin/bash", &username])
                 .status()
@@ -913,8 +913,8 @@ impl AttackTechnique for LocalAccountCreation {
             }
             info!("[OK] User account {username} created successfully");
 
-            // Step 3: Set password for the account
-            info!("Step 2: Setting password for {username}");
+            // Set password for the account
+            info!("Setting password for {username}");
             let chpasswd_input = format!("{username}:{password}");
             let mut child = Command::new("chpasswd")
                 .stdin(std::process::Stdio::piped())
@@ -941,8 +941,8 @@ impl AttackTechnique for LocalAccountCreation {
             }
             info!("[OK] Password set for {username}");
 
-            // Step 4: Add user to sudo/wheel group
-            info!("Step 3: Adding {username} to sudo group");
+            // Add user to sudo/wheel group
+            info!("Adding {username} to sudo group");
 
             // Try sudo group first (Debian/Ubuntu), then wheel (RedHat/CentOS)
             let mut sudo_added = false;
@@ -965,8 +965,8 @@ impl AttackTechnique for LocalAccountCreation {
                 warn!("Could not add user to sudo/wheel group - may not have sudo access");
             }
 
-            // Step 5: Generate SSH key pair
-            info!("Step 4: Generating SSH key pair for {username}");
+            // Generate SSH key pair
+            info!("Generating SSH key pair for {username}");
             let home_dir = format!("/home/{username}");
             let ssh_dir = format!("{home_dir}/.ssh");
 
@@ -1006,8 +1006,8 @@ impl AttackTechnique for LocalAccountCreation {
                 }
             }
 
-            // Step 6: Set proper permissions
-            info!("Step 5: Setting proper permissions on home directory and .ssh folder");
+            // Set proper permissions
+            info!("Setting proper permissions on home directory and .ssh folder");
 
             // Set ownership of home directory
             let chown_cmd = format!("{username}:{username}");
@@ -1096,8 +1096,8 @@ impl AttackTechnique for LocalAccountCreation {
 
                     info!("Cleaning up user account: {username}");
 
-                    // Step 1: Kill any processes running as the user
-                    info!("Step 1: Terminating any processes running as {username}");
+                    // Kill any processes running as the user
+                    info!("Terminating any processes running as {username}");
                     let pkill_status = Command::new("pkill").args(["-u", username]).status().await;
 
                     match pkill_status {
@@ -1116,8 +1116,8 @@ impl AttackTechnique for LocalAccountCreation {
                     // Give processes time to terminate
                     tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
 
-                    // Step 2: Delete the user account with userdel -r (removes home directory)
-                    info!("Step 2: Deleting user account {username} and home directory");
+                    // Delete the user account with userdel -r (removes home directory)
+                    info!("Deleting user account {username} and home directory");
                     let status = Command::new("userdel")
                         .args(["-r", username])
                         .status()
@@ -1136,8 +1136,8 @@ impl AttackTechnique for LocalAccountCreation {
                         }
                     }
 
-                    // Step 3: Verify all artifacts removed
-                    info!("Step 3: Verifying removal of {username}");
+                    // Verify all artifacts removed
+                    info!("Verifying removal of {username}");
                     let verify = Command::new("id").arg(username).output().await;
 
                     match verify {

@@ -106,9 +106,9 @@ impl AttackTechnique for SshLateralMovement {
 
             let mut artifacts = vec![log_file.clone(), key_dir.clone()];
 
-            // Step 1: Generate SSH key pair
-            info!("Step 1: Generating SSH key pair...");
-            writeln!(log, "=== Step 1: SSH Key Generation ===").unwrap();
+            // Generate SSH key pair
+            info!("Generating SSH key pair...");
+            writeln!(log, "=== SSH Key Generation ===").unwrap();
 
             fs::create_dir_all(&key_dir)
                 .map_err(|e| format!("Failed to create key directory: {e}"))?;
@@ -162,9 +162,9 @@ impl AttackTechnique for SshLateralMovement {
             writeln!(log, "Generated key pair: {private_key}, {public_key}").unwrap();
             writeln!(log).unwrap();
 
-            // Step 2: Backup and modify authorized_keys
-            info!("Step 2: Modifying authorized_keys...");
-            writeln!(log, "=== Step 2: Authorized Keys Modification ===").unwrap();
+            // Backup and modify authorized_keys
+            info!("Modifying authorized_keys...");
+            writeln!(log, "=== Authorized Keys Modification ===").unwrap();
 
             fs::create_dir_all(&ssh_dir)
                 .map_err(|e| format!("Failed to create .ssh directory: {e}"))?;
@@ -221,9 +221,9 @@ impl AttackTechnique for SshLateralMovement {
             writeln!(log, "Set permissions to 600 on authorized_keys").unwrap();
             writeln!(log).unwrap();
 
-            // Step 3: Execute REAL SSH connections
-            info!("Step 3: Executing REAL SSH connections to 127.0.0.1...");
-            writeln!(log, "=== Step 3: SSH Connection Attempts ===").unwrap();
+            // Execute REAL SSH connections
+            info!("Executing REAL SSH connections to 127.0.0.1...");
+            writeln!(log, "=== SSH Connection Attempts ===").unwrap();
 
             let commands: Vec<&str> = commands_str.split(',').collect();
             let mut successful_connections = 0;
@@ -264,9 +264,9 @@ impl AttackTechnique for SshLateralMovement {
                 writeln!(log).unwrap();
             }
 
-            // Step 4: Attempt SSH port forwarding
-            info!("Step 4: Attempting SSH port forwarding (-L)...");
-            writeln!(log, "=== Step 4: SSH Port Forwarding Attempt ===").unwrap();
+            // Attempt SSH port forwarding
+            info!("Attempting SSH port forwarding (-L)...");
+            writeln!(log, "=== SSH Port Forwarding Attempt ===").unwrap();
 
             let port_forward_cmd = format!(
                 "ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o BatchMode=yes -o ConnectTimeout=5 -i {private_key} -L 8080:localhost:80 -N -f {current_user}@127.0.0.1 && sleep 1 && pkill -f 'ssh.*-L 8080:localhost:80'"
@@ -296,9 +296,9 @@ impl AttackTechnique for SshLateralMovement {
             }
             writeln!(log).unwrap();
 
-            // Step 5: Attempt SSH dynamic tunnelling
-            info!("Step 5: Attempting SSH dynamic tunnelling (-D)...");
-            writeln!(log, "=== Step 5: SSH Dynamic Tunnelling Attempt ===").unwrap();
+            // Attempt SSH dynamic tunnelling
+            info!("Attempting SSH dynamic tunnelling (-D)...");
+            writeln!(log, "=== SSH Dynamic Tunnelling Attempt ===").unwrap();
 
             let tunnel_cmd = format!(
                 "ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o BatchMode=yes -o ConnectTimeout=5 -i {private_key} -D 1080 -N -f {current_user}@127.0.0.1 && sleep 1 && pkill -f 'ssh.*-D 1080'"
@@ -381,7 +381,7 @@ impl AttackTechnique for SshLateralMovement {
                 }
             }
 
-            // Step 1: Remove appended key from authorized_keys
+            // Remove appended key from authorized_keys
             if let Some(backup) = &backup_file {
                 if Path::new(backup).exists() {
                     info!("Restoring authorized_keys from backup: {backup}");
@@ -442,7 +442,7 @@ impl AttackTechnique for SshLateralMovement {
                 }
             }
 
-            // Step 2: Delete key directory and all contents
+            // Delete key directory and all contents
             if let Some(dir) = key_dir {
                 if Path::new(&dir).exists() {
                     match fs::remove_dir_all(&dir) {
@@ -452,7 +452,7 @@ impl AttackTechnique for SshLateralMovement {
                 }
             }
 
-            // Step 3: Clean up remaining artifacts (log files, etc.)
+            // Clean up remaining artifacts (log files, etc.)
             for artifact in artifacts {
                 if artifact.ends_with(".log") && Path::new(artifact).exists() {
                     match fs::remove_file(artifact) {
@@ -462,7 +462,7 @@ impl AttackTechnique for SshLateralMovement {
                 }
             }
 
-            // Step 4: Verify authorized_keys restored
+            // Verify authorized_keys restored
             if Path::new(&authorized_keys).exists() {
                 if let Ok(content) = fs::read_to_string(&authorized_keys) {
                     if content.contains("signalbench_lateral_") {

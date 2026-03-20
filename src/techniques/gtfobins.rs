@@ -1086,8 +1086,8 @@ impl AttackTechnique for GtfobinsProbe {
             let mut sudo_entries: HashMap<String, bool> = HashMap::new();
             let mut suid_binaries: Vec<String> = Vec::new();
 
-            // Step 1: Enumerate which GTFOBins binaries exist on the system
-            info!("[T1548-GTFOBINS] Step 1: Enumerating GTFOBins binaries on system");
+            // Enumerate which GTFOBins binaries exist on the system
+            info!("[T1548-GTFOBINS] Enumerating GTFOBins binaries on system");
 
             let common_paths = ["/usr/bin", "/usr/sbin", "/bin", "/sbin", "/usr/local/bin"];
             let mut binary_paths: HashMap<String, String> = HashMap::new();
@@ -1110,9 +1110,9 @@ impl AttackTechnique for GtfobinsProbe {
                 gtfobins_db.len()
             );
 
-            // Step 2: Parse sudo permissions
+            // Parse sudo permissions
             if check_sudo {
-                info!("[T1548-GTFOBINS] Step 2: Parsing sudo permissions with 'sudo -l'");
+                info!("[T1548-GTFOBINS] Parsing sudo permissions with 'sudo -l'");
                 debug!("[T1548-GTFOBINS] Executing: sudo -l -n 2>/dev/null");
 
                 match Command::new("sudo").args(["-l", "-n"]).output().await {
@@ -1167,9 +1167,9 @@ impl AttackTechnique for GtfobinsProbe {
                 }
             }
 
-            // Step 3: Scan for SUID binaries
+            // Scan for SUID binaries
             if check_suid {
-                info!("[T1548-GTFOBINS] Step 3: Scanning for SUID binaries");
+                info!("[T1548-GTFOBINS] Scanning for SUID binaries");
 
                 for base_path in &common_paths {
                     debug!("[T1548-GTFOBINS] Scanning for SUID in: {}", base_path);
@@ -1205,8 +1205,8 @@ impl AttackTechnique for GtfobinsProbe {
                 );
             }
 
-            // Step 4: Cross-reference and build exploitable list
-            info!("[T1548-GTFOBINS] Step 4: Cross-referencing against GTFOBins database");
+            // Cross-reference and build exploitable list
+            info!("[T1548-GTFOBINS] Cross-referencing against GTFOBins database");
 
             for entry in &gtfobins_db {
                 let has_binary = binary_paths.contains_key(entry.binary);
@@ -1235,9 +1235,9 @@ impl AttackTechnique for GtfobinsProbe {
                 }
             }
 
-            // Step 5: Generate telemetry by running GTFOBins exploitation commands
+            // Generate telemetry by running GTFOBins exploitation commands
             if generate_telemetry && !exploitable.is_empty() {
-                info!("[T1548-GTFOBINS] Step 5: Generating telemetry with GTFOBins exploitation attempts");
+                info!("[T1548-GTFOBINS] Generating telemetry with GTFOBins exploitation attempts");
 
                 for exp in &exploitable {
                     debug!(

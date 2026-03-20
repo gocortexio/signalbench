@@ -390,7 +390,7 @@ mod tests {
     async fn test_json_rpc_request_framing() {
         let params = serde_json::json!({
             "hostname": "test-host",
-            "version": "1.6.0"
+            "version": "1.7.0"
         });
         let req = JsonRpcRequest::new(METHOD_REGISTER, Some(params), 1);
 

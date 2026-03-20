@@ -94,7 +94,7 @@ impl AttackTechnique for DisableAuditLogs {
             let mut methods_used = Vec::new();
             let mut artifacts = vec![backup_file.clone()];
 
-            // Step 1: Check if auditd is running
+            // Check if auditd is running
             manipulation_log.push_str("=== Audit System Status Check ===\n");
             let auditd_running = Command::new("systemctl")
                 .args(["is-active", "auditd"])
@@ -111,7 +111,7 @@ impl AttackTechnique for DisableAuditLogs {
                 Path::new("/sbin/auditctl").exists() || Path::new("/usr/sbin/auditctl").exists();
             manipulation_log.push_str(&format!("auditctl available: {auditctl_exists}\n\n"));
 
-            // Step 2: Backup current audit state
+            // Backup current audit state
             manipulation_log.push_str("=== Backing Up Original Audit State ===\n");
 
             let mut backup_data = String::new();
@@ -171,7 +171,7 @@ impl AttackTechnique for DisableAuditLogs {
 
             manipulation_log.push('\n');
 
-            // Step 3: Audit System Manipulation (only if root)
+            // Audit System Manipulation (only if root)
             let mut service_was_stopped = false;
 
             if is_root {
@@ -580,7 +580,7 @@ impl AttackTechnique for DisableAuditLogs {
                                 } else {
                                     // Restore in reverse order for safety
 
-                                    // Step 1: Restore file modification if it was done
+                                    // Restore file modification if it was done
                                     if methods_used.contains(&"file_modification".to_string()) {
                                         info!("\n=== Restoring /etc/audit/audit.rules ===");
 
@@ -604,7 +604,7 @@ impl AttackTechnique for DisableAuditLogs {
                                         }
                                     }
 
-                                    // Step 2: Restore audit rules if they were deleted
+                                    // Restore audit rules if they were deleted
                                     if methods_used.contains(&"auditctl_delete_rules".to_string()) {
                                         info!("\n=== Restoring Audit Rules ===");
 
@@ -662,7 +662,7 @@ impl AttackTechnique for DisableAuditLogs {
                                         }
                                     }
 
-                                    // Step 3: Restart auditd service if it was stopped
+                                    // Restart auditd service if it was stopped
                                     if service_was_stopped {
                                         info!("\n=== Restarting Auditd Service ===");
                                         info!("Service was stopped during manipulation - restarting...");

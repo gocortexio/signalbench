@@ -1,5 +1,5 @@
 {
-  "version": "1.6.47",
+  "version": "1.7.0",
   "generated_at": "2026-01-18T00:00:00Z",
   "scenarios": [
     {
@@ -625,6 +625,19 @@
       "fullCommand": "signalbench run T1611.014",
       "estimatedDuration": "3-10s",
       "category": "Container Escape"
+    },
+    {
+      "techniqueId": "META-CHAIN",
+      "name": "Multi-Stage Attack Chain (Discovery to Credential Access)",
+      "description": "Generates a realistic parent/child process tree spanning discovery and credential access techniques using chain execution mode.",
+      "fullDescription": "Runs discovery and credential access techniques in sequence using --chain mode, where each technique spawns the next as a child process. The resulting process tree (T1082 -> T1016 -> T1552.001 -> T1003.008) is visible in ps, pstree, and EDR process lineage views. Each process renames itself to the TTP ID via prctl(PR_SET_NAME). All flags propagate across the chain. The chain file at /tmp/signalbench_chain_<uuid>.txt is deleted automatically when the last technique completes or on SIGINT/SIGTERM.",
+      "tactic": "Multi-Tactic",
+      "severity": "High",
+      "platform": "Linux",
+      "command": "category discovery credential_access --chain",
+      "fullCommand": "signalbench category discovery credential_access --chain",
+      "estimatedDuration": "15-40s",
+      "category": "Chain"
     }
   ]
 }

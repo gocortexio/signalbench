@@ -14,6 +14,7 @@
 #![allow(clippy::only_used_in_recursion)]
 #![allow(clippy::collapsible_if)]
 
+mod chain;
 mod cli;
 mod config;
 mod easter_egg;
@@ -62,6 +63,28 @@ async fn main() {
         env!("CARGO_PKG_VERSION")
     );
 
+    // Spawn a background task that listens for SIGINT/SIGTERM (Unix) and cleans up
+    // any chain file before exiting.  Tokio signal handling runs in normal async
+    // context, so it is safe to call env::var and filesystem ops here.
+    #[cfg(unix)]
+    tokio::spawn(async {
+        use tokio::signal::unix::{signal, SignalKind};
+        let mut sigint = match signal(SignalKind::interrupt()) {
+            Ok(s) => s,
+            Err(_) => return,
+        };
+        let mut sigterm = match signal(SignalKind::terminate()) {
+            Ok(s) => s,
+            Err(_) => return,
+        };
+        tokio::select! {
+            _ = sigint.recv() => {}
+            _ = sigterm.recv() => {}
+        }
+        chain::cleanup_chain_file_from_env();
+        process::exit(130); // 128 + SIGINT(2)
+    });
+
     // Run the appropriate command
     match run_command(cli).await {
         Ok(_) => {
@@ -80,6 +103,7 @@ async fn main() {
 
 async fn run_command(cli: Cli) -> Result<(), String> {
     let force = cli.force;
+    let debug = cli.debug;
     let delay_cleanup = cli.delay_cleanup;
 
     match cli.command {
@@ -89,6 +113,7 @@ async fn run_command(cli: Cli) -> Result<(), String> {
             dry_run,
             no_cleanup,
             config,
+            chain,
         } => {
             // Check safety before execution
             safety::check_environment()?;
@@ -96,11 +121,15 @@ async fn run_command(cli: Cli) -> Result<(), String> {
             // Run the specified technique
             runner::run_technique(
                 &technique,
-                dry_run,
-                no_cleanup,
-                config,
-                force,
-                delay_cleanup,
+                runner::RunOptions {
+                    dry_run,
+                    no_cleanup,
+                    config_path: config,
+                    force,
+                    debug,
+                    delay_cleanup,
+                    chain,
+                },
             )
             .await
         }
@@ -109,6 +138,7 @@ async fn run_command(cli: Cli) -> Result<(), String> {
             dry_run,
             no_cleanup,
             config,
+            chain,
         } => {
             // Check safety before execution
             safety::check_environment()?;
@@ -116,11 +146,15 @@ async fn run_command(cli: Cli) -> Result<(), String> {
             // Run all techniques in the specified categories
             runner::run_categories(
                 &categories,
-                dry_run,
-                no_cleanup,
-                config,
-                force,
-                delay_cleanup,
+                runner::RunOptions {
+                    dry_run,
+                    no_cleanup,
+                    config_path: config,
+                    force,
+                    debug,
+                    delay_cleanup,
+                    chain,
+                },
             )
             .await
         }

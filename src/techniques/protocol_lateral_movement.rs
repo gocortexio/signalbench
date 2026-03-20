@@ -183,7 +183,7 @@ async fn rfb_victim_server(log_file: String, password: String) -> Result<String,
     writeln!(log, "\n=== Client Connected ===").unwrap();
     writeln!(log, "Client address: {client_addr}").unwrap();
 
-    // Step 1: Send ProtocolVersion
+    // Send ProtocolVersion
     let protocol_version = b"RFB 003.008\n";
     stream
         .write_all(protocol_version)
@@ -191,7 +191,7 @@ async fn rfb_victim_server(log_file: String, password: String) -> Result<String,
         .map_err(|e| format!("Failed to send protocol version: {e}"))?;
     writeln!(log, "Sent: RFB 003.008").unwrap();
 
-    // Step 2: Receive client protocol version
+    // Receive client protocol version
     let mut client_version = [0u8; 12];
     stream
         .read_exact(&mut client_version)
@@ -204,7 +204,7 @@ async fn rfb_victim_server(log_file: String, password: String) -> Result<String,
     )
     .unwrap();
 
-    // Step 3: Send security types (VNC Authentication = 2)
+    // Send security types (VNC Authentication = 2)
     let security_types = [1u8, 2u8]; // 1 type, type 2 (VNC Auth)
     stream
         .write_all(&security_types)
@@ -212,7 +212,7 @@ async fn rfb_victim_server(log_file: String, password: String) -> Result<String,
         .map_err(|e| format!("Failed to send security types: {e}"))?;
     writeln!(log, "Sent security types: VNC Authentication (2)").unwrap();
 
-    // Step 4: Receive client security type choice
+    // Receive client security type choice
     let mut security_choice = [0u8; 1];
     stream
         .read_exact(&mut security_choice)
@@ -220,10 +220,10 @@ async fn rfb_victim_server(log_file: String, password: String) -> Result<String,
         .map_err(|e| format!("Failed to read security choice: {e}"))?;
     writeln!(log, "Client chose security type: {}", security_choice[0]).unwrap();
 
-    // Step 5: VNC Authentication - send challenge
+    // VNC Authentication - send challenge
     let challenge: [u8; 16] = {
-        let mut rng = rand::thread_rng();
-        rng.gen()
+        let mut rng = rand::rng();
+        rng.random()
     };
     stream
         .write_all(&challenge)
@@ -231,7 +231,7 @@ async fn rfb_victim_server(log_file: String, password: String) -> Result<String,
         .map_err(|e| format!("Failed to send challenge: {e}"))?;
     writeln!(log, "Sent 16-byte authentication challenge").unwrap();
 
-    // Step 6: Receive client response
+    // Receive client response
     let mut client_response = [0u8; 16];
     stream
         .read_exact(&mut client_response)
@@ -239,7 +239,7 @@ async fn rfb_victim_server(log_file: String, password: String) -> Result<String,
         .map_err(|e| format!("Failed to read auth response: {e}"))?;
     writeln!(log, "Received authentication response").unwrap();
 
-    // Step 7: Verify response
+    // Verify response
     let expected_response = vnc_des_encrypt(&challenge, &password);
     let auth_ok = client_response == expected_response;
 
@@ -259,7 +259,7 @@ async fn rfb_victim_server(log_file: String, password: String) -> Result<String,
         return Err("Client authentication failed".to_string());
     }
 
-    // Step 8: Receive ClientInit
+    // Receive ClientInit
     let mut client_init = [0u8; 1];
     stream
         .read_exact(&mut client_init)
@@ -267,7 +267,7 @@ async fn rfb_victim_server(log_file: String, password: String) -> Result<String,
         .map_err(|e| format!("Failed to read ClientInit: {e}"))?;
     writeln!(log, "Received ClientInit (shared={}))", client_init[0]).unwrap();
 
-    // Step 9: Send ServerInit
+    // Send ServerInit
     let server_init = RfbServerInit::new("SignalBench VNC Server".to_string());
     stream
         .write_all(&server_init.to_bytes())
@@ -280,7 +280,7 @@ async fn rfb_victim_server(log_file: String, password: String) -> Result<String,
     )
     .unwrap();
 
-    // Step 10: Handle client messages for 45 seconds (including file transfers)
+    // Handle client messages for 45 seconds (including file transfers)
     writeln!(log, "\n=== Active Session ({}s) ===", SESSION_DURATION_SECS).unwrap();
     let session_start = tokio::time::Instant::now();
     let mut framebuffer_update_count = 0;
@@ -474,7 +474,7 @@ async fn rfb_attacker_client(
 
     writeln!(log, "Connected to {target_ip}:5900").unwrap();
 
-    // Step 1: Receive ProtocolVersion
+    // Receive ProtocolVersion
     let mut server_version = [0u8; 12];
     stream
         .read_exact(&mut server_version)
@@ -487,14 +487,14 @@ async fn rfb_attacker_client(
     )
     .unwrap();
 
-    // Step 2: Send client protocol version
+    // Send client protocol version
     stream
         .write_all(b"RFB 003.008\n")
         .await
         .map_err(|e| format!("Failed to send protocol version: {e}"))?;
     writeln!(log, "Sent: RFB 003.008").unwrap();
 
-    // Step 3: Receive security types
+    // Receive security types
     let mut num_types = [0u8; 1];
     stream
         .read_exact(&mut num_types)
@@ -507,14 +507,14 @@ async fn rfb_attacker_client(
         .map_err(|e| format!("Failed to read security types: {e}"))?;
     writeln!(log, "Received {} security types: {:?}", num_types[0], types).unwrap();
 
-    // Step 4: Choose VNC Authentication (type 2)
+    // Choose VNC Authentication (type 2)
     stream
         .write_all(&[2u8])
         .await
         .map_err(|e| format!("Failed to send security choice: {e}"))?;
     writeln!(log, "Chose VNC Authentication (2)").unwrap();
 
-    // Step 5: Receive challenge
+    // Receive challenge
     let mut challenge = [0u8; 16];
     stream
         .read_exact(&mut challenge)
@@ -522,7 +522,7 @@ async fn rfb_attacker_client(
         .map_err(|e| format!("Failed to read challenge: {e}"))?;
     writeln!(log, "Received 16-byte authentication challenge").unwrap();
 
-    // Step 6: Encrypt and send response
+    // Encrypt and send response
     let response = vnc_des_encrypt(&challenge, &password);
     stream
         .write_all(&response)
@@ -530,7 +530,7 @@ async fn rfb_attacker_client(
         .map_err(|e| format!("Failed to send auth response: {e}"))?;
     writeln!(log, "Sent DES-encrypted response").unwrap();
 
-    // Step 7: Receive security result
+    // Receive security result
     let mut security_result = [0u8; 4];
     stream
         .read_exact(&mut security_result)
@@ -548,14 +548,14 @@ async fn rfb_attacker_client(
         return Err("Authentication failed".to_string());
     }
 
-    // Step 8: Send ClientInit
+    // Send ClientInit
     stream
         .write_all(&[1u8])
         .await // shared = 1
         .map_err(|e| format!("Failed to send ClientInit: {e}"))?;
     writeln!(log, "Sent ClientInit (shared=1)").unwrap();
 
-    // Step 9: Receive ServerInit
+    // Receive ServerInit
     let mut framebuffer_width = [0u8; 2];
     stream
         .read_exact(&mut framebuffer_width)
@@ -575,7 +575,7 @@ async fn rfb_attacker_client(
     )
     .unwrap();
 
-    // Step 10: Interact for 45 seconds with file transfers
+    // Interact for 45 seconds with file transfers
     writeln!(log, "\n=== Active Session ({}s) ===", SESSION_DURATION_SECS).unwrap();
     let session_start = tokio::time::Instant::now();
     let mut update_requests_sent = 0;
@@ -651,9 +651,9 @@ async fn rfb_attacker_client(
             let mut file_data = vec![0x7Fu8, 0x45, 0x4C, 0x46];
             file_data.extend_from_slice(b"\x02\x01\x01\x00");
             {
-                let mut rng = rand::thread_rng();
+                let mut rng = rand::rng();
                 for _ in 0..(24576 - 8) {
-                    file_data.push(rng.gen());
+                    file_data.push(rng.random());
                 }
             }
 
@@ -697,8 +697,8 @@ async fn rfb_attacker_client(
 
         // Send PointerEvent (simulate mouse movement)
         let (x, y) = {
-            let mut rng = rand::thread_rng();
-            (rng.gen_range(0..1024), rng.gen_range(0..768))
+            let mut rng = rand::rng();
+            (rng.random_range(0..1024), rng.random_range(0..768))
         };
         let pointer_event = [
             5u8, // message type
@@ -776,7 +776,7 @@ async fn ssh_victim_server(log_file: String) -> Result<String, String> {
     writeln!(log, "\n=== Client Connected ===").unwrap();
     writeln!(log, "Client address: {client_addr}").unwrap();
 
-    // Step 1: Send SSH version
+    // Send SSH version
     let server_version = b"SSH-2.0-SignalBench_SSH_1.0\r\n";
     stream
         .write_all(server_version)
@@ -784,7 +784,7 @@ async fn ssh_victim_server(log_file: String) -> Result<String, String> {
         .map_err(|e| format!("Failed to send version: {e}"))?;
     writeln!(log, "Sent: SSH-2.0-SignalBench_SSH_1.0").unwrap();
 
-    // Step 2: Receive client version
+    // Receive client version
     let mut client_version = vec![0u8; 255];
     let bytes_read = timeout(Duration::from_secs(5), stream.read(&mut client_version))
         .await
@@ -793,21 +793,21 @@ async fn ssh_victim_server(log_file: String) -> Result<String, String> {
     let version_str = String::from_utf8_lossy(&client_version[..bytes_read]);
     writeln!(log, "Received: {}", version_str.trim()).unwrap();
 
-    // Step 3: Simulate KEX, auth, and channel operations
+    // Simulate KEX, auth, and channel operations
     writeln!(log, "\n=== Key Exchange ===").unwrap();
     writeln!(log, "Simulating key exchange init").unwrap();
     let kex_init = vec![0u8; 256]; // Simplified KEX message
     stream.write_all(&kex_init).await.ok();
     writeln!(log, "Sent KEX_INIT packet").unwrap();
 
-    // Step 4: Authentication
+    // Authentication
     writeln!(log, "\n=== Authentication ===").unwrap();
     writeln!(log, "Accepting authentication (simulated)").unwrap();
     let auth_success = b"Authentication successful\n";
     stream.write_all(auth_success).await.ok();
     writeln!(log, "Sent: Authentication successful").unwrap();
 
-    // Step 5: Active session
+    // Active session
     writeln!(log, "\n=== Active Session ({}s) ===", SESSION_DURATION_SECS).unwrap();
     let session_start = tokio::time::Instant::now();
     let mut channel_requests = 0;
@@ -888,7 +888,7 @@ async fn ssh_attacker_client(target_ip: String, log_file: String) -> Result<Stri
 
     writeln!(log, "Connected to {target_ip}:2222").unwrap();
 
-    // Step 1: Receive server version
+    // Receive server version
     let mut server_version = vec![0u8; 255];
     let bytes_read = timeout(Duration::from_secs(5), stream.read(&mut server_version))
         .await
@@ -901,7 +901,7 @@ async fn ssh_attacker_client(target_ip: String, log_file: String) -> Result<Stri
     )
     .unwrap();
 
-    // Step 2: Send client version
+    // Send client version
     let client_version = b"SSH-2.0-SignalBench_Client_1.0\r\n";
     stream
         .write_all(client_version)
@@ -909,19 +909,19 @@ async fn ssh_attacker_client(target_ip: String, log_file: String) -> Result<Stri
         .map_err(|e| format!("Failed to send version: {e}"))?;
     writeln!(log, "Sent: SSH-2.0-SignalBench_Client_1.0").unwrap();
 
-    // Step 3: KEX
+    // KEX
     writeln!(log, "\n=== Key Exchange ===").unwrap();
     let kex_init = vec![0u8; 256];
     stream.write_all(&kex_init).await.ok();
     writeln!(log, "Sent KEX_INIT packet").unwrap();
 
-    // Step 4: Authentication
+    // Authentication
     writeln!(log, "\n=== Authentication ===").unwrap();
     let auth_request = b"password authentication\n";
     stream.write_all(auth_request).await.ok();
     writeln!(log, "Sent authentication request").unwrap();
 
-    // Step 5: Active session
+    // Active session
     writeln!(log, "\n=== Active Session ({}s) ===", SESSION_DURATION_SECS).unwrap();
     let session_start = tokio::time::Instant::now();
     let mut commands_sent = 0;

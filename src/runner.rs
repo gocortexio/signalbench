@@ -1,14 +1,27 @@
 // SPDX-FileCopyrightText: GoCortexIO
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+use crate::chain;
 use crate::cli::is_valid_category;
 use crate::config::{get_technique_config, load_config};
 use crate::techniques::{
     get_all_techniques, get_technique_by_id_or_name, get_techniques_by_category,
 };
 use colored::*;
-use log::{error, warn};
+use log::{error, info, warn};
 use std::collections::HashMap;
+
+/// Execution options shared by `run_technique` and `run_categories`.
+/// Grouping these into a struct keeps function argument counts within clippy limits.
+pub struct RunOptions {
+    pub dry_run: bool,
+    pub no_cleanup: bool,
+    pub config_path: Option<std::path::PathBuf>,
+    pub force: bool,
+    pub debug: bool,
+    pub delay_cleanup: u64,
+    pub chain: bool,
+}
 
 /// List all available MITRE ATT&CK techniques
 /// Developed by Simon Sigre for GoCortex.io
@@ -149,12 +162,9 @@ pub async fn run_technique_with_params(
 /// Generate telemetry for a specific technique
 pub async fn run_technique(
     technique_id: &str,
-    dry_run: bool,
-    no_cleanup: bool,
-    config_path: Option<std::path::PathBuf>,
-    force: bool,
-    delay_cleanup: u64,
+    opts: RunOptions,
 ) -> Result<(), String> {
+    let RunOptions { dry_run, no_cleanup, config_path, force, debug, delay_cleanup, chain } = opts;
     // Load configuration
     let config = load_config(config_path.as_deref())?;
 
@@ -165,6 +175,13 @@ pub async fn run_technique(
     };
 
     let technique_info = technique.info();
+
+    // In chain mode, rename the current process to the MITRE ID (dots→dashes)
+    // so it appears correctly in `ps`/`pstree` for this hop, regardless of whether
+    // we were invoked by ID or by name.
+    if chain {
+        chain::rename_current_process(&technique_info.id);
+    }
 
     // Print technique information
     println!("\n{}", "Generating Technique Telemetry".bold().underline());
@@ -193,69 +210,146 @@ pub async fn run_technique(
     // Execute the technique
     println!("\n{}", "Executing...".bold());
 
-    let result = match technique.execute(&technique_config, dry_run).await {
-        Ok(result) => result,
+    // In chain mode a technique-level failure (Err from execute, or result.success == false)
+    // is non-fatal: log a warning and continue the chain.  A true crash (non-zero child exit)
+    // is handled separately in spawn_next_chain_child and does abort the chain.
+    let exec_result = technique.execute(&technique_config, dry_run).await;
+
+    let result = match exec_result {
+        Ok(result) => {
+            // Print result
+            if result.success {
+                println!("\n{}", "Execution Successful".bold().green());
+            } else {
+                println!("\n{}", "Execution Failed".bold().red());
+                if chain {
+                    warn!(
+                        "[CHAIN] Technique '{}' reported failure — continuing chain",
+                        technique_id
+                    );
+                }
+            }
+            println!("{}", result.message);
+            if !result.artifacts.is_empty() {
+                println!("\n{}", "Created Artifacts:".bold());
+                for artifact in &result.artifacts {
+                    println!("  - {artifact}");
+                }
+            }
+            Some(result)
+        }
         Err(e) => {
             error!("Failed to execute technique: {e}");
-            return Err(format!("Failed to execute technique: {e}"));
+            if chain {
+                warn!(
+                    "[CHAIN] Technique '{}' errored — continuing chain",
+                    technique_id
+                );
+                None
+            } else {
+                return Err(format!("Failed to execute technique: {e}"));
+            }
         }
     };
 
-    // Print result
-    if result.success {
-        println!("\n{}", "Execution Successful".bold().green());
-    } else {
-        println!("\n{}", "Execution Failed".bold().red());
-    }
-
-    println!("{}", result.message);
-
-    if !result.artifacts.is_empty() {
-        println!("\n{}", "Created Artifacts:".bold());
-        for artifact in &result.artifacts {
-            println!("  - {artifact}");
-        }
-    }
-
-    // Cleanup if necessary
-    if no_cleanup {
-        println!(
-            "\n{}",
-            "Skipping cleanup (--no-cleanup flag set)".yellow().bold()
-        );
-        if !result.artifacts.is_empty() {
-            println!("{}", "Artifacts preserved for debugging:".yellow());
-            for artifact in &result.artifacts {
-                println!("  - {artifact}");
-            }
-        }
-    } else if result.cleanup_required && !dry_run && technique_config.cleanup_after.unwrap_or(true)
-    {
-        if delay_cleanup > 0 {
+    // Cleanup if necessary (only when we have a result)
+    if let Some(ref result) = result {
+        if no_cleanup {
             println!(
-                "{}",
-                format!(
-                    "Waiting {}s before cleanup (detection window)...",
-                    delay_cleanup
-                )
-                .yellow()
+                "\n{}",
+                "Skipping cleanup (--no-cleanup flag set)".yellow().bold()
             );
-            tokio::time::sleep(std::time::Duration::from_secs(delay_cleanup)).await;
+            if !result.artifacts.is_empty() {
+                println!("{}", "Artifacts preserved for debugging:".yellow());
+                for artifact in &result.artifacts {
+                    println!("  - {artifact}");
+                }
+            }
+        } else if result.cleanup_required
+            && !dry_run
+            && technique_config.cleanup_after.unwrap_or(true)
+        {
+            if delay_cleanup > 0 {
+                println!(
+                    "{}",
+                    format!(
+                        "Waiting {}s before cleanup (detection window)...",
+                        delay_cleanup
+                    )
+                    .yellow()
+                );
+                tokio::time::sleep(std::time::Duration::from_secs(delay_cleanup)).await;
+            }
+            println!("\n{}", "Cleaning up...".bold());
+            if let Err(e) = technique.cleanup(&result.artifacts).await {
+                warn!("Cleanup failed: {e}");
+                println!("{}: {}", "Cleanup Warning".yellow().bold(), e);
+            } else {
+                println!("{}", "Cleanup completed successfully".green());
+            }
+        } else if result.cleanup_required && !technique_config.cleanup_after.unwrap_or(true) {
+            println!(
+                "\n{}",
+                "Artifacts left on system (cleanup_after = false)"
+                    .yellow()
+                    .bold()
+            );
         }
-        println!("\n{}", "Cleaning up...".bold());
-        if let Err(e) = technique.cleanup(&result.artifacts).await {
-            warn!("Cleanup failed: {e}");
-            println!("{}: {}", "Cleanup Warning".yellow().bold(), e);
+    }
+
+    // ── Chain mode: spawn the next child in the chain ────────────────────────
+    if chain {
+        if let Ok(chain_file_str) = std::env::var(chain::CHAIN_FILE_ENV) {
+            let chain_file = std::path::Path::new(&chain_file_str).to_path_buf();
+
+            // Check if there are more entries; if empty, delete and we're done.
+            let remaining = chain::peek_chain_entries(&chain_file);
+
+            if remaining.is_empty() {
+                info!("[CHAIN] Last technique in chain finished — deleting chain file");
+                chain::delete_chain_file(&chain_file);
+            } else {
+                // Attempt to spawn next child; skip unknown techniques.
+                let mut skipped = 0;
+                loop {
+                    let peek = chain::peek_chain_entries(&chain_file);
+                    if peek.is_empty() {
+                        chain::delete_chain_file(&chain_file);
+                        break;
+                    }
+                    // Validate the next entry exists as a technique before popping.
+                    let next_id = &peek[0];
+                    if get_technique_by_id_or_name(next_id).is_none() {
+                        warn!("[CHAIN] Unknown technique '{}' — skipping", next_id);
+                        // Pop and discard.
+                        let _ = chain::pop_chain_entry(&chain_file);
+                        skipped += 1;
+                        if skipped > 500 {
+                            // Safety valve to prevent infinite loop.
+                            warn!("[CHAIN] Too many consecutive unknown techniques — aborting chain");
+                            chain::delete_chain_file(&chain_file);
+                            break;
+                        }
+                        continue;
+                    }
+                    // Valid technique — spawn the child.
+                    if let Err(e) = chain::spawn_next_chain_child(
+                        &chain_file,
+                        dry_run,
+                        no_cleanup,
+                        config_path.as_deref(),
+                        force,
+                        debug,
+                        delay_cleanup,
+                    ) {
+                        return Err(e);
+                    }
+                    break;
+                }
+            }
         } else {
-            println!("{}", "Cleanup completed successfully".green());
+            info!("[CHAIN] Chain of one — process renamed, no child spawned");
         }
-    } else if result.cleanup_required && !technique_config.cleanup_after.unwrap_or(true) {
-        println!(
-            "\n{}",
-            "Artifacts left on system (cleanup_after = false)"
-                .yellow()
-                .bold()
-        );
     }
 
     Ok(())
@@ -265,12 +359,9 @@ pub async fn run_technique(
 /// Developed by Simon Sigre for GoCortex.io
 pub async fn run_categories(
     categories: &[String],
-    dry_run: bool,
-    no_cleanup: bool,
-    config_path: Option<std::path::PathBuf>,
-    force: bool,
-    delay_cleanup: u64,
+    opts: RunOptions,
 ) -> Result<(), String> {
+    let RunOptions { dry_run, no_cleanup, config_path, force, debug, delay_cleanup, chain } = opts;
     use crate::cli::{get_available_categories, ALL_CAPS_CATEGORY};
 
     println!(
@@ -365,9 +456,67 @@ pub async fn run_categories(
         );
     }
 
+    // ── Chain mode: build flat ordered list, write chain file, delegate ────────
+    if chain {
+        // Expand all categories into a flat ordered list of TTP IDs.
+        // Where multiple techniques share the same MITRE ID, the chain will execute
+        // the first registered matching technique per ID (consistent with how
+        // get_technique_by_id_or_name resolves IDs across the codebase).
+        let mut all_ids: Vec<String> = Vec::new();
+        for category in &effective_categories {
+            let techniques = get_techniques_by_category(category);
+            for technique in &techniques {
+                all_ids.push(technique.info().id.clone());
+            }
+        }
+
+        if all_ids.is_empty() {
+            return Err("No techniques found for the specified categories".to_string());
+        }
+
+        println!(
+            "\n{}",
+            format!("[CHAIN] Building process chain with {} techniques", all_ids.len())
+                .bold()
+                .cyan()
+        );
+        for id in &all_ids {
+            println!("  → {}", id.yellow());
+        }
+
+        // Per spec: write ALL TTP IDs to the chain file up front (including the
+        // first), then each generation pops its own entry before executing.
+        chain::write_chain_file(&all_ids)
+            .map_err(|e| format!("Failed to initialise chain file: {e}"))?;
+
+        // Pop the first entry and run it in the current process.
+        let first_id = match chain::pop_chain_entry(std::path::Path::new(
+            &std::env::var(chain::CHAIN_FILE_ENV)
+                .map_err(|e| format!("Chain env var missing: {e}"))?,
+        ))? {
+            Some(id) => id,
+            None => return Err("Chain file was empty immediately after writing".to_string()),
+        };
+
+        // Run the first technique (it will spawn the rest via chain mode).
+        return run_technique(
+            &first_id,
+            RunOptions {
+                dry_run,
+                no_cleanup,
+                config_path,
+                force: effective_force,
+                debug,
+                delay_cleanup: effective_delay,
+                chain: true,
+            },
+        )
+        .await;
+    }
+
     // Load configuration if provided
-    let config = if let Some(config_path) = config_path {
-        Some(load_config(Some(&config_path))?)
+    let config = if let Some(ref config_path) = config_path {
+        Some(load_config(Some(config_path))?)
     } else {
         None
     };

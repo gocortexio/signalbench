@@ -20,6 +20,212 @@ use std::path::Path;
 use tokio::process::Command;
 use uuid::Uuid;
 
+// T1071-IOC hosts file markers for safe testing of unowned domains
+const HOSTS_MARKER_START: &str = "# SIGNALBENCH-T1071-IOC-START";
+const HOSTS_MARKER_END: &str = "# SIGNALBENCH-T1071-IOC-END";
+const HOSTS_FILE_PATH: &str = "/etc/hosts";
+const SAFE_TEST_IP: &str = "203.0.113.1";
+const HOSTS_ARTIFACT_MARKER: &str = "/tmp/.signalbench_t1071_hosts_modified";
+
+// Unowned domains that require /etc/hosts configuration for safe testing
+const UNOWNED_DOMAINS: &[&str] = &[
+    "signalbench-c2-test.tk",
+    "signalbench-malware.ru",
+    "signalbench-backdoor.cn",
+    "signalbench-rat.xyz",
+    "signalbench-payload.top",
+    "update.signalbench-services.com",
+    "cdn.signalbench-delivery.net",
+    "api.signalbench-auth.io",
+    "signalbench.onion.link",
+    "pool.signalbench-mining.com",
+    "stratum.signalbench-crypto.net",
+];
+
+/// Checks if the current process is running as root
+fn is_running_as_root() -> bool {
+    unsafe { libc::geteuid() == 0 }
+}
+
+/// Checks if a domain is considered safe (owned by GoCortex or TEST-NET IP)
+fn is_safe_domain(domain: &str) -> bool {
+    // Owned domains: *.sigre.xyz
+    if domain.ends_with(".sigre.xyz") {
+        return true;
+    }
+
+    // TEST-NET IP ranges (RFC 5737)
+    if domain.starts_with("192.0.2.")
+        || domain.starts_with("198.51.100.")
+        || domain.starts_with("203.0.113.")
+    {
+        return true;
+    }
+
+    false
+}
+
+/// Checks if a domain resolves to the safe test IP using getent hosts
+async fn domain_resolves_to_safe_ip(domain: &str) -> bool {
+    let output = Command::new("getent")
+        .args(["hosts", domain])
+        .output()
+        .await;
+
+    match output {
+        Ok(result) => {
+            let stdout = String::from_utf8_lossy(&result.stdout);
+            stdout.contains(SAFE_TEST_IP)
+        }
+        Err(_) => false,
+    }
+}
+
+/// Adds unowned domains to /etc/hosts with safe test IP
+/// Returns Ok(true) if entries were added, Ok(false) if already present
+fn add_hosts_entries() -> Result<bool, String> {
+    let hosts_path = Path::new(HOSTS_FILE_PATH);
+
+    // Read existing hosts file
+    let existing_content = fs::read_to_string(hosts_path)
+        .map_err(|e| format!("Failed to read {}: {}", HOSTS_FILE_PATH, e))?;
+
+    // Check if our marker block already exists
+    if existing_content.contains(HOSTS_MARKER_START) {
+        debug!("[T1071-IOC] Hosts entries already present, skipping addition");
+        return Ok(false);
+    }
+
+    // Build the new block
+    let mut block = String::new();
+    block.push_str(HOSTS_MARKER_START);
+    block.push('\n');
+    for domain in UNOWNED_DOMAINS {
+        block.push_str(&format!("{}    {}\n", SAFE_TEST_IP, domain));
+    }
+    block.push_str(HOSTS_MARKER_END);
+    block.push('\n');
+
+    // Append to hosts file
+    let new_content = format!("{}\n{}", existing_content.trim_end(), block);
+
+    // Atomic write: write to temp file in SAME directory, then rename
+    // Using unique temp filename with process ID
+    let temp_path = format!("/etc/.hosts.signalbench.{}", std::process::id());
+    fs::write(&temp_path, &new_content)
+        .map_err(|e| format!("Failed to write temporary hosts file: {}", e))?;
+
+    // Atomic rename within same filesystem
+    if let Err(e) = fs::rename(&temp_path, hosts_path) {
+        // Clean up temp file on failure
+        let _ = fs::remove_file(&temp_path);
+        return Err(format!("Failed to atomic rename to {}: {}", HOSTS_FILE_PATH, e));
+    }
+
+    // Create marker file to track that we modified hosts
+    let _ = fs::write(HOSTS_ARTIFACT_MARKER, "modified");
+
+    info!("[T1071-IOC] Added {} domain entries to {}", UNOWNED_DOMAINS.len(), HOSTS_FILE_PATH);
+    Ok(true)
+}
+
+/// Removes the SignalBench marker block from /etc/hosts
+fn remove_hosts_entries() -> Result<(), String> {
+    let hosts_path = Path::new(HOSTS_FILE_PATH);
+
+    // Check if marker file exists (indicates we modified hosts)
+    if !Path::new(HOSTS_ARTIFACT_MARKER).exists() {
+        debug!("[T1071-IOC] No hosts modification marker found, skipping cleanup");
+        return Ok(());
+    }
+
+    // Read existing hosts file
+    let content = fs::read_to_string(hosts_path)
+        .map_err(|e| format!("Failed to read {}: {}", HOSTS_FILE_PATH, e))?;
+
+    // Verify marker block integrity: both START and END markers must be present
+    let has_start = content.contains(HOSTS_MARKER_START);
+    let has_end = content.contains(HOSTS_MARKER_END);
+
+    if !has_start && !has_end {
+        // No markers at all, just remove the artifact marker
+        let _ = fs::remove_file(HOSTS_ARTIFACT_MARKER);
+        debug!("[T1071-IOC] No marker block found in hosts file, nothing to clean");
+        return Ok(());
+    }
+
+    if has_start != has_end {
+        // Malformed marker block - one marker missing, abort to prevent corruption
+        warn!(
+            "[T1071-IOC] Malformed marker block in {}: START={}, END={}. Manual cleanup required.",
+            HOSTS_FILE_PATH, has_start, has_end
+        );
+        let _ = fs::remove_file(HOSTS_ARTIFACT_MARKER);
+        return Err(format!(
+            "Malformed marker block in {} - manual cleanup required",
+            HOSTS_FILE_PATH
+        ));
+    }
+
+    // Both markers present, safe to proceed
+    let mut new_lines: Vec<&str> = Vec::new();
+    let mut in_marker_block = false;
+
+    for line in content.lines() {
+        if line.trim() == HOSTS_MARKER_START {
+            in_marker_block = true;
+            continue;
+        }
+
+        if line.trim() == HOSTS_MARKER_END {
+            in_marker_block = false;
+            continue;
+        }
+
+        if !in_marker_block {
+            new_lines.push(line);
+        }
+    }
+
+    // Atomic write: write to temp file in SAME directory, then rename
+    let temp_path = format!("/etc/.hosts.signalbench.cleanup.{}", std::process::id());
+    let new_content = new_lines.join("\n");
+    fs::write(&temp_path, format!("{}\n", new_content.trim_end()))
+        .map_err(|e| format!("Failed to write temporary hosts file: {}", e))?;
+
+    // Atomic rename within same filesystem
+    if let Err(e) = fs::rename(&temp_path, hosts_path) {
+        // Clean up temp file on failure
+        let _ = fs::remove_file(&temp_path);
+        return Err(format!("Failed to atomic rename to {}: {}", HOSTS_FILE_PATH, e));
+    }
+
+    // Remove marker file
+    let _ = fs::remove_file(HOSTS_ARTIFACT_MARKER);
+
+    info!("[T1071-IOC] Removed SignalBench entries from {}", HOSTS_FILE_PATH);
+    Ok(())
+}
+
+/// Prints warning message for skipped domains when not running as root
+fn print_skipped_domains_warning(skipped: &[&str]) {
+    if skipped.is_empty() {
+        return;
+    }
+
+    println!();
+    warn!("[WARN] The following domains are not owned by GoCortex and have not been");
+    warn!("[WARN] configured in /etc/hosts. HTTP tests skipped to prevent IP exposure.");
+    warn!("[WARN]");
+    warn!("[WARN] To enable testing, add the following to /etc/hosts (requires root):");
+
+    for domain in skipped {
+        warn!("[WARN] {}    {}", SAFE_TEST_IP, domain);
+    }
+
+    println!();
+}
+
 // ======================================
 // T1105 - Ingress Tool Transfer
 // ======================================
@@ -902,7 +1108,7 @@ impl AttackTechnique for SuspiciousGitHubToolTransfer {
     }
 
     fn execute<'a>(&'a self, config: &'a TechniqueConfig, dry_run: bool) -> ExecuteFuture<'a> {
-        use rand::seq::SliceRandom;
+        use rand::prelude::IndexedRandom;
 
         let repo_count: usize = config
             .parameters
@@ -942,7 +1148,7 @@ impl AttackTechnique for SuspiciousGitHubToolTransfer {
         ];
 
         // Generate random selections BEFORE async block
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let mut repo_list = Vec::new();
         for _ in 0..repo_count {
             let suffix = suspicious_suffixes
@@ -1161,6 +1367,30 @@ impl AttackTechnique for SuspiciousDomainConnections {
                 });
             }
 
+            // Check if running as root and handle /etc/hosts accordingly
+            let running_as_root = is_running_as_root();
+            let mut hosts_modified = false;
+
+            if running_as_root {
+                info!("[T1071-IOC] Running as root, adding safe test entries to /etc/hosts");
+                match add_hosts_entries() {
+                    Ok(added) => {
+                        hosts_modified = added;
+                        if added {
+                            println!("[OK] Added safe test entries to /etc/hosts");
+                        } else {
+                            println!("[OK] Safe test entries already present in /etc/hosts");
+                        }
+                    }
+                    Err(e) => {
+                        error!("[T1071-IOC] Failed to add hosts entries: {}", e);
+                        println!("[WARN] Failed to add hosts entries: {}", e);
+                    }
+                }
+            } else {
+                debug!("[T1071-IOC] Not running as root, will check /etc/hosts for each unowned domain");
+            }
+
             // Create log file
             let mut log =
                 File::create(&log_file).map_err(|e| format!("Failed to create log file: {}", e))?;
@@ -1174,6 +1404,7 @@ impl AttackTechnique for SuspiciousDomainConnections {
             writeln!(log, "# Timestamp: {}", chrono::Local::now()).unwrap();
             writeln!(log, "# Total domains: {}", suspicious_domains.len()).unwrap();
             writeln!(log, "# Timeout: {} seconds", timeout).unwrap();
+            writeln!(log, "# Running as root: {}", running_as_root).unwrap();
             writeln!(
                 log,
                 "# --------------------------------------------------------\n"
@@ -1182,6 +1413,8 @@ impl AttackTechnique for SuspiciousDomainConnections {
 
             let mut connection_count = 0;
             let mut successful_connections = 0;
+            let mut skipped_count = 0;
+            let mut skipped_domains: Vec<&str> = Vec::new();
 
             info!(
                 "[T1071-IOC] Connecting to {} suspicious domains",
@@ -1200,6 +1433,24 @@ impl AttackTechnique for SuspiciousDomainConnections {
             println!();
 
             for (domain, reason) in &suspicious_domains {
+                // Check if this domain is safe to test
+                let domain_is_safe = is_safe_domain(domain);
+
+                // For unowned domains when not root, check if configured in /etc/hosts
+                if !domain_is_safe && !running_as_root {
+                    let resolves_safely = domain_resolves_to_safe_ip(domain).await;
+                    if !resolves_safely {
+                        skipped_count += 1;
+                        skipped_domains.push(domain);
+                        debug!("[T1071-IOC] Skipping unowned domain {} (not in /etc/hosts)", domain);
+                        println!("[WARN] Skipping: {} (not configured in /etc/hosts)", domain);
+                        writeln!(log, "=== Skipped: {} ===", domain).unwrap();
+                        writeln!(log, "Reason: Unowned domain not configured in /etc/hosts").unwrap();
+                        writeln!(log).unwrap();
+                        continue;
+                    }
+                }
+
                 connection_count += 1;
                 debug!("[T1071-IOC] Connecting to: {} ({})", domain, reason);
                 println!("[T1071-IOC] Connecting: {} ...", domain);
@@ -1207,6 +1458,7 @@ impl AttackTechnique for SuspiciousDomainConnections {
                 writeln!(log, "=== Connection {} ===", connection_count).unwrap();
                 writeln!(log, "Target: {}", domain).unwrap();
                 writeln!(log, "Reason: {}", reason).unwrap();
+                writeln!(log, "Safe domain: {}", domain_is_safe).unwrap();
                 writeln!(log, "Time: {}", chrono::Local::now()).unwrap();
 
                 // Use curl to attempt connection (generates network telemetry)
@@ -1242,7 +1494,7 @@ impl AttackTechnique for SuspiciousDomainConnections {
                         }
                     }
                     Err(e) => {
-                        println!("  [!!] Error: {}", e);
+                        println!("  [FAIL] Error: {}", e);
                         writeln!(log, "Status: ERROR ({})", e).unwrap();
                     }
                 }
@@ -1265,6 +1517,9 @@ impl AttackTechnique for SuspiciousDomainConnections {
                 writeln!(log).unwrap();
             }
 
+            // Print warning for skipped domains
+            print_skipped_domains_warning(&skipped_domains);
+
             writeln!(log, "=== Summary ===").unwrap();
             writeln!(log, "Total connections attempted: {}", connection_count).unwrap();
             writeln!(log, "Successful connections: {}", successful_connections).unwrap();
@@ -1274,32 +1529,44 @@ impl AttackTechnique for SuspiciousDomainConnections {
                 connection_count - successful_connections
             )
             .unwrap();
+            writeln!(log, "Skipped domains: {}", skipped_count).unwrap();
+            if hosts_modified {
+                writeln!(log, "Hosts file modified: yes (cleanup required)").unwrap();
+            }
 
             // Console summary
             println!("\n{}", "-".repeat(60));
             println!(
-                "[T1071-IOC] Summary: {} attempted, {} successful, {} failed",
+                "[T1071-IOC] Summary: {} attempted, {} successful, {} failed, {} skipped",
                 connection_count,
                 successful_connections,
-                connection_count - successful_connections
+                connection_count - successful_connections,
+                skipped_count
             );
             println!("{}", "-".repeat(60));
 
             info!(
-                "[T1071-IOC] Completed {} suspicious domain connections ({} successful)",
-                connection_count, successful_connections
+                "[T1071-IOC] Completed {} suspicious domain connections ({} successful, {} skipped)",
+                connection_count, successful_connections, skipped_count
             );
+
+            // Build artifacts list, including hosts marker if modified
+            let mut artifacts = vec![log_file.clone()];
+            if hosts_modified {
+                artifacts.push(HOSTS_ARTIFACT_MARKER.to_string());
+            }
 
             Ok(SimulationResult {
                 technique_id: self.info().id,
                 success: true,
                 message: format!(
-                    "Completed {} suspicious domain connections ({} successful, {} failed)",
+                    "Completed {} suspicious domain connections ({} successful, {} failed, {} skipped)",
                     connection_count,
                     successful_connections,
-                    connection_count - successful_connections
+                    connection_count - successful_connections,
+                    skipped_count
                 ),
-                artifacts: vec![log_file],
+                artifacts,
                 cleanup_required: true,
             })
         })
@@ -1309,6 +1576,25 @@ impl AttackTechnique for SuspiciousDomainConnections {
         Box::pin(async move {
             debug!("[T1071-IOC] Starting cleanup");
 
+            // Check if we need to clean up /etc/hosts
+            if artifacts.contains(&HOSTS_ARTIFACT_MARKER.to_string()) {
+                if is_running_as_root() {
+                    match remove_hosts_entries() {
+                        Ok(()) => {
+                            info!("[T1071-IOC] Successfully cleaned up /etc/hosts entries");
+                        }
+                        Err(e) => {
+                            warn!("[T1071-IOC] Failed to clean up /etc/hosts: {}", e);
+                        }
+                    }
+                } else {
+                    warn!("[T1071-IOC] Cannot clean up /etc/hosts without root privileges");
+                    warn!("[T1071-IOC] Manually remove entries between {} and {}",
+                        HOSTS_MARKER_START, HOSTS_MARKER_END);
+                }
+            }
+
+            // Clean up log files and marker
             for artifact in artifacts {
                 if Path::new(artifact).exists() {
                     if let Err(e) = fs::remove_file(artifact) {

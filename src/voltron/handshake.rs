@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 use crate::voltron::{PreSharedKey, VoltronError};
-use rand::Rng;
+use rand::RngCore;
 use sha2::Sha256;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -37,9 +37,9 @@ impl Handshake {
         }
 
         // Generate random salt
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let mut salt = [0u8; SALT_SIZE];
-        rng.fill(&mut salt);
+        rng.fill_bytes(&mut salt);
 
         if self.debug {
             log::debug!(" Generated salt: {}", hex::encode(&salt));

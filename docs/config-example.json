@@ -1,7 +1,9 @@
 {
-  "_comment": "SignalBench v1.6.47 - Complete configuration matching ALL_CAPS mode execution",
+  "_comment": "SignalBench v1.7.0 - Complete configuration matching ALL_CAPS mode execution",
   "_description": "This configuration file contains all technique parameters that would be used when running: signalbench category ALL_CAPS",
-  "_usage": "signalbench --config config-example.json category discovery",
+  "_usage": "signalbench category discovery --config config-example.json",
+  "_chain_usage": "signalbench category credential_access --config config-example.json --chain",
+  "_chain_note": "The --chain flag is a CLI option, not a config file parameter. It can be combined with any run or category command alongside --config. Each technique runs as a child process of the previous one, building a genuine parent/child process tree.",
   
   "techniques": {
     

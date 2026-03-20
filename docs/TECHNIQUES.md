@@ -106,6 +106,37 @@ signalbench category discovery --debug
 
 This replaces the need to set `RUST_LOG=debug` environment variable.
 
+## Chain Execution Mode (--chain)
+
+Chain mode builds a genuine parent/child process tree across a sequence of techniques. Each technique spawns the next as a child process rather than executing all techniques within the same process, producing realistic multi-stage process genealogy in endpoint telemetry.
+
+Availability: `signalbench run` and `signalbench category` only. Not available in Voltron Mode.
+
+```bash
+# Chain a single technique (chain-of-one, still renames the process)
+signalbench run T1003.001 --chain
+
+# Chain all techniques in a category
+signalbench category credential_access --chain
+
+# Chain across multiple categories
+signalbench category discovery credential_access execution --chain
+
+# Combine with other flags
+signalbench category discovery execution --chain --force --delay-cleanup 5
+```
+
+How it works:
+
+1. The first process writes all queued TTP IDs to a session file at `/tmp/signalbench_chain_<uuid>.txt` and exports the path via the `SIGNALBENCH_CHAIN_FILE` environment variable.
+2. The current process renames itself to the technique ID using `prctl(PR_SET_NAME)` (Linux), so it appears in `ps` and `pstree` under the TTP ID with dots replaced by dashes (e.g. `T1003-001`). The 15-character kernel limit applies; longer IDs are truncated.
+3. After executing its technique, the process pops the next TTP ID from the chain file and spawns a child `signalbench` process with `argv[0]` set to the next TTP alias. All flags (`--dry-run`, `--no-cleanup`, `--force`, `--debug`, `--delay-cleanup`, `--config`) propagate to every child in the chain.
+4. The child repeats this sequence, producing a process tree where each TTP is a direct child of the preceding one.
+5. When the chain file is empty the last process deletes it. On SIGINT or SIGTERM the chain file is removed immediately to avoid orphaned state.
+6. If any child process exits with a non-zero code the chain is aborted and the chain file is deleted.
+
+This mode is intended for generating multi-stage attack telemetry where process lineage is meaningful to the detection use case. Single-technique runs still benefit from process renaming even when no chaining occurs.
+
 ## DISCOVERY Techniques
 
 ### T1082 - System Information Discovery
@@ -2097,16 +2128,45 @@ Domains and IPs tested:
 | pool.signalbench-mining.com | Mining pool pattern |
 | stratum.signalbench-crypto.net | Stratum protocol pattern |
 
-How it works:
-1. Displays all target domains/IPs to console before testing
-2. Attempts HTTP connections to 17 suspicious domains/IPs via curl
-3. Performs DNS lookups via dig for each target
-4. Logs connection results (HTTP code, timing, resolved IP)
-5. Reports success/failure status for each connection in real-time
-6. Generates comprehensive connection log for analysis
+Domain classification:
+
+Domains are split into two categories. Safe domains are always tested without prerequisites. Unowned domains require /etc/hosts configuration or root privileges to add it automatically.
+
+- Safe: *.sigre.xyz (GoCortex-owned; DNS resolves without host entries)
+- Safe: TEST-NET IP addresses 192.0.2.1, 198.51.100.1, 203.0.113.1 (RFC 5737)
+- Unowned: signalbench-c2-test.tk, signalbench-malware.ru, signalbench-backdoor.cn, signalbench-rat.xyz, signalbench-payload.top, update.signalbench-services.com, cdn.signalbench-delivery.net, api.signalbench-auth.io, signalbench.onion.link, pool.signalbench-mining.com, stratum.signalbench-crypto.net
+
+How it works (root mode):
+
+1. Detects root privileges via geteuid()
+2. Reads /etc/hosts and checks for an existing SIGNALBENCH-T1071-IOC-START marker
+3. If not present, builds a marker block mapping all 11 unowned domains to 203.0.113.1 (TEST-NET-3)
+4. Writes the block atomically: writes to /etc/.hosts.signalbench.{pid}, then renames over /etc/hosts
+5. Creates /tmp/.signalbench_t1071_hosts_modified to record that the file was changed
+6. Tests all 17 targets via curl and dig
+7. On cleanup, reads /etc/hosts and verifies both START and END markers are present
+8. If one marker is missing (malformed block), cleanup aborts and prints a manual intervention warning
+9. If both markers are present, strips the marker block atomically and removes the marker file
+
+How it works (non-root mode):
+
+1. For each unowned domain, calls getent hosts to check whether it resolves to 203.0.113.1
+2. Domains that do not resolve to that IP are skipped; a [WARN] block lists them with manual /etc/hosts instructions
+3. Safe domains and any unowned domains already present in /etc/hosts are tested normally
+4. /etc/hosts is not modified; no marker file is created
+
+Common steps (both modes):
+
+1. Displays target table to console before testing
+2. For each tested target, attempts HTTP connection via curl to generate network telemetry
+3. Performs DNS lookup via dig for additional telemetry
+4. Logs results per target: HTTP code, timing, resolved IP, DNS response
+5. Prints per-target [OK] / [--] / [FAIL] / [WARN] status to console
+6. Prints summary on completion: attempted, successful, failed, skipped
 
 Commands executed:
 ```bash
+getent hosts {domain}
 curl -s -o /dev/null -w "%{http_code},%{time_total},%{remote_ip}" --max-time 3 --connect-timeout 3 http://{target}
 dig +short +time=1 +tries=1 {target}
 ```
@@ -2116,7 +2176,8 @@ Parameters:
 - `timeout`: Connection timeout in seconds (default: 3)
 
 Artefacts:
-- Connection attempt log (cleaned up automatically)
+- Connection attempt log at the configured log_file path (cleaned up automatically)
+- /tmp/.signalbench_t1071_hosts_modified (root mode only; removed on cleanup)
 
 Detection opportunities:
 - DNS queries to suspicious TLDs (.tk, .ru, .cn, .xyz, .top)

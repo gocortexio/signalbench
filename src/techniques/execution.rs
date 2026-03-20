@@ -1039,7 +1039,7 @@ impl AttackTechnique for UncommonRemoteShellCommands {
     }
 
     fn execute<'a>(&'a self, config: &'a TechniqueConfig, dry_run: bool) -> ExecuteFuture<'a> {
-        use rand::seq::SliceRandom;
+        use rand::prelude::IndexedRandom;
 
         let command_count: usize = config
             .parameters
@@ -1079,7 +1079,7 @@ impl AttackTechnique for UncommonRemoteShellCommands {
         ];
 
         // Generate random selections BEFORE async block
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let mut command_list = Vec::new();
         for _ in 0..command_count {
             let suffix = scary_suffixes.choose(&mut rng).unwrap_or(&"backdoor");

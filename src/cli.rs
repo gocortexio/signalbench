@@ -59,6 +59,11 @@ pub enum Commands {
         /// Optional path to a config file for technique parameters
         #[arg(short, long)]
         config: Option<PathBuf>,
+
+        /// Chain execution mode: each TTP runs as a child process of the previous one,
+        /// building a realistic parent/child process tree (local execution only)
+        #[arg(long, default_value_t = false)]
+        chain: bool,
     },
 
     /// Generate telemetry for all techniques in specified categories
@@ -77,6 +82,11 @@ pub enum Commands {
         /// Optional path to a config file for technique parameters
         #[arg(short, long)]
         config: Option<PathBuf>,
+
+        /// Chain execution mode: each TTP runs as a child process of the previous one,
+        /// building a realistic parent/child process tree (local execution only)
+        #[arg(long, default_value_t = false)]
+        chain: bool,
     },
 
     /// Voltron Mode - Multi-host MITRE ATT&CK simulation with peer-to-peer hive architecture
