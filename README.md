@@ -172,12 +172,12 @@ SignalBench provides pre-built binaries for maximum compatibility across Linux d
 For Universal Linux Compatibility (Recommended):
 ```bash
 # Download static binary that works on any Linux distribution
-wget https://github.com/gocortexio/signalbench/releases/download/v1.7.0/signalbench-v1.7.0-linux-musl-x86_64
+wget https://github.com/gocortexio/signalbench/releases/download/v1.7.0/signalbench-1.7.0-linux-musl-x86_64
 chmod +x signalbench-v1.7.0-linux-musl-x86_64
 sudo mv signalbench-v1.7.0-linux-musl-x86_64 /usr/local/bin/signalbench
 
 # For ARM64 systems (Apple Silicon, ARM servers)
-wget https://github.com/gocortexio/signalbench/releases/download/v1.7.0/signalbench-v1.7.0-linux-musl-aarch64
+wget https://github.com/gocortexio/signalbench/releases/download/v1.7.0/signalbench-1.7.0-linux-musl-aarch64
 chmod +x signalbench-v1.7.0-linux-musl-aarch64
 sudo mv signalbench-v1.7.0-linux-musl-aarch64 /usr/local/bin/signalbench
 ```
