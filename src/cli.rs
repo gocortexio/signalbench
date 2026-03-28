@@ -43,10 +43,11 @@ pub enum Commands {
     /// List all available MITRE ATT&CK techniques
     List,
 
-    /// Generate telemetry for a specific technique
+    /// Generate telemetry for one or more specified techniques
     Run {
-        /// The MITRE ATT&CK technique ID or name (e.g., T1547.001 or registry_run_keys)
-        technique: String,
+        /// One or more MITRE ATT&CK technique IDs or names (e.g., T1082 T1016 T1049)
+        #[arg(num_args = 1.., required = true)]
+        techniques: Vec<String>,
 
         /// Perform a dry run without executing any operations
         #[arg(long, default_value_t = false)]

@@ -147,14 +147,14 @@ jobs:
     - name: Prepare binary for upload
       run: |
         mkdir -p release-artifacts
-        cp target/${{ matrix.target }}/release/signalbench release-artifacts/signalbench-${{ steps.version.outputs.version }}-${{ steps.version.outputs.name }}
-        chmod +x release-artifacts/signalbench-${{ steps.version.outputs.version }}-${{ steps.version.outputs.name }}
+        cp target/${{ matrix.target }}/release/signalbench release-artifacts/signalbench-v${{ steps.version.outputs.version }}-${{ steps.version.outputs.name }}
+        chmod +x release-artifacts/signalbench-v${{ steps.version.outputs.version }}-${{ steps.version.outputs.name }}
 
     - name: Upload binary
       uses: actions/upload-artifact@v4
       with:
-        name: signalbench-${{ steps.version.outputs.version }}-${{ steps.version.outputs.name }}
-        path: release-artifacts/signalbench-${{ steps.version.outputs.version }}-${{ steps.version.outputs.name }}
+        name: signalbench-v${{ steps.version.outputs.version }}-${{ steps.version.outputs.name }}
+        path: release-artifacts/signalbench-v${{ steps.version.outputs.version }}-${{ steps.version.outputs.name }}
         retention-days: 30
 
   build-debian:
@@ -290,14 +290,14 @@ jobs:
       shell: bash
       run: |
         mkdir -p release-artifacts
-        cp target/${{ matrix.target }}/release/signalbench release-artifacts/signalbench-${{ steps.version.outputs.version }}-${{ steps.version.outputs.name }}
-        chmod +x release-artifacts/signalbench-${{ steps.version.outputs.version }}-${{ steps.version.outputs.name }}
+        cp target/${{ matrix.target }}/release/signalbench release-artifacts/signalbench-v${{ steps.version.outputs.version }}-${{ steps.version.outputs.name }}
+        chmod +x release-artifacts/signalbench-v${{ steps.version.outputs.version }}-${{ steps.version.outputs.name }}
 
     - name: Upload binary
       uses: actions/upload-artifact@v4
       with:
-        name: signalbench-${{ steps.version.outputs.version }}-${{ steps.version.outputs.name }}
-        path: release-artifacts/signalbench-${{ steps.version.outputs.version }}-${{ steps.version.outputs.name }}
+        name: signalbench-v${{ steps.version.outputs.version }}-${{ steps.version.outputs.name }}
+        path: release-artifacts/signalbench-v${{ steps.version.outputs.version }}-${{ steps.version.outputs.name }}
         retention-days: 30
 
   release:
@@ -335,7 +335,7 @@ jobs:
           **For maximum compatibility (recommended):**
           ```bash
           # Download universal static binary (works on any Linux distribution)
-          wget https://github.com/gocortex/signalbench/releases/download/${{ github.ref_name }}/signalbench-${{ github.ref_name }}-linux-musl-x86_64
+          wget https://github.com/gocortexio/signalbench/releases/download/${{ github.ref_name }}/signalbench-${{ github.ref_name }}-linux-musl-x86_64
           chmod +x signalbench-${{ github.ref_name }}-linux-musl-x86_64
           sudo mv signalbench-${{ github.ref_name }}-linux-musl-x86_64 /usr/local/bin/signalbench
           ```
@@ -343,7 +343,7 @@ jobs:
           **For Debian 12/Ubuntu 22.04+ systems:**
           ```bash
           # Download GLIBC 2.36+ compatible binary
-          wget https://github.com/gocortex/signalbench/releases/download/${{ github.ref_name }}/signalbench-${{ github.ref_name }}-debian12-glibc2.36-x86_64
+          wget https://github.com/gocortexio/signalbench/releases/download/${{ github.ref_name }}/signalbench-${{ github.ref_name }}-debian12-glibc2.36-x86_64
           chmod +x signalbench-${{ github.ref_name }}-debian12-glibc2.36-x86_64
           sudo mv signalbench-${{ github.ref_name }}-debian12-glibc2.36-x86_64 /usr/local/bin/signalbench
           ```
@@ -365,3 +365,4 @@ jobs:
           - **MITRE ATT&CK Integration:** Real technique implementations
           - **Cross-platform:** Multiple Linux distributions supported
           - **Safe Testing:** Built-in cleanup and safety mechanisms
+

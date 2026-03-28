@@ -1,6 +1,6 @@
 {
-  "version": "1.7.0",
-  "generated_at": "2026-01-18T00:00:00Z",
+  "version": "1.7.1",
+  "generated_at": "2026-03-28T00:00:00Z",
   "scenarios": [
     {
       "techniqueId": "T1119",
@@ -57,7 +57,7 @@
     {
       "techniqueId": "T1105.001",
       "name": "Suspicious GitHub Tool Transfer",
-      "description": "Generates telemetry for curl requests to suspicious fictional GitHub repositories with hacker-themed names.",
+      "description": "Generates curl telemetry targeting synthetic GitHub repository URLs with adversary-tooling naming patterns to exercise malicious tool-transfer detection rules.",
       "fullDescription": "Attempts downloads from synthetic GitHub repository URLs with suspicious naming patterns to exercise detection rules for malicious tool transfers. All requests are to non-existent repositories and produce only network telemetry; log files are removed during cleanup.",
       "tactic": "Command and Control",
       "severity": "Medium",
@@ -96,7 +96,7 @@
     {
       "techniqueId": "T1056.001",
       "name": "Keylogging",
-      "description": "Attempts REAL keystroke capture from /dev/input/event* devices when run as root, falls back to historical analysis.",
+      "description": "Attempts REAL keystroke capture from /dev/input/event* devices when run as root, falls back to shell history analysis.",
       "fullDescription": "Enumerates ALL /dev/input/event0-15 devices and attempts real keystroke capture when run with appropriate privileges. Falls back to analysing shell history files (.bash_history, .zsh_history, .lesshst, .sqlite_history, .redis_history, .node_repl_history) and /var/log/auth.log (200 lines) for credential patterns. Generates comprehensive keylogging telemetry detectable by EDR systems. All artefacts cleaned up by default.",
       "tactic": "Credential Access",
       "severity": "High",
@@ -330,7 +330,7 @@
     {
       "techniqueId": "T1059.006",
       "name": "Python Script Execution",
-      "description": "REAL socket listeners (20s accept loop), /proc/*/fd enumeration, environment variable extraction from all processes, comprehensive recon reporting.",
+      "description": "REAL socket listeners (20s accept loop), /proc/*/fd enumeration, environment variable extraction from all processes, comprehensive reconnaissance reporting.",
       "fullDescription": "Creates and executes Python scripts that open persistent socket listeners accepting connections for 20 seconds, enumerate file descriptors from /proc/*/fd for all processes, extract environment variables from running processes, and perform system reconnaissance. Generates extensive Python interpreter telemetry including network operations and process inspection. All scripts and logs removed during cleanup.",
       "tactic": "Execution",
       "severity": "High",
@@ -382,7 +382,7 @@
     {
       "techniqueId": "T1496",
       "name": "Resource Hijacking",
-      "description": "Controlled CPU stress (SHA256 hashing loops simulating crypto-mining), memory stress (100MB chunk allocations), disk I/O stress with 30 second duration limit.",
+      "description": "Controlled CPU stress (SHA256 hashing loops simulating cryptocurrency mining), memory stress (100MB chunk allocations), disk I/O stress with 30 second duration limit.",
       "fullDescription": "Simulates cryptocurrency mining and resource abuse by spawning controlled CPU stress processes performing SHA256 hashing loops, allocating large memory blocks in 100MB chunks, and performing rapid disk I/O operations in /tmp/. Limited to 30 seconds maximum duration with safety limits. Monitors and logs resource usage during stress, demonstrates resource hijacking patterns detectable by EDR systems. FULLY REVERSIBLE with guaranteed process termination, memory cleanup, and temporary file removal.",
       "tactic": "Impact",
       "severity": "High",
@@ -461,7 +461,7 @@
       "techniqueId": "T1543",
       "name": "Create or Modify System Process",
       "description": "Generates telemetry for systemd service creation and modification to demonstrate service-based persistence.",
-      "fullDescription": "Writes systemd service unit files, init.d scripts, or rc.local entries in controlled manner and simulates installation where privilege permits. Creates service definitions with benign commands for telemetry generation. All created service files removed during cleanup unless explicitly preserved. Generates service manipulation telemetry detectable by configuration monitoring.",
+      "fullDescription": "Writes systemd service unit files, init.d scripts, or rc.local entries in a controlled manner and simulates installation where sufficient privileges are available. Creates service definitions with benign commands for telemetry generation. All created service files removed during cleanup unless explicitly preserved. Generates service manipulation telemetry detectable by configuration monitoring.",
       "tactic": "Persistence",
       "severity": "High",
       "platform": "Linux",

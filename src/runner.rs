@@ -91,7 +91,7 @@ pub fn list_techniques() -> Result<(), String> {
     }
 
     println!("\n{}", "Usage:".bold());
-    println!("  signalbench run <technique_id_or_name> [--dry-run] [--force] [--debug] [--config <config_file>]");
+    println!("  signalbench run <technique_id_or_name> [technique2 ...] [--dry-run] [--force] [--debug] [--config <config_file>]");
     println!("  signalbench category <category1> [category2] ... [--dry-run] [--force] [--debug] [--config <config_file>]");
     println!("  signalbench category ALL_CAPS  [--dry-run]   # Run ALL techniques with FORCE mode");
     println!("\n{}", "Flags:".bold());
@@ -351,6 +351,126 @@ pub async fn run_technique(
             info!("[CHAIN] Chain of one — process renamed, no child spawned");
         }
     }
+
+    Ok(())
+}
+
+/// Generate telemetry for one or more explicitly specified techniques.
+/// A single technique delegates directly to `run_technique` (identical behaviour to before).
+/// Multiple techniques run in sequence, or build a process chain in chain mode
+/// (mirroring the pattern used by `run_categories`).
+pub async fn run_techniques(
+    techniques: &[String],
+    opts: RunOptions,
+) -> Result<(), String> {
+    if techniques.is_empty() {
+        return Err("No techniques specified".to_string());
+    }
+
+    // Single technique: delegate directly — identical to the old single-argument behaviour.
+    if techniques.len() == 1 {
+        return run_technique(&techniques[0], opts).await;
+    }
+
+    let RunOptions { dry_run, no_cleanup, config_path, force, debug, delay_cleanup, chain } = opts;
+
+    // Validate all IDs up front so the user gets a clear error before anything runs.
+    for id in techniques {
+        if get_technique_by_id_or_name(id).is_none() {
+            return Err(format!("Technique '{id}' not found"));
+        }
+    }
+
+    // ── Chain mode ────────────────────────────────────────────────────────────
+    if chain {
+        let all_ids: Vec<String> = techniques.to_vec();
+
+        println!(
+            "\n{}",
+            format!("[CHAIN] Building process chain with {} techniques", all_ids.len())
+                .bold()
+                .cyan()
+        );
+        for id in &all_ids {
+            println!("  → {}", id.yellow());
+        }
+
+        chain::write_chain_file(&all_ids)
+            .map_err(|e| format!("Failed to initialise chain file: {e}"))?;
+
+        let first_id = match chain::pop_chain_entry(std::path::Path::new(
+            &std::env::var(chain::CHAIN_FILE_ENV)
+                .map_err(|e| format!("Chain env var missing: {e}"))?,
+        ))? {
+            Some(id) => id,
+            None => return Err("Chain file was empty immediately after writing".to_string()),
+        };
+
+        return run_technique(
+            &first_id,
+            RunOptions {
+                dry_run,
+                no_cleanup,
+                config_path,
+                force,
+                debug,
+                delay_cleanup,
+                chain: true,
+            },
+        )
+        .await;
+    }
+
+    // ── Sequential (no chain) ─────────────────────────────────────────────────
+    println!(
+        "\n{}",
+        format!(
+            "[RUN] Executing {} techniques: {}",
+            techniques.len(),
+            techniques.join(", ")
+        )
+        .bold()
+        .cyan()
+    );
+
+    let mut success_count: u32 = 0;
+    let mut failure_count: u32 = 0;
+
+    for technique_id in techniques {
+        match run_technique(
+            technique_id,
+            RunOptions {
+                dry_run,
+                no_cleanup,
+                config_path: config_path.clone(),
+                force,
+                debug,
+                delay_cleanup,
+                chain: false,
+            },
+        )
+        .await
+        {
+            Ok(()) => success_count += 1,
+            Err(e) => {
+                failure_count += 1;
+                error!("Technique {technique_id} failed: {e}");
+                println!("{}: {}", "Failed".red().bold(), e);
+            }
+        }
+    }
+
+    println!("\n{}", "Run Summary".bold().underline());
+    println!("Techniques: {}", techniques.len());
+    println!("Successful: {}", success_count.to_string().green());
+    println!(
+        "Failed: {}",
+        if failure_count > 0 {
+            failure_count.to_string().red()
+        } else {
+            failure_count.to_string().normal()
+        }
+    );
 
     Ok(())
 }

@@ -109,7 +109,7 @@ async fn run_command(cli: Cli) -> Result<(), String> {
     match cli.command {
         Commands::List => runner::list_techniques(),
         Commands::Run {
-            technique,
+            techniques,
             dry_run,
             no_cleanup,
             config,
@@ -118,9 +118,9 @@ async fn run_command(cli: Cli) -> Result<(), String> {
             // Check safety before execution
             safety::check_environment()?;
 
-            // Run the specified technique
-            runner::run_technique(
-                &technique,
+            // Run the specified technique(s)
+            runner::run_techniques(
+                &techniques,
                 runner::RunOptions {
                     dry_run,
                     no_cleanup,
