@@ -4676,7 +4676,11 @@ impl AttackTechnique for PamBackdoor {
             // -- Phase 3: backup + modify /etc/pam.d/sshd (root only) ---------
             // Even without root, attempt to READ the file so the open()
             // syscall is captured -- a probe is still telemetry.
-            let pam_modified = if is_root && Path::new(&pam_file).exists() {
+            let force_mode = config.force;
+            let pam_modified = if (is_root || force_mode) && Path::new(&pam_file).exists() {
+                if !is_root && force_mode {
+                    warn!("Phase 3: Not root but force mode active -- attempting PAM write (expect EACCES)");
+                }
                 info!("Phase 3: Backing up and modifying {pam_file}");
                 match fs::copy(&pam_file, &backup_file) {
                     Ok(_) => {

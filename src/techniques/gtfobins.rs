@@ -1497,8 +1497,8 @@ impl AttackTechnique for GtfobinsProbe {
 // T1218: LOLBin Proxy Execution (Linux)
 // =============================================================================
 //
-// Whereas T1548-GTFOBINS PROBES for exploitable binaries, this technique
-// actually EXECUTES a curated set of LOLBin (Living Off the Land Binary)
+// Whereas T1548-GTFOBINS probes for exploitable binaries, this technique
+// actually executes a curated set of LOLBin (Living Off the Land Binary)
 // abuse patterns.  Each pattern spawns a child process from a binary that
 // EDR / parent-process heuristics do not expect to launch shells -- the
 // parent-process anomaly is the detection signal regardless of what the
@@ -1648,8 +1648,8 @@ impl AttackTechnique for LolbinAbuseExecution {
                           exec, gdb -batch -ex shell, and several others.  All child \
                           commands are read-only (id, hostname); the TTP signal is the \
                           fork+exec anomaly itself, not the command output.  Whereas \
-                          T1548-GTFOBINS only PROBES the system for exploitable binaries, \
-                          this technique actually EXECUTES the abuse patterns so EDR \
+                          T1548-GTFOBINS only probes the system for exploitable binaries, \
+                          this technique actually executes the abuse patterns so EDR \
                           parent-process and unusual-child-spawn rules fire.  Patterns \
                           for missing binaries are skipped cleanly.".to_string(),
             category: "defense_evasion".to_string(),
@@ -1770,9 +1770,16 @@ impl AttackTechnique for LolbinAbuseExecution {
                     .await;
                 let binary_present = matches!(&which_status, Ok(o) if o.status.success());
                 if !binary_present {
-                    info!("  [--] [{}] binary {} not present -- skipped", p.name, p.binary);
-                    skipped_missing += 1;
-                    continue;
+                    if config.force {
+                        warn!(
+                            "  [!] [{}] binary {} not found on PATH -- attempting anyway (force mode)",
+                            p.name, p.binary
+                        );
+                    } else {
+                        info!("  [--] [{}] binary {} not present -- skipped", p.name, p.binary);
+                        skipped_missing += 1;
+                        continue;
+                    }
                 }
 
                 info!("  [-->] [{}] {}", p.name, p.vector);

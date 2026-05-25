@@ -272,7 +272,7 @@ fn c2_profiles() -> Vec<HttpC2Profile> {
         // snort3-malware-cnc.rules: MALWARE-CNC Win.Backdoor.Sliver connect attempt
         // (http_header:field user-agent; content:"Trident/7.0"; content:"like Gecko";
         //  http_cookie; content:"PHPSESSID="; http_uri; content:"?_=")
-        // NOTE: the "like Gecko" suffix is required — rules match on both tokens.
+        // NOTE: the "like Gecko" suffix is required -- rules match on both tokens.
         HttpC2Profile {
             domain: "signalbench-rat.xyz",
             reason: "Sliver HTTP C2 domain pattern",
@@ -1903,7 +1903,7 @@ impl AttackTechnique for SuspiciousDomainConnections {
                 DEADBEEF/B16B00B5 sequence), plus web shell probes and standard framework \
                 profiles. Phase 2 simulates Stratum v1 cryptocurrency mining sessions \
                 (ports 3333/4444): subscribe, authorize, four rounds of mining.notify/ \
-                mining.submit, client.get_version, mining.ping/pong — >= 5-second \
+                mining.submit, client.get_version, mining.ping/pong -- >= 5-second \
                 bidirectional dwell so PA-440 App-ID classifies each session as \
                 stratum-mining. Phase 3 sends an AsyncRAT TLS 1.2 handshake to \
                 sinkhole:8888 (CN=AsyncRAT Server). Phase 4 sends raw UDP/53 DNS probes: \
@@ -2500,17 +2500,16 @@ impl AttackTechnique for SuspiciousDomainConnections {
                         ];
                         let sliver_total = sliver_reqs.len();
                         let mut sliver_any_ok = false;
-                        let mut sliver_rng = rand::rng();
                         for (req_idx, &(method, path, with_sess, is_numeric, sid))
                             in sliver_reqs.iter().enumerate()
                         {
                             // Snort rule constraint: ?_= must be 1-9 numeric
                             // digits (PCRE [0-9]{1,9}$).  Razy-coverage uses
-                            // 16 hex chars (rand_range avoids leading zero on
-                            // numeric to satisfy length lower bound).
+                            // 16 hex chars.  ThreadRng is not Send so we use
+                            // a scoped temporary that drops before the await.
                             let nonce = if is_numeric {
                                 use rand::Rng;
-                                sliver_rng
+                                rand::rng()
                                     .random_range(1u32..=999_999_999)
                                     .to_string()
                             } else {
