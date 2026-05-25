@@ -33,16 +33,18 @@ pub struct ScenarioStep {
 #[allow(dead_code)]
 impl Scenario {
     pub fn load_from_file<P: AsRef<Path>>(path: P) -> Result<Self, ScenarioError> {
-        let contents = fs::read_to_string(&path)?;
+        let path_ref = path.as_ref();
+        let path_str = path_ref.to_string_lossy();
 
-        // Support both JSON and YAML formats based on file extension
-        let path_str = path.as_ref().to_string_lossy();
-        let scenario: Scenario = if path_str.ends_with(".yml") || path_str.ends_with(".yaml") {
-            serde_yaml::from_str(&contents).map_err(|e| ScenarioError::Yaml(e.to_string()))?
-        } else {
-            serde_json::from_str(&contents)?
-        };
+        if path_str.ends_with(".yml") || path_str.ends_with(".yaml") {
+            return Err(ScenarioError::UnsupportedFormat(
+                "YAML scenario files are not supported. Convert the file to JSON format."
+                    .to_string(),
+            ));
+        }
 
+        let contents = fs::read_to_string(path_ref)?;
+        let scenario: Scenario = serde_json::from_str(&contents)?;
         scenario.validate()?;
         Ok(scenario)
     }
@@ -141,8 +143,8 @@ pub enum ScenarioError {
     Io(#[from] std::io::Error),
     #[error("JSON error: {0}")]
     Json(#[from] serde_json::Error),
-    #[error("YAML error: {0}")]
-    Yaml(String),
+    #[error("Unsupported format: {0}")]
+    UnsupportedFormat(String),
     #[error("Invalid dependency: step '{step}' depends on missing step '{missing}'")]
     InvalidDependency { step: String, missing: String },
     #[error("Circular dependency detected at step '{0}'")]
@@ -196,5 +198,11 @@ mod tests {
             std::time::Duration::from_secs(300)
         );
         assert!(Scenario::parse_delay("invalid").is_err());
+    }
+
+    #[test]
+    fn test_yaml_rejected() {
+        let result = Scenario::load_from_file("/tmp/nonexistent.yml");
+        assert!(matches!(result, Err(ScenarioError::UnsupportedFormat(_))));
     }
 }

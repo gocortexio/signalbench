@@ -379,54 +379,79 @@ impl AttackTechnique for CronJob {
                 info!("Not root - skipping /etc/cron.d/ modification");
             }
 
-            info!("Adding user crontab entry");
-            let current_crontab = Command::new("crontab")
-                .args(["-l"])
-                .stdout(std::process::Stdio::piped())
+            // The user-crontab phase requires the `crontab` binary on PATH.
+            // Some minimal hosts (containers, slim images) ship cron.d support
+            // via the system file but no `crontab` CLI. Detect that up front
+            // and skip cleanly rather than aborting the whole technique.
+            let crontab_available = Command::new("crontab")
+                .arg("-V")
+                .stdout(std::process::Stdio::null())
                 .stderr(std::process::Stdio::null())
-                .output()
-                .await
-                .map(|output| String::from_utf8_lossy(&output.stdout).to_string())
-                .unwrap_or_default();
-
-            fs::write(&user_cron_backup, current_crontab.as_bytes())
-                .map_err(|e| format!("Failed to backup user crontab: {e}"))?;
-            artifacts.push(user_cron_backup.clone());
-
-            let new_crontab = format!(
-                "{current_crontab}\n# SignalBench Test - Session {id}\n{cron_expression} {command}\n"
-            );
-
-            let temp_cron = format!("/tmp/signalbench_new_cron_{id}");
-            fs::write(&temp_cron, new_crontab.as_bytes())
-                .map_err(|e| format!("Failed to write new crontab: {e}"))?;
-
-            let install_status = Command::new("crontab")
-                .arg(&temp_cron)
                 .status()
                 .await
-                .map_err(|e| format!("Failed to install crontab: {e}"))?;
+                .is_ok();
 
-            fs::remove_file(&temp_cron).ok();
+            if !crontab_available {
+                info!("[SKIP] crontab binary not present, skipping user crontab phase");
+            } else {
+                info!("Adding user crontab entry");
+                let current_crontab = Command::new("crontab")
+                    .args(["-l"])
+                    .stdout(std::process::Stdio::piped())
+                    .stderr(std::process::Stdio::null())
+                    .output()
+                    .await
+                    .map(|output| String::from_utf8_lossy(&output.stdout).to_string())
+                    .unwrap_or_default();
 
-            if !install_status.success() {
-                return Err("Failed to install user crontab".to_string());
+                fs::write(&user_cron_backup, current_crontab.as_bytes())
+                    .map_err(|e| format!("Failed to backup user crontab: {e}"))?;
+                artifacts.push(user_cron_backup.clone());
+
+                let new_crontab = format!(
+                    "{current_crontab}\n# SignalBench Test - Session {id}\n{cron_expression} {command}\n"
+                );
+
+                let temp_cron = format!("/tmp/signalbench_new_cron_{id}");
+                fs::write(&temp_cron, new_crontab.as_bytes())
+                    .map_err(|e| format!("Failed to write new crontab: {e}"))?;
+
+                let install_status = Command::new("crontab")
+                    .arg(&temp_cron)
+                    .status()
+                    .await
+                    .map_err(|e| format!("Failed to install crontab: {e}"))?;
+
+                fs::remove_file(&temp_cron).ok();
+
+                if !install_status.success() {
+                    return Err("Failed to install user crontab".to_string());
+                }
+
+                artifacts.push(format!("user_crontab_{id}"));
+                methods_used.push("user crontab".to_string());
+
+                let verify_output = Command::new("crontab")
+                    .args(["-l"])
+                    .output()
+                    .await
+                    .map_err(|e| format!("Failed to verify crontab: {e}"))?;
+
+                let verify_content = String::from_utf8_lossy(&verify_output.stdout);
+                if verify_content.contains(&id) {
+                    info!("[OK] Verified: User crontab entry installed successfully");
+                } else {
+                    warn!("[WARN] Warning: Could not verify crontab installation");
+                }
             }
 
-            artifacts.push(format!("user_crontab_{id}"));
-            methods_used.push("user crontab".to_string());
-
-            let verify_output = Command::new("crontab")
-                .args(["-l"])
-                .output()
-                .await
-                .map_err(|e| format!("Failed to verify crontab: {e}"))?;
-
-            let verify_content = String::from_utf8_lossy(&verify_output.stdout);
-            if verify_content.contains(&id) {
-                info!("[OK] Verified: User crontab entry installed successfully");
-            } else {
-                warn!("[WARN] Warning: Could not verify crontab installation");
+            // Ensure at least one persistence method was applied; otherwise
+            // surface a clear error rather than silently reporting success.
+            if methods_used.is_empty() {
+                return Err(
+                    "No cron persistence method available (need root for /etc/cron.d or `crontab` binary on PATH)"
+                        .to_string(),
+                );
             }
 
             // Track cron log file that will be created by the cron job

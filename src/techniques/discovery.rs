@@ -11,6 +11,26 @@ use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
 use tokio::process::Command;
 
+/// Run a shell-driven recon one-liner via /bin/sh -c so the executed commands
+/// land under a shell parent rather than directly under signalbench. Real
+/// attacker recon nearly always arrives as a shell pipeline; behavioural
+/// detection rules expect that lineage. The command output is discarded; the
+/// exec events themselves are the telemetry.
+async fn run_shell_recon(label: &str, oneliner: &str) {
+    match Command::new("/bin/sh")
+        .arg("-c")
+        .arg(oneliner)
+        .output()
+        .await
+    {
+        Ok(out) => info!(
+            "[{label}] Shell recon completed (exit={})",
+            out.status.code().unwrap_or(-1)
+        ),
+        Err(e) => warn!("[{label}] Shell recon failed: {e}"),
+    }
+}
+
 pub struct NetworkDiscovery {}
 
 #[async_trait]
@@ -485,6 +505,13 @@ impl AttackTechnique for NetworkDiscovery {
                 vlans_detected.join(", ")
             };
 
+            run_shell_recon(
+                "T1016",
+                "ip a 2>/dev/null; ip r 2>/dev/null; arp -an 2>/dev/null; \
+                 ss -tunap 2>/dev/null; resolvectl status 2>/dev/null",
+            )
+            .await;
+
             Ok(SimulationResult {
                 technique_id: self.info().id,
                 success: true,
@@ -886,6 +913,13 @@ impl AttackTechnique for SystemInformationDiscovery {
                 security_tools_detected.join(", ")
             };
 
+            run_shell_recon(
+                "T1082",
+                "uname -a; id; hostname; cat /etc/os-release 2>/dev/null; \
+                 cat /etc/issue 2>/dev/null; uptime; w 2>/dev/null",
+            )
+            .await;
+
             Ok(SimulationResult {
                 technique_id: self.info().id,
                 success: true,
@@ -1245,13 +1279,20 @@ impl AttackTechnique for NetworkConnectionsDiscovery {
             writeln!(file, "Suspicious Patterns: {}", suspicious_patterns.len())
                 .map_err(|e| format!("Failed to write to output file: {e}"))?;
 
-            info!("Network connection discovery complete - Total: {}, Listening: {}, Established: {}, Suspicious: {}", 
+            info!("Network connection discovery complete - Total: {}, Listening: {}, Established: {}, Suspicious: {}",
                   total_connections, listening_ports, established_connections, suspicious_patterns.len());
+
+            run_shell_recon(
+                "T1049",
+                "ss -tunap 2>/dev/null; netstat -tunap 2>/dev/null; \
+                 lsof -i 2>/dev/null | head -50",
+            )
+            .await;
 
             Ok(SimulationResult {
                 technique_id: self.info().id,
                 success: true,
-                message: format!("Network connections discovery: {} total, {} listening, {} established, {} suspicious patterns", 
+                message: format!("Network connections discovery: {} total, {} listening, {} established, {} suspicious patterns",
                                 total_connections, listening_ports, established_connections, suspicious_patterns.len()),
                 artifacts: vec![output_file],
                 cleanup_required: false,

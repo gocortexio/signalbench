@@ -1,8 +1,8 @@
 <div align="center">
-  <img src="assets/signalbench-logo-chainreaction.png" alt="SignalBench Logo" width="600"/>
+  <img src="assets/signalbench_1-8-0.png" alt="SignalBench Logo" width="600"/>
 </div>
 
-# SignalBench v1.7.1: I’m In The Middle Of A Chain Reaction
+# SignalBench v1.8.0: It’s Always DNS (feat. C2 Sinkhole)
 
 Endpoint Telemetry Generator from GoCortex.io
 
@@ -119,11 +119,11 @@ signalbench voltron list
 
 ### Telemetry Coverage
 
-63 techniques across:
+64 techniques across:
 
 - Discovery: System/network reconnaissance, security tool detection, user/group enumeration
 - Credential Access: Memory dumping, keylogging, credential file harvesting, password hash extraction
-- Privilege Escalation: SUID binaries, sudo manipulation, local account creation, kernel exploits (T1068.001 CVE-2024-1086 nftables, T1068.002 CVE-2025-38352 POSIX timer race, T1068.003 CVE-2025-40190 ext4 xattr)
+- Privilege Escalation: SUID binaries, sudo manipulation, local account creation, kernel exploits (T1068.001 CVE-2024-1086 nftables, T1068.002 CVE-2025-38352 POSIX timer race, T1068.003 CVE-2025-40190 ext4 xattr, T1068.004 CVE-2026-31431 Copy Fail AF_ALG page-cache write primitive); all T1548 and T1068 techniques include a post-escalation EUID verification phase using shared helpers (verify_command, log_privesc_verification) that runs a privileged child process, emits [VERIFIED] EUID=0 or [UNVERIFIED] EUID=N, and on success also emits [CRITICAL] Privilege escalation VERIFIED for high-confidence SIEM correlation
 - Defence Evasion: PATH hijacking, audit log manipulation, command history clearing, process masquerading, web shells
 - Execution: Reverse shells, Python reconnaissance, command injection, script execution
 - Command and Control: Port knocking, DNS tunnelling, ICMP beaconing, tool transfer, suspicious domain connections (T1071-IOC with security protections)
@@ -134,15 +134,44 @@ signalbench voltron list
 - Impact: Resource hijacking, file deletion, anti-forensics
 - Container Escape: Docker socket abuse (T1611-SOCK), privileged container breakout (T1611-PRIV), sensitive mount exploitation (T1611-MOUNT), cgroup escape (T1611-CGROUP), kernel module loading (T1611-MODULE), container reconnaissance (T1611-RECON), PID namespace escape (T1611-PIDNS), SUID binary exploitation (T1611-SUID), chroot breakout (T1611-BREAKOUT), kernel CVE checks (T1611-CVE), namespace escape (T1611-NS), RunC masked path escape (T1611.012), RunC console escape (T1611.013), RunC procfs escape (T1611.014)
 
-Network techniques (T1046, T1095, T1048) target the Palo Alto sinkhole address (198.135.184.22) by default for realistic external network telemetry. Lateral movement techniques (T1021.004, T1021.005) use localhost for service-dependent testing.
+#### Container Escape Host Access Verification
+
+T1611-SOCK, T1611-PRIV, T1611-MOUNT, T1611-CGROUP, and T1611-PIDNS each
+exercise host-side access after attempting their escape and emit consistent
+verification markers in the log stream:
+
+- `[T1611-XXXX] [VERIFIED] <evidence>` - host-side action succeeded.
+- `[T1611-XXXX] [UNVERIFIED] <evidence>` - escape primitive ran but the
+  follow-up host-access probe did not confirm host reach.
+- `[T1611-XXXX] [CRITICAL] Host filesystem access VERIFIED: <evidence>` -
+  emitted alongside `[VERIFIED]` for the four filesystem/process escapes
+  (SOCK reads `/host/etc/shadow` looking for a `root:` line; PRIV reads
+  `/proc/1/comm` via nsenter and requires it to match a known host init
+  name like `systemd`/`init`; MOUNT reads `/etc/machine-id` through the
+  chroot and requires it to differ from the container's own machine-id;
+  CGROUP polls the release_agent marker for up to 10 s; PIDNS checks
+  `/proc/1/comm` and `/proc/1/cmdline` against a host-init baseline
+  combined with a visible-PID count above 50). Detection engineers
+  should treat this string as the highest-confidence post-escape
+  signal.
+
+Successful verifications always emit an explicit `[VERIFIED]` line first;
+the `[CRITICAL] Host filesystem access VERIFIED` line is added immediately
+afterwards for the four filesystem/process escapes (and PIDNS) so SIEM
+rules can key on either marker.
+
+Cleanup runs unchanged regardless of the verification outcome, and dry-run
+mode describes each verification step without performing it.
+
+Network techniques target external addresses by default for realistic telemetry: T1046 and T1095 use the Palo Alto sinkhole address (198.135.184.22); T1048 DNS exfil uses the GoCortex-controlled sink domain (`t1048.signalbench.sigre.xyz`) while T1048 ICMP and HTTP fall back to 198.135.184.22. Lateral movement techniques (T1021.004, T1021.005) use localhost for service-dependent testing.
 
 ### T1071-IOC Security Protections
 
 The suspicious domain connections technique (T1071-IOC) includes security protections to prevent IP exposure:
 
 - **Safe domains**: Connections to `*.sigre.xyz` (controlled infrastructure) and RFC 5737 TEST-NET IPs (192.0.2.x, 198.51.100.x, 203.0.113.x) are always tested
-- **Unowned domains**: Domains not controlled by GoCortex (e.g., `.tk`, `.ru`, `.cn` TLDs) are only tested if they resolve to 203.0.113.1
-- **Root mode**: When running as root, SignalBench automatically adds safe `/etc/hosts` entries pointing unowned domains to 203.0.113.1
+- **Unowned domains**: Domains not controlled by GoCortex (e.g., `.tk`, `.ru`, `.cn` TLDs, plus `pool.signalbench-mining.com` and `stratum.signalbench-crypto.net`) are intentionally unregistered and only tested via `/etc/hosts` pointing to the dynamically resolved sinkhole IP
+- **Root mode**: When running as root, SignalBench resolves the sinkhole IP from `sinkhole.signalbench.sigre.xyz` then automatically adds safe `/etc/hosts` entries pointing all unowned domains to that IP
 - **Non-root mode**: Skips unowned domains and displays a warning with instructions to configure `/etc/hosts` manually
 - **Cleanup**: Automatically removes any `/etc/hosts` entries added during execution
 
@@ -172,14 +201,14 @@ SignalBench provides pre-built binaries for maximum compatibility across Linux d
 For Universal Linux Compatibility (Recommended):
 ```bash
 # Download static binary that works on any Linux distribution
-wget https://github.com/gocortexio/signalbench/releases/download/v1.7.1/signalbench-v1.7.1-linux-musl-x86_64
-chmod +x signalbench-v1.7.1-linux-musl-x86_64
-sudo mv signalbench-v1.7.1-linux-musl-x86_64 /usr/local/bin/signalbench
+wget https://github.com/gocortexio/signalbench/releases/download/v1.8.0/signalbench-v1.8.0-linux-musl-x86_64
+chmod +x signalbench-v1.8.0-linux-musl-x86_64
+sudo mv signalbench-v1.8.0-linux-musl-x86_64 /usr/local/bin/signalbench
 
 # For ARM64 systems (Apple Silicon, ARM servers)
-wget https://github.com/gocortexio/signalbench/releases/download/v1.7.1/signalbench-v1.7.1-linux-musl-aarch64
-chmod +x signalbench-v1.7.1-linux-musl-aarch64
-sudo mv signalbench-v1.7.1-linux-musl-aarch64 /usr/local/bin/signalbench
+wget https://github.com/gocortexio/signalbench/releases/download/v1.8.0/signalbench-v1.8.0-linux-musl-aarch64
+chmod +x signalbench-v1.8.0-linux-musl-aarch64
+sudo mv signalbench-v1.8.0-linux-musl-aarch64 /usr/local/bin/signalbench
 ```
 
 ### Option 2: Build from Source

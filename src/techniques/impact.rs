@@ -17,10 +17,26 @@ use sha2::{Digest, Sha256};
 use std::fs::{self, File};
 use std::io::Write;
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::ffi::CString;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::time::{sleep, Duration};
 use uuid::Uuid;
+
+/// Set the current OS thread's comm field via prctl(PR_SET_NAME). The argument
+/// must be a NUL-terminated string of at most 15 visible characters; longer
+/// values are truncated by the kernel. Used to make CPU stress threads appear
+/// in /proc/<pid>/task/<tid>/comm as recognised cryptominer names, since XDR
+/// rules for resource hijacking key on the comm field rather than CPU usage
+/// alone.
+fn set_thread_name(name: &str) {
+    let trimmed = if name.len() > 15 { &name[..15] } else { name };
+    if let Ok(cname) = CString::new(trimmed) {
+        unsafe {
+            libc::prctl(libc::PR_SET_NAME, cname.as_ptr());
+        }
+    }
+}
 
 pub struct ResourceHijacking {}
 
@@ -158,33 +174,61 @@ impl AttackTechnique for ResourceHijacking {
             let stop_flag = Arc::new(AtomicBool::new(false));
 
             // Phase 1: CPU Stress - SHA256 hashing (simulates crypto mining)
-            info!("Phase 1: Starting CPU stress with {cpu_threads} SHA256 hashing threads...");
+            // Each stress thread renames itself to a recognised cryptominer
+            // process name via prctl(PR_SET_NAME). XDR rules for resource
+            // hijacking key on the comm field showing names like xmrig or
+            // kdevtmpfsi rather than on raw CPU load alone. Using OS threads
+            // (not tokio tasks) is deliberate: tokio worker threads are shared
+            // across the runtime so renaming them would disturb other tasks.
+            const MINER_NAMES: &[&str] = &["xmrig", "kdevtmpfsi", "kinsing", "t-rex"];
+            info!(
+                "Phase 1: Starting CPU stress with {cpu_threads} SHA256 hashing threads (names: {})...",
+                MINER_NAMES.join(", ")
+            );
             writeln!(log, "=== Phase 1: CPU Stress (SHA256 Hashing) ===").unwrap();
+            writeln!(log, "Thread names: {}", MINER_NAMES.join(", ")).unwrap();
 
+            // Rename the main process as well so /proc/<pid>/comm and ps aux
+            // both show a miner name during the stress window.
+            let original_main_name = fs::read_to_string("/proc/self/comm")
+                .ok()
+                .map(|s| s.trim().to_string());
+            set_thread_name(MINER_NAMES[0]);
+
+            let total_hashes_atomic = Arc::new(AtomicU64::new(0));
             let mut cpu_handles = Vec::new();
             for thread_id in 0..cpu_threads {
                 let stop_flag_clone = Arc::clone(&stop_flag);
-                let handle = tokio::spawn(async move {
-                    let mut hasher = Sha256::new();
-                    let mut counter = 0u64;
-                    let data = b"SignalBench cryptocurrency mining simulation - MITRE ATT&CK T1496";
-
-                    while !stop_flag_clone.load(Ordering::Relaxed) {
-                        hasher.update(data);
-                        hasher.update(counter.to_le_bytes());
-                        let _hash = hasher.finalize_reset();
-                        counter = counter.wrapping_add(1);
-
-                        if counter.is_multiple_of(100000) {
-                            tokio::task::yield_now().await;
+                let total_clone = Arc::clone(&total_hashes_atomic);
+                let miner_name = MINER_NAMES[thread_id % MINER_NAMES.len()].to_string();
+                let handle = std::thread::Builder::new()
+                    .name(miner_name.clone())
+                    .spawn(move || {
+                        set_thread_name(&miner_name);
+                        let mut hasher = Sha256::new();
+                        let mut counter = 0u64;
+                        let data = b"resource hijacking telemetry stress buffer";
+                        while !stop_flag_clone.load(Ordering::Relaxed) {
+                            hasher.update(data);
+                            hasher.update(counter.to_le_bytes());
+                            let _hash = hasher.finalize_reset();
+                            counter = counter.wrapping_add(1);
                         }
-                    }
-
-                    counter
-                });
+                        total_clone.fetch_add(counter, Ordering::Relaxed);
+                        counter
+                    })
+                    .map_err(|e| format!("Failed to spawn stress thread {thread_id}: {e}"))?;
                 cpu_handles.push(handle);
-                info!("Started CPU stress thread {thread_id}");
-                writeln!(log, "Started CPU stress thread {thread_id}").unwrap();
+                info!(
+                    "Started CPU stress thread {thread_id} (comm={})",
+                    MINER_NAMES[thread_id % MINER_NAMES.len()]
+                );
+                writeln!(
+                    log,
+                    "Started CPU stress thread {thread_id} (comm={})",
+                    MINER_NAMES[thread_id % MINER_NAMES.len()]
+                )
+                .unwrap();
             }
 
             // Phase 2: Memory Stress - Allocate memory blocks
@@ -262,21 +306,32 @@ impl AttackTechnique for ResourceHijacking {
             writeln!(log, "\n=== Stopping Resource Stress ===").unwrap();
             stop_flag.store(true, Ordering::Relaxed);
 
-            let mut total_hashes = 0u64;
             for (thread_id, handle) in cpu_handles.into_iter().enumerate() {
-                if let Ok(hashes) = handle.await {
-                    total_hashes += hashes;
-                    info!("CPU thread {thread_id} completed {hashes} hash operations");
-                    writeln!(
-                        log,
-                        "CPU thread {thread_id} completed {hashes} hash operations"
-                    )
-                    .unwrap();
+                match handle.join() {
+                    Ok(hashes) => {
+                        info!("CPU thread {thread_id} completed {hashes} hash operations");
+                        writeln!(
+                            log,
+                            "CPU thread {thread_id} completed {hashes} hash operations"
+                        )
+                        .unwrap();
+                    }
+                    Err(_) => {
+                        warn!("CPU thread {thread_id} panicked");
+                        writeln!(log, "CPU thread {thread_id} panicked").unwrap();
+                    }
                 }
             }
 
+            let total_hashes = total_hashes_atomic.load(Ordering::Relaxed);
             info!("Total SHA256 hash operations: {total_hashes}");
             writeln!(log, "Total SHA256 hash operations: {total_hashes}").unwrap();
+
+            // Restore the main process name so subsequent techniques and the
+            // CLI summary do not run under a miner name.
+            if let Some(name) = original_main_name.as_deref() {
+                set_thread_name(name);
+            }
 
             // Release memory
             info!("Releasing {memory_mb}MB of allocated memory...");

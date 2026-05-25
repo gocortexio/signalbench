@@ -1,5 +1,5 @@
 {
-  "_comment": "SignalBench v1.7.1 - Complete configuration matching ALL_CAPS mode execution",
+  "_comment": "SignalBench v1.8.0 - Complete configuration matching ALL_CAPS mode execution",
   "_description": "This configuration file contains all technique parameters that would be used when running: signalbench category ALL_CAPS",
   "_usage": "signalbench category discovery --config config-example.json",
   "_chain_usage": "signalbench category credential_access --config config-example.json --chain",
@@ -538,6 +538,13 @@
         "output_dir": "/tmp/signalbench_xattr_exploit",
         "test_file_count": "5",
         "xattr_iterations": "50"
+      },
+      "cleanup_after": true
+    },
+    
+    "T1068.004": {
+      "parameters": {
+        "target_file": "/usr/bin/su"
       },
       "cleanup_after": true
     },

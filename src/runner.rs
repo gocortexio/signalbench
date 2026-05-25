@@ -206,6 +206,9 @@ pub async fn run_technique(
     // Get technique-specific configuration with force flag
     let mut technique_config = get_technique_config(&technique_info.id, &config);
     technique_config.force = force;
+    if no_cleanup {
+        technique_config.cleanup_after = Some(false);
+    }
 
     // Execute the technique
     println!("\n{}", "Executing...".bold());
@@ -672,8 +675,25 @@ pub async fn run_categories(
 
         // Execute each technique in the category
         for technique in &techniques {
-            total_techniques += 1;
             let info = technique.info();
+
+            // Voltron-only techniques require multi-host coordination and
+            // cannot run in single-host or ALL_CAPS context.
+            if info.voltron_only {
+                println!(
+                    "\n{} {} | {} - requires Voltron multi-host coordination",
+                    "[SKIP]".yellow(),
+                    info.id.yellow(),
+                    info.name
+                );
+                warn!(
+                    "[SKIP] {} | {} requires Voltron multi-host coordination",
+                    info.id, info.name
+                );
+                continue;
+            }
+
+            total_techniques += 1;
 
             println!(
                 "\n{} {}",
@@ -694,6 +714,9 @@ pub async fn run_categories(
                 Default::default()
             };
             technique_config.force = effective_force;
+            if no_cleanup {
+                technique_config.cleanup_after = Some(false);
+            }
 
             // Execute the technique
             match technique.execute(&technique_config, dry_run).await {

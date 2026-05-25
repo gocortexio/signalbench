@@ -26,7 +26,51 @@ use async_trait::async_trait;
 use log::{debug, info, warn};
 use std::collections::HashMap;
 use std::path::Path;
+use std::process::Stdio;
+use std::time::{Duration, Instant};
 use tokio::process::Command;
+
+/// Hard timeout for any single GTFOBins per-binary telemetry invocation.
+/// Keeps the technique from blocking on TTY-grabbing binaries (vi, vim,
+/// nvi, more, man, screen, sftp, ssh, nsenter, ...).
+const GTFOBINS_CMD_TIMEOUT: Duration = Duration::from_secs(3);
+
+/// Binaries that are known to grab the TTY or drop into an interactive
+/// prompt when invoked without sensible flags. For these we deliberately
+/// skip the default `--help` branch so they never inherit a real stdin.
+const INTERACTIVE_TTY_BINARIES: &[&str] = &[
+    "more", "man", "less", "screen", "sftp", "ssh", "nsenter", "unshare", "chroot", "script",
+    "watch", "nano", "pico", "view", "nvim",
+];
+
+/// Run a child process with all three standard streams nulled, kill-on-drop
+/// enabled, and a hard timeout. Returns a short outcome string suitable for
+/// telemetry logging: `"ok"`, `"non_zero_exit"`, `"timed_out"`,
+/// `"spawn_error"`, or `"wait_error"`.
+async fn run_bounded(binary_path: &str, args: &[&str]) -> &'static str {
+    let mut child = match Command::new(binary_path)
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .kill_on_drop(true)
+        .spawn()
+    {
+        Ok(c) => c,
+        Err(_) => return "spawn_error",
+    };
+
+    match tokio::time::timeout(GTFOBINS_CMD_TIMEOUT, child.wait()).await {
+        Ok(Ok(status)) if status.success() => "ok",
+        Ok(Ok(_)) => "non_zero_exit",
+        Ok(Err(_)) => "wait_error",
+        Err(_) => {
+            let _ = child.start_kill();
+            let _ = child.wait().await;
+            "timed_out"
+        }
+    }
+}
 
 // =============================================================================
 // GTFOBins Database - Shell Escape Sequences
@@ -1240,74 +1284,109 @@ impl AttackTechnique for GtfobinsProbe {
                 info!("[T1548-GTFOBINS] Generating telemetry with GTFOBins exploitation attempts");
 
                 for exp in &exploitable {
+                    let started = Instant::now();
                     debug!(
-                        "[T1548-GTFOBINS] Attempting exploitation pattern for: {}",
-                        exp.binary_name
+                        "[T1548-GTFOBINS] Attempting exploitation pattern for: {} (path={})",
+                        exp.binary_name, exp.binary_path
                     );
 
-                    // First run safe --version to establish baseline telemetry
-                    let _ = Command::new(&exp.binary_path)
-                        .arg("--version")
-                        .output()
-                        .await;
+                    // Baseline telemetry: --version with stdin/stdout/stderr nulled
+                    // and a hard timeout. Some binaries ignore --version and drop to
+                    // a prompt; the timeout guarantees forward progress.
+                    let baseline = run_bounded(&exp.binary_path, &["--version"]).await;
+                    debug!(
+                        "[T1548-GTFOBINS]   baseline --version: {} ({}ms elapsed)",
+                        baseline,
+                        started.elapsed().as_millis()
+                    );
 
-                    // Attempt actual GTFOBins exploitation commands (safely exit after)
-                    // These generate high-value telemetry for EDR detection
-                    match exp.binary_name.as_str() {
-                        "vim" | "vi" => {
-                            let _ = Command::new(&exp.binary_path)
-                                .args(["-c", ":!echo signalbench_privesc_test", "-c", ":q!"])
-                                .output()
-                                .await;
+                    // Attempt actual GTFOBins exploitation commands (safely exit after).
+                    // These generate high-value telemetry for EDR detection.
+                    let exploit_start = Instant::now();
+                    let outcome = match exp.binary_name.as_str() {
+                        // Vim family: invoke in Ex mode (-E), silent (-s), with stdin
+                        // nulled by run_bounded. ':qa!' force-quits all buffers so the
+                        // process always exits even if a swap-file warning would pop up.
+                        // Skips the original ':!echo' shell-out: that would re-enter
+                        // an interactive prompt on nvi / vim.tiny and is not needed
+                        // for telemetry purposes.
+                        "vim" | "vi" | "vimdiff" | "rvim" | "rview" | "view" | "nvim" | "ex" => {
+                            run_bounded(
+                                &exp.binary_path,
+                                &["-E", "-s", "-c", ":qa!"],
+                            )
+                            .await
                         }
                         "python" | "python3" => {
-                            let _ = Command::new(&exp.binary_path)
-                                .args(["-c", "import os; print('signalbench_privesc_test')"])
-                                .output()
-                                .await;
+                            run_bounded(
+                                &exp.binary_path,
+                                &["-c", "import os; print('signalbench_privesc_test')"],
+                            )
+                            .await
                         }
                         "perl" => {
-                            let _ = Command::new(&exp.binary_path)
-                                .args(["-e", "print 'signalbench_privesc_test\\n'"])
-                                .output()
-                                .await;
+                            run_bounded(
+                                &exp.binary_path,
+                                &["-e", "print 'signalbench_privesc_test\\n'"],
+                            )
+                            .await
                         }
-                        "awk" | "gawk" => {
-                            let _ = Command::new(&exp.binary_path)
-                                .args(["BEGIN {print \"signalbench_privesc_test\"}"])
-                                .output()
-                                .await;
+                        "awk" | "gawk" | "mawk" | "nawk" => {
+                            run_bounded(
+                                &exp.binary_path,
+                                &["BEGIN {print \"signalbench_privesc_test\"}"],
+                            )
+                            .await
                         }
                         "find" => {
-                            let _ = Command::new(&exp.binary_path)
-                                .args([
+                            run_bounded(
+                                &exp.binary_path,
+                                &[
                                     "/tmp",
+                                    "-maxdepth",
+                                    "1",
                                     "-name",
                                     "signalbench*",
                                     "-exec",
                                     "echo",
                                     "privesc_test",
                                     ";",
-                                ])
-                                .output()
-                                .await;
-                        }
-                        "less" => {
-                            let _ = Command::new(&exp.binary_path)
-                                .args(["--version"])
-                                .output()
-                                .await;
+                                ],
+                            )
+                            .await
                         }
                         "nmap" => {
-                            let _ = Command::new(&exp.binary_path)
-                                .args(["--script-help=*"])
-                                .output()
-                                .await;
+                            run_bounded(&exp.binary_path, &["--script-help=*"]).await
+                        }
+                        // Known TTY-grabbers: do NOT fall into the default --help
+                        // branch (some of these will sit at a prompt regardless).
+                        // The baseline --version above is already enough telemetry.
+                        name if INTERACTIVE_TTY_BINARIES.contains(&name) => {
+                            debug!(
+                                "[T1548-GTFOBINS]   skipping interactive follow-up for {} (baseline only)",
+                                name
+                            );
+                            "skipped_interactive"
                         }
                         _ => {
                             // Default: run with --help for other binaries
-                            let _ = Command::new(&exp.binary_path).arg("--help").output().await;
+                            run_bounded(&exp.binary_path, &["--help"]).await
                         }
+                    };
+
+                    debug!(
+                        "[T1548-GTFOBINS]   exploitation outcome for {}: {} ({}ms exploit, {}ms total)",
+                        exp.binary_name,
+                        outcome,
+                        exploit_start.elapsed().as_millis(),
+                        started.elapsed().as_millis()
+                    );
+
+                    if outcome == "timed_out" {
+                        warn!(
+                            "[T1548-GTFOBINS] {} timed out after {:?}; child killed",
+                            exp.binary_name, GTFOBINS_CMD_TIMEOUT
+                        );
                     }
                 }
 
@@ -1409,6 +1488,376 @@ impl AttackTechnique for GtfobinsProbe {
             }
 
             debug!("[T1548-GTFOBINS] Cleanup complete");
+            Ok(())
+        })
+    }
+}
+
+// =============================================================================
+// T1218: LOLBin Proxy Execution (Linux)
+// =============================================================================
+//
+// Whereas T1548-GTFOBINS PROBES for exploitable binaries, this technique
+// actually EXECUTES a curated set of LOLBin (Living Off the Land Binary)
+// abuse patterns.  Each pattern spawns a child process from a binary that
+// EDR / parent-process heuristics do not expect to launch shells -- the
+// parent-process anomaly is the detection signal regardless of what the
+// child does.
+//
+// All child commands are safe and read-only: `id`, `hostname`, `whoami`,
+// and the like.  Nothing is escalated, written, or exfiltrated.  The TTP
+// signal lives in the syscall trace: awk fork+exec of /bin/sh, vim
+// shell-out, find -exec spawn, etc.
+//
+// Reference: https://gtfobins.github.io/  -- abuse column entries that are
+// flagged as "Shell" (interactive shell escape from a typically non-shell
+// binary).  Patterns below are the subset that work in a non-interactive
+// batch context.
+//
+
+/// A single LOLBin abuse pattern: friendly name, binary that must exist
+/// for the pattern to run, and the full argv to execute.  argv[0] is the
+/// binary that gets spawned (also used for `which` existence check).
+struct LolbinPattern {
+    name: &'static str,
+    binary: &'static str,
+    argv: &'static [&'static str],
+    /// Brief description of the abuse vector for logging.
+    vector: &'static str,
+}
+
+const LOLBIN_PATTERNS: &[LolbinPattern] = &[
+    LolbinPattern {
+        name: "awk-system",
+        binary: "awk",
+        argv: &["awk", "BEGIN{system(\"id\")}"],
+        vector: "awk BEGIN block invokes system() -- awk forking /bin/sh",
+    },
+    LolbinPattern {
+        name: "find-exec",
+        binary: "find",
+        argv: &["find", "/tmp", "-maxdepth", "1", "-name", ".", "-exec", "id", ";"],
+        vector: "find -exec spawn -- find forking a command per match",
+    },
+    LolbinPattern {
+        name: "vim-shell",
+        binary: "vim",
+        argv: &["vim", "-E", "-s", "-c", "!id", "-c", "qa!"],
+        vector: "vim Ex-mode shell-out (vim -E -c '!cmd') -- editor spawning shell",
+    },
+    LolbinPattern {
+        name: "vi-shell",
+        binary: "vi",
+        argv: &["vi", "-e", "-s", "-c", "!id", "-c", "qa!"],
+        vector: "vi Ex-mode shell-out -- legacy editor spawning shell",
+    },
+    LolbinPattern {
+        name: "ex-shell",
+        binary: "ex",
+        argv: &["ex", "-s", "-c", "!id", "-c", "qa!"],
+        vector: "ex line-editor shell escape -- ex(1) forking shell",
+    },
+    LolbinPattern {
+        name: "python-os-system",
+        binary: "python3",
+        argv: &["python3", "-c", "import os; os.system('id')"],
+        vector: "python3 -c invoking os.system() -- interpreter spawning shell",
+    },
+    LolbinPattern {
+        name: "python-subprocess",
+        binary: "python3",
+        argv: &["python3", "-c", "import subprocess; subprocess.run(['id'])"],
+        vector: "python3 subprocess.run -- direct child without shell",
+    },
+    LolbinPattern {
+        name: "perl-system",
+        binary: "perl",
+        argv: &["perl", "-e", "system('id')"],
+        vector: "perl -e system() -- interpreter spawning shell",
+    },
+    LolbinPattern {
+        name: "perl-backticks",
+        binary: "perl",
+        argv: &["perl", "-e", "print `id`"],
+        vector: "perl backticks -- interpreter capturing shell output",
+    },
+    LolbinPattern {
+        name: "ruby-system",
+        binary: "ruby",
+        argv: &["ruby", "-e", "system('id')"],
+        vector: "ruby -e system() -- interpreter spawning shell",
+    },
+    LolbinPattern {
+        name: "xxd-passwd",
+        binary: "xxd",
+        argv: &["xxd", "/etc/passwd"],
+        vector: "xxd reading /etc/passwd -- canonical hex-dump exfil pattern",
+    },
+    LolbinPattern {
+        name: "sed-exec",
+        binary: "sed",
+        argv: &["sed", "1e id", "/etc/hostname"],
+        vector: "sed e-command shell execution -- sed forking /bin/sh per line",
+    },
+    LolbinPattern {
+        name: "env-exec",
+        binary: "env",
+        argv: &["env", "id"],
+        vector: "env <cmd> wrapper -- env(1) execving an arbitrary binary",
+    },
+    LolbinPattern {
+        name: "tar-checkpoint",
+        binary: "tar",
+        argv: &[
+            "tar",
+            "-cf",
+            "/dev/null",
+            "--checkpoint=1",
+            "--checkpoint-action=exec=id",
+            "/etc/hostname",
+        ],
+        vector: "tar --checkpoint-action=exec -- archiver spawning arbitrary command",
+    },
+    LolbinPattern {
+        name: "gdb-batch-shell",
+        binary: "gdb",
+        argv: &["gdb", "-q", "-batch", "-ex", "shell id"],
+        vector: "gdb -batch -ex 'shell cmd' -- debugger spawning shell",
+    },
+    LolbinPattern {
+        name: "expect-spawn",
+        binary: "expect",
+        argv: &["expect", "-c", "spawn id; expect"],
+        vector: "expect spawn -- TCL automation tool launching a child",
+    },
+];
+
+pub struct LolbinAbuseExecution {}
+
+#[async_trait]
+impl AttackTechnique for LolbinAbuseExecution {
+    fn info(&self) -> Technique {
+        Technique {
+            id: "T1218".to_string(),
+            name: "LOLBin Proxy Execution (Linux)".to_string(),
+            description: "Executes a curated set of LOLBin (Living Off the Land Binary) \
+                          abuse patterns that spawn child processes from binaries that \
+                          parent-process heuristics do not expect to fork shells -- awk \
+                          BEGIN{system()}, vim Ex-mode shell-out, find -exec, perl/python/ \
+                          ruby -e system(), xxd of /etc/passwd, tar --checkpoint-action= \
+                          exec, gdb -batch -ex shell, and several others.  All child \
+                          commands are read-only (id, hostname); the TTP signal is the \
+                          fork+exec anomaly itself, not the command output.  Whereas \
+                          T1548-GTFOBINS only PROBES the system for exploitable binaries, \
+                          this technique actually EXECUTES the abuse patterns so EDR \
+                          parent-process and unusual-child-spawn rules fire.  Patterns \
+                          for missing binaries are skipped cleanly.".to_string(),
+            category: "defense_evasion".to_string(),
+            parameters: vec![
+                TechniqueParameter {
+                    name: "patterns".to_string(),
+                    description: "Comma-separated list of pattern names to run (default: \
+                                  all available patterns).  See LOLBIN_PATTERNS constant \
+                                  for the full set: awk-system, find-exec, vim-shell, \
+                                  vi-shell, ex-shell, python-os-system, python-subprocess, \
+                                  perl-system, perl-backticks, ruby-system, xxd-passwd, \
+                                  sed-exec, env-exec, tar-checkpoint, gdb-batch-shell, \
+                                  expect-spawn"
+                        .to_string(),
+                    required: false,
+                    default: Some("all".to_string()),
+                },
+                TechniqueParameter {
+                    name: "delay_ms".to_string(),
+                    description: "Milliseconds to sleep between patterns (default 250)".to_string(),
+                    required: false,
+                    default: Some("250".to_string()),
+                },
+            ],
+            detection: "Monitor for parent-process / child-process pairs where the parent \
+                        is a typically non-shell binary (awk, vim, find, perl, python, \
+                        sed, tar, gdb, expect) and the child is /bin/sh, /bin/bash, or \
+                        a process commonly invoked from shell pipelines (id, whoami, \
+                        cat, hostname).  EDR products with parent-process anomaly \
+                        heuristics (CrowdStrike Falcon, Microsoft Defender for \
+                        Endpoint, SentinelOne, Elastic Defend) flag these patterns as \
+                        living-off-the-land binary abuse.  Specific signals: awk forking \
+                        /bin/sh; vim with -c '!cmd' arguments; find with -exec; perl/ \
+                        python/ruby -e flags carrying system()/exec() calls; tar with \
+                        --checkpoint-action=exec; gdb -batch -ex 'shell ...'; xxd \
+                        reading /etc/passwd or /etc/shadow.".to_string(),
+            cleanup_support: true,
+            platforms: vec!["Linux".to_string()],
+            permissions: vec![],
+            voltron_only: false,
+        }
+    }
+
+    fn execute<'a>(&'a self, config: &'a TechniqueConfig, dry_run: bool) -> ExecuteFuture<'a> {
+        Box::pin(async move {
+            let patterns_arg = config
+                .parameters
+                .get("patterns")
+                .cloned()
+                .unwrap_or_else(|| "all".to_string());
+            let delay_ms: u64 = config
+                .parameters
+                .get("delay_ms")
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(250);
+
+            let selected: Vec<&LolbinPattern> = if patterns_arg.trim() == "all" {
+                LOLBIN_PATTERNS.iter().collect()
+            } else {
+                let want: Vec<&str> = patterns_arg
+                    .split(',')
+                    .map(|s| s.trim())
+                    .filter(|s| !s.is_empty())
+                    .collect();
+                LOLBIN_PATTERNS
+                    .iter()
+                    .filter(|p| want.contains(&p.name))
+                    .collect()
+            };
+
+            if selected.is_empty() {
+                return Err(format!(
+                    "No LOLBin patterns matched '{}'.  Available: {}",
+                    patterns_arg,
+                    LOLBIN_PATTERNS
+                        .iter()
+                        .map(|p| p.name)
+                        .collect::<Vec<_>>()
+                        .join(",")
+                ));
+            }
+
+            if dry_run {
+                info!("[DRY RUN] Would execute {} LOLBin abuse patterns:", selected.len());
+                for p in &selected {
+                    info!(
+                        "[DRY RUN]   [{}] binary={} argv={:?} -- {}",
+                        p.name, p.binary, p.argv, p.vector
+                    );
+                }
+                return Ok(SimulationResult {
+                    technique_id: self.info().id,
+                    success: true,
+                    message: format!(
+                        "DRY RUN: Would execute {} LOLBin abuse patterns",
+                        selected.len()
+                    ),
+                    artifacts: vec![],
+                    cleanup_required: false,
+                });
+            }
+
+            info!(
+                "Starting T1218 LOLBin proxy execution -- {} patterns, {}ms delay",
+                selected.len(),
+                delay_ms
+            );
+
+            let mut executed = 0usize;
+            let mut skipped_missing = 0usize;
+            let mut failed = 0usize;
+            for p in &selected {
+                // Skip cleanly if the binary is not on PATH (no telemetry value
+                // in running a command we know will not start).
+                let which_status = Command::new("which")
+                    .arg(p.binary)
+                    .output()
+                    .await;
+                let binary_present = matches!(&which_status, Ok(o) if o.status.success());
+                if !binary_present {
+                    info!("  [--] [{}] binary {} not present -- skipped", p.name, p.binary);
+                    skipped_missing += 1;
+                    continue;
+                }
+
+                info!("  [-->] [{}] {}", p.name, p.vector);
+                debug!("    argv = {:?}", p.argv);
+                let argv = p.argv;
+                let mut cmd = Command::new(argv[0]);
+                cmd.args(&argv[1..]);
+                cmd.stdin(Stdio::null());
+                cmd.stdout(Stdio::piped());
+                cmd.stderr(Stdio::piped());
+                let started = Instant::now();
+                let exec_result = tokio::time::timeout(
+                    Duration::from_secs(5),
+                    cmd.output(),
+                )
+                .await;
+                let elapsed_ms = started.elapsed().as_millis();
+                match exec_result {
+                    Ok(Ok(output)) => {
+                        let ec = output.status.code().unwrap_or(-1);
+                        let stdout = String::from_utf8_lossy(&output.stdout);
+                        let first_line = stdout.lines().next().unwrap_or("").trim();
+                        if ec == 0 {
+                            info!(
+                                "  [OK]   [{}] exit=0 ({}ms){}",
+                                p.name,
+                                elapsed_ms,
+                                if first_line.is_empty() {
+                                    String::new()
+                                } else {
+                                    format!(" output={}", first_line)
+                                }
+                            );
+                            executed += 1;
+                        } else {
+                            info!(
+                                "  [INFO] [{}] exit={} ({}ms) -- non-zero exit still \
+                                 produces parent/child telemetry",
+                                p.name, ec, elapsed_ms
+                            );
+                            executed += 1;
+                        }
+                    }
+                    Ok(Err(e)) => {
+                        warn!("  [FAIL] [{}] spawn error: {}", p.name, e);
+                        failed += 1;
+                    }
+                    Err(_) => {
+                        warn!("  [FAIL] [{}] timed out after 5s", p.name);
+                        failed += 1;
+                    }
+                }
+
+                if delay_ms > 0 {
+                    tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+                }
+            }
+
+            let summary = format!(
+                "T1218 LOLBin abuse complete: {} executed, {} skipped (binary missing), \
+                 {} failed out of {} selected patterns",
+                executed,
+                skipped_missing,
+                failed,
+                selected.len()
+            );
+            info!("{}", summary);
+
+            Ok(SimulationResult {
+                technique_id: self.info().id,
+                success: executed > 0,
+                message: summary,
+                // This technique writes nothing to disk; only ephemeral child-
+                // process exec events.  No artefacts to clean up.
+                artifacts: vec![],
+                cleanup_required: false,
+            })
+        })
+    }
+
+    fn cleanup<'a>(&'a self, _artifacts: &'a [String]) -> CleanupFuture<'a> {
+        Box::pin(async move {
+            // No persistent artefacts -- LOLBin abuse runs purely as fork+exec
+            // events.  Nothing to remove.
+            debug!("[T1218] LOLBin abuse cleanup is a no-op (no persistent artefacts)");
             Ok(())
         })
     }

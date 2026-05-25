@@ -1,6 +1,6 @@
 [package]
 name = "signalbench"
-version = "1.7.1"
+version = "1.8.0"
 edition = "2021"
 authors = ["Simon Sigre <info@gocortex.io>"]
 description = "Endpoint telemetry generator for security analytics, research, and training using MITRE ATT&CK techniques"
@@ -22,7 +22,7 @@ colored = "2"
 chrono = { version = "0.4", features = ["serde"] }
 dirs = "6"
 tempfile = "3"
-rand = "0.9"
+rand = "0.9.3"
 uuid = { version = "1", features = ["v4"] }
 whoami = "1"
 sha2 = "0.10"
@@ -35,7 +35,7 @@ regex = "1"
 rusqlite = { version = "0.37", features = ["bundled"] }
 thiserror = "2"
 num_cpus = "1"
-serde_yaml = "0.9"
+bytes = "1.11.1"
 hmac = "0.12"
 hkdf = "0.12"
 chacha20poly1305 = "0.10"

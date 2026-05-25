@@ -14,7 +14,6 @@ pub mod command_interpreter;
 pub mod container_escape;
 pub mod credential_access;
 pub mod defense_evasion;
-pub mod defense_evasion_obfuscation;
 pub mod discovery;
 pub mod dns_recon;
 pub mod dnscat_c2;
@@ -27,7 +26,6 @@ pub mod network;
 pub mod persistence;
 pub mod persistence_system_process;
 pub mod privilege_escalation;
-pub mod process_injection;
 pub mod protocol_lateral_movement;
 pub mod software;
 
@@ -108,9 +106,11 @@ pub fn get_all_techniques() -> Vec<Box<dyn AttackTechnique>> {
         Box::new(privilege_escalation::PrivilegeEscalationExploit {}),
         Box::new(privilege_escalation::SudoUnsignedIntegerEscalation {}),
         Box::new(gtfobins::GtfobinsProbe {}),
+        Box::new(gtfobins::LolbinAbuseExecution {}),
         Box::new(kernel_exploits::NftablesExploit {}),
         Box::new(kernel_exploits::PosixCpuTimerRace {}),
         Box::new(kernel_exploits::Ext4XattrUnderflow {}),
+        Box::new(kernel_exploits::CopyFail {}),
         // Container escape techniques (T1611)
         Box::new(container_escape::DockerSocketEscape {}),
         Box::new(container_escape::PrivilegedContainerEscape {}),
@@ -141,6 +141,7 @@ pub fn get_all_techniques() -> Vec<Box<dyn AttackTechnique>> {
         Box::new(credential_access::ProcFilesystemCredentialDumping {}),
         Box::new(credential_access::SSHBruteForce {}),
         Box::new(credential_access::EtcPasswdShadow {}),
+        Box::new(credential_access::PamBackdoor {}),
         // Discovery techniques
         Box::new(discovery::SystemInformationDiscovery {}),
         Box::new(discovery::NetworkDiscovery {}),
@@ -165,10 +166,6 @@ pub fn get_all_techniques() -> Vec<Box<dyn AttackTechnique>> {
         Box::new(command_and_control::SuspiciousDomainConnections {}),
         // Advanced Command Interpreter
         Box::new(command_interpreter::AdvancedCommandExecution {}),
-        // Defense Evasion - Obfuscation
-        Box::new(defense_evasion_obfuscation::ObfuscatedFilesAndInformation {}),
-        // Process Injection
-        Box::new(process_injection::ProcessInjection {}),
         // System Process Persistence
         Box::new(persistence_system_process::CreateOrModifySystemProcess {}),
         // DNS reconnaissance via DNSRecon
@@ -210,4 +207,23 @@ pub fn get_techniques_by_category(category: &str) -> Vec<Box<dyn AttackTechnique
         .into_iter()
         .filter(|t| t.info().category.to_lowercase() == category.to_lowercase())
         .collect()
+}
+
+// Sinkhole resolution shared helper
+// Resolves sinkhole.signalbench.sigre.xyz via the system resolver (honours /etc/hosts).
+// Falls back to SINKHOLE_IP_FALLBACK when DNS is unavailable.
+pub const SINKHOLE_LOOKUP_DOMAIN: &str = "sinkhole.signalbench.sigre.xyz";
+pub const SINKHOLE_IP_FALLBACK: &str = "198.135.184.22";
+
+pub async fn resolve_sinkhole_ip() -> String {
+    use tokio::net::lookup_host;
+    match lookup_host(format!("{}:80", SINKHOLE_LOOKUP_DOMAIN)).await {
+        Ok(mut addrs) => {
+            if let Some(addr) = addrs.find(|a| a.is_ipv4()) {
+                return addr.ip().to_string();
+            }
+            SINKHOLE_IP_FALLBACK.to_string()
+        }
+        Err(_) => SINKHOLE_IP_FALLBACK.to_string(),
+    }
 }

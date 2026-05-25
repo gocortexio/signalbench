@@ -146,6 +146,15 @@ impl AttackTechnique for S1109Pacemaker {
             // Explicitly drop the file handle to close it before execution
             drop(binary_file);
 
+            // Read the binary via cat to trigger content/bytecode scanning before execution
+            match std::process::Command::new("cat").arg(binary_path).output() {
+                Ok(out) => info!(
+                    "PACEMAKER binary cat: ok ({} bytes read)",
+                    out.stdout.len()
+                ),
+                Err(e) => info!("PACEMAKER binary cat failed: {e}"),
+            }
+
             info!("Creating PACEMAKER launcher script");
 
             // Securely create the launcher script using create_new() and O_NOFOLLOW to prevent symlink attacks
