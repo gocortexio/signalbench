@@ -2878,24 +2878,20 @@ impl AttackTechnique for DisableSecurityTools {
         Technique {
             id: "T1562.001".to_string(),
             name: "Disable or Modify Tools".to_string(),
-            description: "Attempts the canonical pre-ransomware 'kill the EDR' \
-                          sequence against a curated list of well-known endpoint \
-                          security agent processes (CrowdStrike Falcon, Carbon \
-                          Black, SentinelOne, Cortex XDR, Wazuh, ClamAV, osquery, \
-                          Sysdig, Falco, and others).  For each target name the \
-                          technique runs pkill -f, then systemctl stop, then \
-                          kill -9 against any matching PIDs returned by pgrep.  \
-                          On a test host where the agents are not present the \
-                          calls fail harmlessly -- the detection signal lives \
-                          in the process-exec telemetry of the attempts, not in \
-                          their success.  On a host where an agent IS present, \
-                          the agent will be stopped or killed; that is the \
-                          intended test value and is precisely the action SOC \
-                          analytics flag as the first link in the ransomware \
-                          kill chain.  CISA 2025 advisories explicitly call out \
-                          pkill -f falcon-sensor, systemctl stop wazuh-agent, \
-                          and the equivalents as the #1 indicator of imminent \
-                          Linux ransomware deployment.".to_string(),
+            description: "[IN DESIGN -- MUTED] Attempts the canonical pre-ransomware \
+                          'kill the EDR' sequence against a curated list of \
+                          well-known endpoint security agent processes \
+                          (CrowdStrike Falcon, Carbon Black, SentinelOne, Cortex \
+                          XDR, Wazuh, ClamAV, osquery, Sysdig, Falco, and \
+                          others).  Currently MUTED -- execute() short-circuits \
+                          with a banner and does not perform any kills.  See \
+                          PRIVATE_DOCS/KNOWN_BUGS.md for context: the technique \
+                          works too well in chain mode (ALL_CAPS / \
+                          defense_evasion) -- after the EDR is killed, every \
+                          subsequent technique in the chain produces no \
+                          telemetry.  Real implementation preserved in the \
+                          source for rollback once chain-aware sequencing is \
+                          designed.".to_string(),
             category: "defense_evasion".to_string(),
             parameters: vec![
                 TechniqueParameter {
@@ -2925,8 +2921,58 @@ impl AttackTechnique for DisableSecurityTools {
         }
     }
 
+    #[allow(unreachable_code, unused_variables)]
     fn execute<'a>(&'a self, config: &'a TechniqueConfig, dry_run: bool) -> ExecuteFuture<'a> {
         Box::pin(async move {
+            // ============================================================
+            // [IN DESIGN -- MUTED] T1562.001 DisableSecurityTools
+            // ============================================================
+            // Short-circuit at execute() entry.  Reason: in chain mode
+            // (signalbench category ALL_CAPS / defense_evasion) this
+            // technique successfully kills the host's EDR / XDR agent
+            // (Cortex XDR, CrowdStrike Falcon, Wazuh).  Every technique
+            // that runs afterwards in the chain produces zero telemetry
+            // because the agent that would have generated it is dead.
+            //
+            // The mute is NOT overridable by --force or by dry_run --
+            // consistent with the PamBackdoor / AccountManipulation
+            // guards: --force is for production-safety speed bumps,
+            // not for forcing a known-broken technique to run.
+            //
+            // Rollback when chain-aware sequencing is implemented: remove
+            // this banner + return block, drop the
+            // #[allow(unreachable_code)] attribute on the function, and
+            // move the KNOWN_BUGS.md entry from Active to Resolved.
+            //
+            // Full context: PRIVATE_DOCS/KNOWN_BUGS.md
+            // ============================================================
+            println!(
+                "\n\
+                 ============================================================\n\
+                 [IN DESIGN] T1562.001 DisableSecurityTools is MUTED\n\
+                 Reason: in chain mode it kills the EDR before downstream\n\
+                 techniques can produce telemetry.  See KNOWN_BUGS.md.\n\
+                 ============================================================\n"
+            );
+            info!(
+                "[T1562.001] MUTED at execute() entry -- see \
+                 PRIVATE_DOCS/KNOWN_BUGS.md"
+            );
+            return Ok(SimulationResult {
+                technique_id: "T1562.001".to_string(),
+                success: true,
+                message: "T1562.001 DisableSecurityTools is muted (IN DESIGN). \
+                          No processes were touched.  See \
+                          PRIVATE_DOCS/KNOWN_BUGS.md for context."
+                    .to_string(),
+                artifacts: vec![],
+                cleanup_required: false,
+            });
+
+            // ============================================================
+            // ORIGINAL IMPLEMENTATION -- unreachable while muted, preserved
+            // verbatim so rollback is a clean revert.  Do not modify below.
+            // ============================================================
             use tokio::process::Command;
 
             let session_id = Uuid::new_v4().to_string().replace('-', "");
