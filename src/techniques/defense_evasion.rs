@@ -2921,7 +2921,7 @@ impl AttackTechnique for DisableSecurityTools {
         }
     }
 
-    #[allow(unreachable_code, unused_variables)]
+    #[allow(unreachable_code, unused_variables, unused_assignments)]
     fn execute<'a>(&'a self, config: &'a TechniqueConfig, dry_run: bool) -> ExecuteFuture<'a> {
         Box::pin(async move {
             // ============================================================
