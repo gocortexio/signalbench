@@ -43,12 +43,12 @@ const STRATUM_MINING_DOMAINS: &[&str] = &[
 ];
 const STRATUM_PORTS: &[u16] = &[3333, 4444];
 const STRATUM_SUBSCRIBE: &str =
-    "{\"id\": 1, \"method\": \"mining.subscribe\", \"params\": [\"signalbench/1.8.0\", null]}\n";
+    "{\"id\": 1, \"method\": \"mining.subscribe\", \"params\": [\"signalbench/1.8.1\", null]}\n";
 const STRATUM_AUTHORIZE: &str =
     "{\"id\": 2, \"method\": \"mining.authorize\", \"params\": [\"signalbench.worker1\", \"x\"]}\n";
 const STRATUM_PING: &str = "{\"id\": 9, \"method\": \"mining.ping\", \"params\": []}\n";
 const STRATUM_CLIENT_VERSION_RESPONSE: &str =
-    "{\"id\": 4, \"result\": \"signalbench/1.8.0\", \"error\": null}\n";
+    "{\"id\": 4, \"result\": \"signalbench/1.8.1\", \"error\": null}\n";
 
 // Unowned domains that require /etc/hosts configuration for safe testing
 const UNOWNED_DOMAINS: &[&str] = &[

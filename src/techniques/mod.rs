@@ -134,6 +134,8 @@ pub fn get_all_techniques() -> Vec<Box<dyn AttackTechnique>> {
         Box::new(defense_evasion::FileDeletion {}),
         Box::new(defense_evasion::ProcessMasquerading {}),
         Box::new(defense_evasion::SelfDeletingBinary {}),
+        Box::new(defense_evasion::DisableSecurityTools {}),
+        Box::new(defense_evasion::ReflectiveCodeLoading {}),
         // Credential access techniques
         Box::new(credential_access::MemoryDumping {}),
         Box::new(credential_access::KeyloggerSimulation {}),

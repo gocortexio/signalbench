@@ -2,7 +2,7 @@
   <img src="assets/signalbench_1-8-0.png" alt="SignalBench Logo" width="600"/>
 </div>
 
-# SignalBench v1.8.0: It’s Always DNS (feat. C2 Sinkhole)
+# SignalBench v1.8.1: It’s Always DNS (feat. C2 Sinkhole)
 
 Endpoint Telemetry Generator from GoCortex.io
 
@@ -201,14 +201,14 @@ SignalBench provides pre-built binaries for maximum compatibility across Linux d
 For Universal Linux Compatibility (Recommended):
 ```bash
 # Download static binary that works on any Linux distribution
-wget https://github.com/gocortexio/signalbench/releases/download/v1.8.0/signalbench-v1.8.0-linux-musl-x86_64
-chmod +x signalbench-v1.8.0-linux-musl-x86_64
-sudo mv signalbench-v1.8.0-linux-musl-x86_64 /usr/local/bin/signalbench
+wget https://github.com/gocortexio/signalbench/releases/download/v1.8.1/signalbench-v1.8.1-linux-musl-x86_64
+chmod +x signalbench-v1.8.1-linux-musl-x86_64
+sudo mv signalbench-v1.8.1-linux-musl-x86_64 /usr/local/bin/signalbench
 
 # For ARM64 systems (Apple Silicon, ARM servers)
-wget https://github.com/gocortexio/signalbench/releases/download/v1.8.0/signalbench-v1.8.0-linux-musl-aarch64
-chmod +x signalbench-v1.8.0-linux-musl-aarch64
-sudo mv signalbench-v1.8.0-linux-musl-aarch64 /usr/local/bin/signalbench
+wget https://github.com/gocortexio/signalbench/releases/download/v1.8.1/signalbench-v1.8.1-linux-musl-aarch64
+chmod +x signalbench-v1.8.1-linux-musl-aarch64
+sudo mv signalbench-v1.8.1-linux-musl-aarch64 /usr/local/bin/signalbench
 ```
 
 ### Option 2: Build from Source

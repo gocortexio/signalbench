@@ -1,5 +1,5 @@
 {
-  "version": "1.8.0",
+  "version": "1.8.1",
   "generated_at": "2026-03-28T00:00:00Z",
   "scenarios": [
     {
@@ -247,6 +247,32 @@
       "command": "run T1218",
       "fullCommand": "signalbench run T1218",
       "estimatedDuration": "4-8s",
+      "category": "Defense Evasion"
+    },
+    {
+      "techniqueId": "T1562.001",
+      "name": "Disable or Modify Tools",
+      "description": "Pre-ransomware 'kill the EDR' sequence: pkill, systemctl stop, and kill -9 against 11 well-known endpoint security agent process names (CrowdStrike Falcon, Carbon Black, SentinelOne, Cortex XDR, Wazuh, ClamAV, osquery, Sysdig, Falco, and others).",
+      "fullDescription": "Reproduces the canonical first action of every Linux ransomware operator. For each target name the technique runs pkill -f, then systemctl stop, then kill -9 against any matching PIDs returned by pgrep (guarded so kill -9 is never run with no arguments). On a host without the agents installed the calls fail harmlessly -- the EDR signal lives in the process-exec telemetry of the attempts, not in their success. On a host where an agent IS present the agent will be stopped or killed; that is the intended test value. CISA 2025 advisories explicitly call out pkill -f falcon-sensor, systemctl stop wazuh-agent, and the equivalents as the #1 indicator of imminent Linux ransomware deployment.",
+      "tactic": "Defense Evasion",
+      "severity": "High",
+      "platform": "Linux",
+      "command": "run T1562.001",
+      "fullCommand": "signalbench run T1562.001",
+      "estimatedDuration": "3-6s",
+      "category": "Defense Evasion"
+    },
+    {
+      "techniqueId": "T1620",
+      "name": "Reflective Code Loading (memfd_create)",
+      "description": "Canonical 2025-2026 fileless ELF execution pattern (BPFDoor / Symbiote class implants). Compiles a small C loader to /tmp that uses syscall(SYS_memfd_create, \"\", MFD_CLOEXEC) and fexecve() to run a benign payload (/bin/true) purely from anonymous memory.",
+      "fullDescription": "Writes a short C loader to /tmp/signalbench_t1620_<session>/loader.c, compiles it with gcc, and runs it. The loader opens /bin/true, creates an anonymous in-memory fd via syscall(SYS_memfd_create, \"\", MFD_CLOEXEC) -- empty name is the strongest detection fingerprint -- copies the ELF bytes into the memfd, and fexecve's it. The payload (/bin/true) exits 0 immediately. The detection signal is the memfd_create + fexecve syscall pair, not the payload, so this technique is a faithful telemetry generator without any malicious effect. Fully reversible: cleanup removes the entire session directory under /tmp.",
+      "tactic": "Defense Evasion",
+      "severity": "Medium",
+      "platform": "Linux",
+      "command": "run T1620",
+      "fullCommand": "signalbench run T1620",
+      "estimatedDuration": "2-5s",
       "category": "Defense Evasion"
     },
     {

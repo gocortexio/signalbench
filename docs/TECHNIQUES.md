@@ -2,6 +2,70 @@
 
 This document provides detailed information about each MITRE ATT&CK technique implemented in SignalBench, explaining how they work, what telemetry they generate, and what artefacts they create.
 
+## Destructive operations & lockout risks (read first)
+
+SignalBench exercises EDR/XDR telemetry by simulating attacker-class behaviour.
+A handful of techniques perform writes that, if they went wrong, could lock an
+operator out of the host.  After a real-world PAM Backdoor (T1556.003) incident
+locked a test host out of every login path (SSH and console) by overwriting
+`pam_unix.so` with a non-functional stub, the codebase added a defence-in-depth
+chokepoint at `src/safety.rs::destructive_write`.
+
+**Guarantees the safety chokepoint provides** (enforced at runtime, NOT overridable by `--force`):
+
+- Signalbench will **never overwrite a real PAM module** (`pam_unix.so`,
+  `pam_systemd.so`, etc.).  An explicit deny-list of ~45 real module names is
+  consulted before any cp.
+- Signalbench will **never overwrite a pre-existing file** under a protected
+  directory (`/lib*/security/`, `/lib/systemd/system/`, `/boot/`, `/sbin/`,
+  `/usr/sbin/`).
+- Signalbench will **never overwrite** `/etc/passwd`, `/etc/shadow`,
+  `/etc/group`, `/etc/sudoers`, or core PAM stacks (`/etc/pam.d/login`,
+  `/etc/pam.d/common-*`, `/etc/pam.d/system-auth`).
+- Cleanup will **never delete** a file at any of the paths above, even if a
+  metadata file claims signalbench created it.  Cleanup that would touch a
+  protected path logs `[REFUSED]` and leaves the file in place.
+
+**Techniques that perform destructive system writes**:
+
+| Technique | Writes to | Safety mechanism |
+|---|---|---|
+| T1556.003 PamBackdoor | `/lib*/security/<module>`, `/etc/pam.d/sshd` | Default `module_name=pam_signalbench_backdoor.so`; refuses any real PAM module name (deny-list); refuses to overwrite pre-existing files; `/etc/pam.d/sshd` backed up before append; cleanup never removes protected paths |
+| T1098 AccountManipulation | `/etc/passwd` (via `usermod`), user groups, `~/.ssh/authorized_keys` | Default `test_username=signalbench_testuser`; refuses any username not prefixed `signalbench_` or `sb_`; refuses if username matches the invoking `$SUDO_USER` / `$USER` |
+| T1136.001 LocalAccountCreation | `/etc/passwd`, sudo/wheel group | Refuses if target username already exists; cleanup `userdel`s only after a successful create within the same execute() |
+| T1110.001 SSHBruteForce | `/etc/passwd` (test user only) | Hardcoded `signalbench_brute_test` username; cleanup gated by `user_created` flag in state file |
+| T1548 SudoersModification | `/etc/sudoers.d/99-signalbench-test` | Validated with `visudo`; cleanup removes only the signalbench-named file |
+| T1562.001 DisableSecurityTools | `pkill` against EDR process names | Hardcoded 11-name allow-list; cannot match `sshd`, `login`, `init`, or PAM-related processes |
+
+**Pre-flight safety check** (`safety::check_environment`) warns about leftover state from a prior incomplete run:
+
+- `/etc/pam.d/sshd.signalbench-backup*` files → previous PamBackdoor run did
+  not complete cleanup; review `/etc/pam.d/sshd` for stray backdoor lines.
+- `/tmp/signalbench_pam_*.so` files → leftover fake module.
+- `/tmp/signalbench_pam_backdoor_*.json` files → stranded metadata.
+- `pam_unix.so` missing from every PAM module directory → host authentication
+  is broken; CRITICAL warning printed with the exact apt-get / dnf reinstall
+  command to recover.
+
+**Recovery procedure** if PamBackdoor ever locks a host out (should be impossible after the safety chokepoint landed; documented here for historical reference and bare-metal recovery):
+
+```bash
+# From rescue boot / single-user / out-of-band root console:
+apt-get install --reinstall libpam-modules libpam0g libpam-runtime   # Debian/Ubuntu
+dnf reinstall pam pam-libs                                           # RHEL/Fedora
+
+# Clean any stray PamBackdoor lines from /etc/pam.d/sshd
+grep -i signalbench /etc/pam.d/sshd
+sed -i '/SIGNALBENCH-PAM-BACKDOOR/,+1d' /etc/pam.d/sshd
+sed -i '\|signalbench_pam_.*\.so|d' /etc/pam.d/sshd
+
+# Remove leftover /tmp artefacts
+rm -f /tmp/signalbench_pam_*.so /tmp/signalbench_pam_backdoor_*.json
+
+# Refresh dynamic linker cache
+ldconfig
+```
+
 ## Multi-Category Support
 
 SignalBench supports executing multiple technique categories in a single command, enabling comprehensive telemetry generation across multiple tactics:
@@ -197,7 +261,7 @@ How it works:
 4. This is a simulated technique that doesn't use comprehensive scanning tools
 
 Parameters:
-- `target_domain`: Domain to target for reconnaissance (default: example.com)
+- `target_domain`: Domain to target for reconnaissance (default: simonsigre.com)
 - `output_file`: Path to save the reconnaissance results
 - `subdomain_list`: List of subdomains to check (comma-separated)
 
@@ -740,6 +804,64 @@ Detection opportunities:
 - `expect -c 'spawn ...'`
 - `xxd` reading `/etc/passwd`, `/etc/shadow`, or any path under `/root/`
 - EDR products with parent-process anomaly heuristics (CrowdStrike Falcon, Microsoft Defender for Endpoint, SentinelOne, Elastic Defend) flag these patterns as living-off-the-land binary abuse
+
+### T1562.001 - Disable or Modify Tools
+
+Description:
+Attempts the canonical pre-ransomware "kill the EDR" sequence against a curated list of well-known endpoint security agent processes.  CISA 2025 advisories explicitly call out `pkill -f falcon-sensor`, `systemctl stop wazuh-agent`, and the equivalents as the #1 indicator of imminent Linux ransomware deployment, so this technique reproduces that exact behaviour.
+
+How it works:
+1. Iterates the built-in target list (11 agents: `falcon-sensor`, `cbagentd`, `wazuh-agent`, `clamav`, `osquery`, `sysdig`, `falco`, `carbonblackd`, `s1agent`, `xagt`, `traps_pmd`) or a comma-separated override from the `process_names` parameter.
+2. For each target name, runs three shutdown vectors in sequence:
+   - `pkill -f <name>` -- signal-based termination
+   - `systemctl stop <name>` -- service-manager shutdown
+   - `kill -9 <pid>` -- SIGKILL, but only against PIDs that `pgrep <name>` actually returned (guarded so we never run `kill -9` with no arguments)
+3. Every attempt is logged with its exit code to `/tmp/signalbench_t1562_001_<session>.log`.  Failures from non-existent processes or missing units are non-fatal -- the detection signal lives in the process-exec telemetry, not in success.
+
+**Operational caveat:** on a test host that genuinely runs CrowdStrike / Carbon Black / Wazuh / etc., this technique WILL attempt to terminate those agents.  That is the test value.  On a host without those agents the calls fail harmlessly.
+
+Parameters:
+- `process_names`: Comma-separated override of the EDR / AV process name list (default: the 11-agent built-in set)
+
+Artefacts:
+- `/tmp/signalbench_t1562_001_<session>.log` (removed at cleanup)
+
+Detection opportunities:
+- `pkill`, `kill -9`, `systemctl stop` invocations targeting endpoint-security agent process names
+- Any of these commands run by a non-root user, or by a parent process that isn't systemd / the package manager, or in rapid sequence against multiple agent names
+- CISA 2025 advisory coverage is mature; most EDR products surface this natively without custom rules
+
+### T1620 - Reflective Code Loading (memfd_create)
+
+Description:
+Canonical 2025-2026 fileless ELF execution pattern used by BPFDoor variants, Symbiote, and virtually every modern Linux implant.  The technique runs an ELF entirely from anonymous memory, bypassing file-based detection layers (YARA scans, AV signature checks, inotify watches on disk-write paths).
+
+How it works:
+1. Writes a short C loader to `/tmp/signalbench_t1620_<session>/loader.c`.
+2. Compiles it with `gcc -O2 -Wall -o loader loader.c`.
+3. Executes the compiled loader, which:
+   - Opens the configured payload (default `/bin/true`)
+   - Calls `syscall(SYS_memfd_create, "", MFD_CLOEXEC)` -- the empty name string is the strongest detection fingerprint, because benign uses almost always pass a descriptive name
+   - Copies the payload ELF bytes into the memfd
+   - Calls `fexecve(fd, argv, envp)` to execute the in-memory ELF
+4. The payload (`/bin/true`) exits 0; cleanup removes the entire `/tmp/signalbench_t1620_<session>/` directory.
+
+The detection signal is the `memfd_create("", MFD_CLOEXEC)` + `fexecve` syscall pair from a process whose backing file is not in `/usr/bin` or `/usr/sbin`, not the payload itself.  This makes the technique a faithful telemetry generator while doing nothing more harmful than running `/bin/true` in memory.
+
+Parameters:
+- `payload_path`: On-disk ELF whose bytes are loaded into the memfd and `fexecve`'d (default `/bin/true`).  Must be an executable the loader has read access to.
+
+Artefacts:
+- `/tmp/signalbench_t1620_<session>/loader.c` (removed at cleanup)
+- `/tmp/signalbench_t1620_<session>/loader` (removed at cleanup)
+- `/tmp/signalbench_t1620_<session>/` directory (removed at cleanup)
+
+Detection opportunities:
+- `memfd_create()` syscalls with an empty name argument
+- `fexecve()` from a process whose executable backing is `/memfd:...` rather than an on-disk path
+- Process-exec events where `/proc/[pid]/exe` resolves to `/memfd:<anything> (deleted)`
+- `gcc` invocations producing binaries under `/tmp` followed immediately by execution of those binaries
+- Detection rules from Elastic, Falco and Sysdig all cover the `memfd_create` + `fexecve` pair natively
 
 ## EXECUTION Techniques
 

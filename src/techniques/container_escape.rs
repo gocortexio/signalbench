@@ -4985,7 +4985,15 @@ impl AttackTechnique for ContainerReconnaissance {
                 }
             }
 
-            // Cloud metadata check with curl
+            // Cloud metadata check with curl.
+            //
+            // 169.254.169.254 is the standardised link-local cloud-metadata
+            // address used by AWS, GCP, Azure and Oracle Cloud -- a single
+            // probe covers all four.  Alibaba Cloud's 100.100.100.200 was
+            // previously listed here but removed: that address sits in
+            // publicly routable CGNAT space (100.64.0.0/10) so the probe
+            // emitted real outbound packets on any host that wasn't on
+            // Alibaba Cloud, which was noise rather than telemetry.
             debug!("[T1611-RECON] Checking cloud metadata endpoints");
             let metadata_endpoints = [
                 (
@@ -4997,11 +5005,6 @@ impl AttackTechnique for ContainerReconnaissance {
                     "169.254.169.254",
                     "AWS IMDSv1",
                     "/latest/meta-data/iam/security-credentials/",
-                ),
-                (
-                    "100.100.100.200",
-                    "Alibaba Cloud Metadata",
-                    "/latest/meta-data/",
                 ),
             ];
 

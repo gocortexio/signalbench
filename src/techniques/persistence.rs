@@ -915,6 +915,46 @@ impl AttackTechnique for AccountManipulation {
                 return Err("Account manipulation requires root privileges".to_string());
             }
 
+            // Safety rail: refuse any test_username that does not carry
+            // a signalbench prefix.  Companion to the PamBackdoor
+            // module-name guard.  The original concern: this technique
+            // happily runs against ANY existing user, doing usermod -s
+            // /bin/sh + group adds + SSH key append.  If a config or
+            // CLI accidentally passes the invoking user's own name as
+            // test_username, the technique reshapes that user's
+            // account -- and if cleanup never runs, the changes
+            // persist.  Refusing non-prefixed names eliminates the
+            // entire foot-gun.  Not overridable by --force.
+            if !test_username.starts_with("signalbench_")
+                && !test_username.starts_with("sb_")
+            {
+                return Err(format!(
+                    "REFUSED: test_username='{test_username}' must start with \
+                     'signalbench_' or 'sb_' to ensure it cannot collide with \
+                     a real human user account.  This guard prevents the \
+                     technique from accidentally reshaping the invoking \
+                     user's own account (shell change, group adds, SSH key \
+                     append).  Not overridable by --force."
+                ));
+            }
+
+            // Additional belt-and-braces guard: refuse if the requested
+            // username matches the invoking user (SUDO_USER or USER env).
+            // Defends against a misuse where someone deliberately
+            // prefixes their own login with 'signalbench_' to bypass the
+            // first guard.
+            let invoking_user = std::env::var("SUDO_USER")
+                .or_else(|_| std::env::var("USER"))
+                .unwrap_or_default();
+            if !invoking_user.is_empty() && invoking_user == test_username {
+                return Err(format!(
+                    "REFUSED: test_username='{test_username}' matches the \
+                     invoking user.  Refusing to modify the account of the \
+                     user who launched signalbench -- that's the lockout \
+                     scenario this guard exists to prevent."
+                ));
+            }
+
             if dry_run {
                 info!("[DRY RUN] Would perform account manipulation:");
                 info!("[DRY RUN]   Test user: {test_username}");

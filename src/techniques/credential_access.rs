@@ -4510,18 +4510,23 @@ impl AttackTechnique for PamBackdoor {
             id: "T1556.003".to_string(),
             name: "PAM Backdoor".to_string(),
             description: "Simulates the post-XZ Utils (CVE-2024-3094) PAM backdoor \
-                          TTP: writes a fake pam_unix.so-shaped ELF file to /tmp, \
-                          attempts to copy it into every standard PAM module \
-                          directory (/lib/security/, /lib/x86_64-linux-gnu/security/, \
+                          TTP: writes a fake signalbench-prefixed PAM module ELF \
+                          file to /tmp, attempts (in a safety-guarded way) to copy \
+                          it into every standard PAM module directory \
+                          (/lib/security/, /lib/x86_64-linux-gnu/security/, \
                           /lib64/security/, /usr/lib/security/), and (when running \
                           as root) backs up /etc/pam.d/sshd before appending an \
                           \"auth sufficient <fake.so>\" backdoor line.  Finally \
-                          invokes ldconfig to flush the dynamic linker cache.  All \
-                          modifications are reversible: PAM config restored from \
-                          backup, fake .so removed from /tmp and any system \
-                          directory where the copy succeeded.  Without root the \
-                          copy attempts fail by design -- the syscall trace is the \
-                          detection signal.".to_string(),
+                          invokes ldconfig to flush the dynamic linker cache.  \
+                          Safety rails: the technique will REFUSE to use any real \
+                          PAM module name (pam_unix.so etc) and will REFUSE to \
+                          overwrite any pre-existing file under a system PAM \
+                          directory.  The syscall trace of the attempt is the EDR \
+                          detection signal -- refusing the write at the guard \
+                          layer preserves the audit-log trail without producing \
+                          real damage.  Reversible to the extent that backups \
+                          exist; will never delete a path the technique did not \
+                          itself create.".to_string(),
             category: "credential_access".to_string(),
             parameters: vec![
                 TechniqueParameter {
@@ -4533,11 +4538,14 @@ impl AttackTechnique for PamBackdoor {
                 },
                 TechniqueParameter {
                     name: "module_name".to_string(),
-                    description: "Filename for the fake PAM module (default \
-                                  pam_unix.so to mimic the real glibc-bundled \
-                                  module)".to_string(),
+                    description: "Filename for the fake PAM module.  MUST start \
+                                  with 'pam_signalbench' or 'signalbench_'; \
+                                  signalbench refuses any real PAM module name \
+                                  (pam_unix.so etc) to prevent host \
+                                  authentication lockout.  This guard is not \
+                                  overridable by --force.".to_string(),
                     required: false,
-                    default: Some("pam_unix.so".to_string()),
+                    default: Some("pam_signalbench_backdoor.so".to_string()),
                 },
             ],
             detection: "Monitor write syscalls to /etc/pam.d/* and to any directory \
@@ -4568,7 +4576,48 @@ impl AttackTechnique for PamBackdoor {
                 .parameters
                 .get("module_name")
                 .cloned()
-                .unwrap_or_else(|| "pam_unix.so".to_string());
+                .unwrap_or_else(|| "pam_signalbench_backdoor.so".to_string());
+
+            // Safety rail #1: refuse any module_name that matches a real
+            // PAM module.  This is the root-cause guard for the original
+            // pam_unix.so lockout incident.  Not overridable by --force --
+            // platform-impossible operations are categorically different
+            // from production-safety speed bumps.
+            if crate::safety::destructive_write::PROTECTED_PAM_MODULES
+                .iter()
+                .any(|m| m.eq_ignore_ascii_case(&module_name))
+            {
+                return Err(format!(
+                    "REFUSED: module_name='{module_name}' is a real PAM module. \
+                     Overwriting it would destroy host authentication for every \
+                     user.  Use a 'pam_signalbench_' or 'signalbench_' prefixed \
+                     name instead.  This guard is not overridable by --force."
+                ));
+            }
+
+            // Safety rail #2: require the signalbench-prefixed naming
+            // convention so even unknown / distro-specific PAM module
+            // names cannot accidentally be supplied.
+            if !module_name.starts_with("pam_signalbench")
+                && !module_name.starts_with("signalbench_")
+            {
+                return Err(format!(
+                    "REFUSED: module_name must start with 'pam_signalbench' or \
+                     'signalbench_' to ensure it cannot collide with a real PAM \
+                     module name on any distribution.  Got '{module_name}'."
+                ));
+            }
+
+            // Safety rail #3: refuse path separators in the module name --
+            // module_name is joined as a basename onto each protected
+            // target directory, and a slash would let the technique escape
+            // the basename position.
+            if module_name.contains('/') || module_name.contains('\\') {
+                return Err(format!(
+                    "REFUSED: module_name must be a bare filename without path \
+                     separators.  Got '{module_name}'."
+                ));
+            }
 
             let fake_so = format!("/tmp/signalbench_pam_{session_id}.so");
             let backup_file = format!("/tmp/signalbench_pam_backup_{session_id}.bak");
@@ -4637,9 +4686,19 @@ impl AttackTechnique for PamBackdoor {
             }
 
             // -- Phase 2: attempt copies into PAM module directories ----------
-            // Without root every cp call will fail with EACCES -- the failed
-            // openat() / write() syscalls in those directories are the EDR
-            // signal regardless.
+            // Each candidate destination is run through guarded_can_write
+            // first.  If the destination is under a protected directory
+            // OR a file already exists there, the cp is REFUSED and we
+            // log the refusal -- the audit-log line "Attempting cp ... ->
+            // REFUSED" is itself a detection signal that downstream EDR
+            // pipelines can ingest.  This is the post-incident fix for
+            // the pam_unix.so overwrite lockout: even running as root,
+            // signalbench will not clobber a pre-existing file under
+            // /lib/.../security/.
+            //
+            // Without root the underlying cp call would have failed with
+            // EACCES too -- the safety gate makes the refusal explicit and
+            // deterministic regardless of euid.
             info!("Phase 2: Attempting copy into system PAM module directories");
             let pam_target_dirs = [
                 "/lib/security/",
@@ -4650,11 +4709,28 @@ impl AttackTechnique for PamBackdoor {
             let mut copy_attempts: Vec<(String, bool)> = Vec::new();
             for dir in pam_target_dirs {
                 let dest = format!("{dir}{module_name}");
+                let dest_path = std::path::Path::new(&dest);
+
+                // Safety gate before any side-effect.  We use the
+                // technique's own audit log as the detection signal here
+                // rather than the kernel openat() trace.
+                if let Err(reason) = crate::safety::destructive_write::guarded_can_write(dest_path) {
+                    info!(
+                        "  [REFUSED] cp {fake_so} -> {dest}: {reason}"
+                    );
+                    copy_attempts.push((dest, false));
+                    continue;
+                }
+
                 info!("  Attempting cp {fake_so} -> {dest}");
                 let output = Command::new("cp").args([&fake_so, &dest]).output().await;
                 match output {
                     Ok(o) if o.status.success() => {
-                        warn!("[!] cp SUCCEEDED to {dest} -- copy will be cleaned up");
+                        warn!(
+                            "[!] cp SUCCEEDED to {dest} -- this path passed the \
+                             safety gate (was not protected and did not pre-exist); \
+                             the fake .so will be cleaned up"
+                        );
                         artifacts.push(dest.clone());
                         copy_attempts.push((dest, true));
                     }
@@ -4817,21 +4893,48 @@ impl AttackTechnique for PamBackdoor {
                             }
                         }
 
-                        // Remove any successful copies in system PAM directories.
+                        // Remove successful copies in system PAM directories
+                        // -- but ONLY if the destination is not under a
+                        // protected path.  Cleanup must never delete a file
+                        // it didn't create.  The execute() phase 2 guard
+                        // means a "successful" entry here should always be
+                        // a path that pre-flight allowed (i.e., not
+                        // protected), but we re-check at cleanup time to
+                        // defend against a tampered metadata file or a
+                        // future code change in execute() that loosens the
+                        // guard.
                         if let Some(copies) = json["copy_attempts"].as_array() {
                             for c in copies {
-                                if c["success"].as_bool().unwrap_or(false) {
-                                    if let Some(dest) = c["dest"].as_str() {
-                                        if Path::new(dest).exists() {
-                                            match fs::remove_file(dest) {
-                                                Ok(_) => info!(
-                                                    "[OK] Removed system-dir copy: {dest}"
-                                                ),
-                                                Err(e) => warn!(
-                                                    "Failed to remove {dest}: {e}"
-                                                ),
-                                            }
-                                        }
+                                if !c["success"].as_bool().unwrap_or(false) {
+                                    continue;
+                                }
+                                let Some(dest) = c["dest"].as_str() else {
+                                    continue;
+                                };
+                                let dest_path = Path::new(dest);
+                                if let Err(reason) =
+                                    crate::safety::destructive_write::guarded_can_remove(
+                                        dest_path,
+                                    )
+                                {
+                                    warn!(
+                                        "[REFUSED] Cleanup will NOT remove {dest}: \
+                                         {reason}.  This path is structurally \
+                                         protected -- a successful cp recorded \
+                                         against it suggests metadata tampering \
+                                         or a guard regression; leaving the file \
+                                         in place is the safe action."
+                                    );
+                                    continue;
+                                }
+                                if dest_path.exists() {
+                                    match fs::remove_file(dest_path) {
+                                        Ok(_) => info!(
+                                            "[OK] Removed system-dir copy: {dest}"
+                                        ),
+                                        Err(e) => warn!(
+                                            "Failed to remove {dest}: {e}"
+                                        ),
                                     }
                                 }
                             }
@@ -4840,14 +4943,28 @@ impl AttackTechnique for PamBackdoor {
                 }
             }
 
-            // Remove all artifact files (fake .so, backup, metadata).
+            // Remove all artifact files (fake .so, backup, metadata).  Same
+            // guard applies: an artifact path under a protected dir is a
+            // smell, refuse to remove it.
             for artifact in artifacts {
-                if Path::new(artifact).exists() {
-                    match fs::remove_file(artifact) {
-                        Ok(_) => info!("[OK] Removed artifact: {artifact}"),
-                        Err(e) => {
-                            warn!("Failed to remove artifact {artifact}: {e}")
-                        }
+                let artifact_path = Path::new(artifact);
+                if !artifact_path.exists() {
+                    continue;
+                }
+                if let Err(reason) =
+                    crate::safety::destructive_write::guarded_can_remove(artifact_path)
+                {
+                    warn!(
+                        "[REFUSED] Cleanup will NOT remove artifact {artifact}: \
+                         {reason}.  Path is structurally protected; leaving in \
+                         place rather than risk deleting a real system file."
+                    );
+                    continue;
+                }
+                match fs::remove_file(artifact_path) {
+                    Ok(_) => info!("[OK] Removed artifact: {artifact}"),
+                    Err(e) => {
+                        warn!("Failed to remove artifact {artifact}: {e}")
                     }
                 }
             }

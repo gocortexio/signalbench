@@ -44,7 +44,7 @@ impl AttackTechnique for DNSReconTest {
                     name: "domain".to_string(),
                     description: "Target domain to perform reconnaissance on".to_string(),
                     required: false,
-                    default: Some("example.com".to_string()),
+                    default: Some("simonsigre.com".to_string()),
                 },
                 TechniqueParameter {
                     name: "output_dir".to_string(),
@@ -66,7 +66,7 @@ impl AttackTechnique for DNSReconTest {
         let domain = config
             .parameters
             .get("domain")
-            .unwrap_or(&"example.com".to_string())
+            .unwrap_or(&"simonsigre.com".to_string())
             .clone();
 
         Box::pin(async move {
