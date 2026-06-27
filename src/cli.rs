@@ -36,6 +36,11 @@ pub struct Cli {
     /// Delay in seconds before cleanup (detection window for security tools)
     #[arg(long, global = true, default_value_t = 0)]
     pub delay_cleanup: u64,
+
+    /// Delay in seconds between techniques when running multiple (gives detection
+    /// engines a clean inter-event gap; default 5, use 0 to disable)
+    #[arg(long, global = true, default_value_t = 5)]
+    pub step_delay: u64,
 }
 
 #[derive(Subcommand)]
@@ -86,6 +91,28 @@ pub enum Commands {
 
         /// Chain execution mode: each TTP runs as a child process of the previous one,
         /// building a realistic parent/child process tree (local execution only)
+        #[arg(long, default_value_t = false)]
+        chain: bool,
+    },
+
+    /// Run a named suite of techniques in order (e.g. c2-framework-profiling)
+    Suite {
+        /// Suite name (e.g. c2-framework-profiling, network-port-scan)
+        name: String,
+
+        /// Perform a dry run without executing any operations
+        #[arg(long, default_value_t = false)]
+        dry_run: bool,
+
+        /// Skip cleanup after technique execution
+        #[arg(long, default_value_t = false)]
+        no_cleanup: bool,
+
+        /// Optional path to a config file for technique parameters
+        #[arg(short, long)]
+        config: Option<PathBuf>,
+
+        /// Chain execution mode: each TTP runs as a child process of the previous one
         #[arg(long, default_value_t = false)]
         chain: bool,
     },

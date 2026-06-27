@@ -450,6 +450,12 @@ pub struct SuidBinary {}
 
 #[async_trait]
 impl AttackTechnique for SuidBinary {
+    // Compiles a C program into a SUID binary; without gcc there is no binary
+    // and no exploit telemetry, and the technique hard-fails. Skip cleanly.
+    fn required_tools(&self) -> Vec<&'static str> {
+        vec!["gcc"]
+    }
+
     fn info(&self) -> Technique {
         Technique {
             id: "T1548.001".to_string(),
@@ -1356,7 +1362,7 @@ impl AttackTechnique for PrivilegeEscalationExploit {
 
             writeln!(
                 log,
-                "═══════════════════════════════════════════════════════════════════════"
+                "======================================================================="
             )
             .unwrap();
             writeln!(
@@ -1379,7 +1385,7 @@ impl AttackTechnique for PrivilegeEscalationExploit {
             .unwrap();
             writeln!(
                 log,
-                "═══════════════════════════════════════════════════════════════════════\n"
+                "=======================================================================\n"
             )
             .unwrap();
 
@@ -1406,7 +1412,7 @@ impl AttackTechnique for PrivilegeEscalationExploit {
             writeln!(log, "Command: sudo -u#-1 id").unwrap();
             writeln!(
                 log,
-                "─────────────────────────────────────────────────────────────────────"
+                "---------------------------------------------------------------------"
             )
             .unwrap();
             info!("Attempting CVE-2019-14287 PoC: sudo -u#-1 id");
@@ -1449,7 +1455,7 @@ impl AttackTechnique for PrivilegeEscalationExploit {
                 writeln!(log, "Command: find / -perm -4000 -type f 2>/dev/null").unwrap();
                 writeln!(
                     log,
-                    "─────────────────────────────────────────────────────────────────────"
+                    "---------------------------------------------------------------------"
                 )
                 .unwrap();
 
@@ -1578,7 +1584,7 @@ impl AttackTechnique for PrivilegeEscalationExploit {
                 writeln!(log, "Locations: /etc/systemd/system/, /lib/systemd/system/").unwrap();
                 writeln!(
                     log,
-                    "─────────────────────────────────────────────────────────────────────"
+                    "---------------------------------------------------------------------"
                 )
                 .unwrap();
 
@@ -1744,7 +1750,7 @@ impl AttackTechnique for PrivilegeEscalationExploit {
                 .unwrap();
                 writeln!(
                     log,
-                    "─────────────────────────────────────────────────────────────────────"
+                    "---------------------------------------------------------------------"
                 )
                 .unwrap();
 
@@ -1878,7 +1884,7 @@ impl AttackTechnique for PrivilegeEscalationExploit {
                 writeln!(log, "Command: sudo -l").unwrap();
                 writeln!(
                     log,
-                    "─────────────────────────────────────────────────────────────────────"
+                    "---------------------------------------------------------------------"
                 )
                 .unwrap();
 
@@ -2012,7 +2018,7 @@ impl AttackTechnique for PrivilegeEscalationExploit {
                 writeln!(log, "Location: /var/run/docker.sock").unwrap();
                 writeln!(
                     log,
-                    "─────────────────────────────────────────────────────────────────────"
+                    "---------------------------------------------------------------------"
                 )
                 .unwrap();
 
@@ -2168,7 +2174,7 @@ impl AttackTechnique for PrivilegeEscalationExploit {
             writeln!(log, "Files: /etc/passwd, /etc/shadow").unwrap();
             writeln!(
                 log,
-                "─────────────────────────────────────────────────────────────────────"
+                "---------------------------------------------------------------------"
             )
             .unwrap();
 
@@ -2230,7 +2236,7 @@ impl AttackTechnique for PrivilegeEscalationExploit {
                 writeln!(log, "Commands: uname -a, uname -r").unwrap();
                 writeln!(
                     log,
-                    "─────────────────────────────────────────────────────────────────────"
+                    "---------------------------------------------------------------------"
                 )
                 .unwrap();
 
@@ -2254,7 +2260,7 @@ impl AttackTechnique for PrivilegeEscalationExploit {
                     writeln!(log, "\n  Known Kernel Exploit Patterns (CVE Database):").unwrap();
                     writeln!(
                         log,
-                        "  ─────────────────────────────────────────────────────────────────"
+                        "  -----------------------------------------------------------------"
                     )
                     .unwrap();
                     writeln!(
@@ -2320,13 +2326,13 @@ impl AttackTechnique for PrivilegeEscalationExploit {
             // Summary
             writeln!(
                 log,
-                "\n═══════════════════════════════════════════════════════════════════════"
+                "\n======================================================================="
             )
             .unwrap();
             writeln!(log, "PRIVILEGE ESCALATION EXPLOITATION SUMMARY").unwrap();
             writeln!(
                 log,
-                "═══════════════════════════════════════════════════════════════════════"
+                "======================================================================="
             )
             .unwrap();
             writeln!(log, "ENUMERATION RESULTS:").unwrap();
@@ -2415,7 +2421,7 @@ impl AttackTechnique for PrivilegeEscalationExploit {
 
             writeln!(
                 log,
-                "\n═══════════════════════════════════════════════════════════════════════"
+                "\n======================================================================="
             )
             .unwrap();
             writeln!(
@@ -2431,7 +2437,7 @@ impl AttackTechnique for PrivilegeEscalationExploit {
             writeln!(log, "All operations are REVERSIBLE via cleanup").unwrap();
             writeln!(
                 log,
-                "═══════════════════════════════════════════════════════════════════════"
+                "======================================================================="
             )
             .unwrap();
 
@@ -2589,6 +2595,12 @@ pub struct SudoUnsignedIntegerEscalation {}
 
 #[async_trait]
 impl AttackTechnique for SudoUnsignedIntegerEscalation {
+    // The CVE-2019-14287 test runs `sudo -u#-1 …`; without the sudo binary there
+    // is no sudo-exploit telemetry and no substitute, so skip rather than fail.
+    fn required_tools(&self) -> Vec<&'static str> {
+        vec!["sudo"]
+    }
+
     fn info(&self) -> Technique {
         Technique {
             id: "T1548.003.001".to_string(),
@@ -2680,35 +2692,6 @@ impl AttackTechnique for SudoUnsignedIntegerEscalation {
                 "# --------------------------------------------------------"
             )
             .unwrap();
-
-            // Check if sudo is available
-            let sudo_check = Command::new("which").arg("sudo").output().await;
-
-            match sudo_check {
-                Ok(output) => {
-                    if !output.status.success() {
-                        writeln!(log_file_handle, "ERROR: sudo command not found on system")
-                            .unwrap();
-                        return Ok(SimulationResult {
-                            technique_id: self.info().id,
-                            success: false,
-                            message: "sudo command not available on system".to_string(),
-                            artifacts,
-                            cleanup_required: true,
-                        });
-                    }
-                    writeln!(
-                        log_file_handle,
-                        "sudo command available at: {}",
-                        String::from_utf8_lossy(&output.stdout).trim()
-                    )
-                    .unwrap();
-                }
-                Err(e) => {
-                    writeln!(log_file_handle, "ERROR: Failed to check for sudo: {e}").unwrap();
-                    return Err(format!("Failed to check for sudo: {e}"));
-                }
-            }
 
             // Check sudo version for vulnerability assessment
             let version_check = Command::new("sudo").args(["--version"]).output().await;

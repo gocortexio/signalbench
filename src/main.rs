@@ -21,6 +21,7 @@ mod easter_egg;
 mod logger;
 mod runner;
 mod safety;
+mod suites;
 mod techniques;
 mod utils;
 mod voltron;
@@ -105,6 +106,7 @@ async fn run_command(cli: Cli) -> Result<(), String> {
     let force = cli.force;
     let debug = cli.debug;
     let delay_cleanup = cli.delay_cleanup;
+    let step_delay = cli.step_delay;
 
     match cli.command {
         Commands::List => runner::list_techniques(),
@@ -128,6 +130,7 @@ async fn run_command(cli: Cli) -> Result<(), String> {
                     force,
                     debug,
                     delay_cleanup,
+                    step_delay,
                     chain,
                 },
             )
@@ -153,6 +156,30 @@ async fn run_command(cli: Cli) -> Result<(), String> {
                     force,
                     debug,
                     delay_cleanup,
+                    step_delay,
+                    chain,
+                },
+            )
+            .await
+        }
+        Commands::Suite {
+            name,
+            dry_run,
+            no_cleanup,
+            config,
+            chain,
+        } => {
+            safety::check_environment()?;
+            runner::run_suite(
+                &name,
+                runner::RunOptions {
+                    dry_run,
+                    no_cleanup,
+                    config_path: config,
+                    force,
+                    debug,
+                    delay_cleanup,
+                    step_delay,
                     chain,
                 },
             )

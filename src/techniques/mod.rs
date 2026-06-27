@@ -8,6 +8,7 @@
 // Developed by Simon Sigre (simon@gocortex.io)
 // Part of the GoCortex.io platform for security testing and validation
 
+pub mod bpfdoor;
 pub mod collection;
 pub mod command_and_control;
 pub mod command_interpreter;
@@ -27,6 +28,7 @@ pub mod persistence;
 pub mod persistence_system_process;
 pub mod privilege_escalation;
 pub mod protocol_lateral_movement;
+pub mod sharepoint_exfil;
 pub mod software;
 
 use crate::config::TechniqueConfig;
@@ -84,6 +86,19 @@ pub trait AttackTechnique: Send + Sync {
     /// Returns the technique information
     fn info(&self) -> Technique;
 
+    /// External binaries without which this technique produces essentially no
+    /// signal AND for which it has no native/shell fallback.
+    ///
+    /// Only HARD, all-or-nothing dependencies belong here (e.g. `gcc` for a
+    /// compile-and-run exploit). The runner pre-checks these and reports the
+    /// technique as SKIPPED — naming the missing package — instead of a
+    /// misleading FAILED, unless `--force` is set. Techniques that degrade
+    /// per-section, or that fall back to a native/shell implementation, must
+    /// NOT list their tools here.
+    fn required_tools(&self) -> Vec<&'static str> {
+        Vec::new()
+    }
+
     /// Executes the technique with the given configuration
     fn execute<'a>(&'a self, config: &'a TechniqueConfig, dry_run: bool) -> ExecuteFuture<'a>;
 
@@ -136,6 +151,7 @@ pub fn get_all_techniques() -> Vec<Box<dyn AttackTechnique>> {
         Box::new(defense_evasion::SelfDeletingBinary {}),
         Box::new(defense_evasion::DisableSecurityTools {}),
         Box::new(defense_evasion::ReflectiveCodeLoading {}),
+        Box::new(defense_evasion::IoUringEvasion {}),
         // Credential access techniques
         Box::new(credential_access::MemoryDumping {}),
         Box::new(credential_access::KeyloggerSimulation {}),
@@ -148,7 +164,8 @@ pub fn get_all_techniques() -> Vec<Box<dyn AttackTechnique>> {
         Box::new(discovery::SystemInformationDiscovery {}),
         Box::new(discovery::NetworkDiscovery {}),
         Box::new(discovery::NetworkConnectionsDiscovery {}),
-        Box::new(network::NetworkServiceDiscovery {}),
+        Box::new(network::NetworkScanCommon {}),
+        Box::new(network::NetworkScanHighValue {}),
         // Lateral movement techniques
         Box::new(lateral_movement::SshLateralMovement {}),
         Box::new(lateral_movement::VncLateralMovement {}),
@@ -160,12 +177,17 @@ pub fn get_all_techniques() -> Vec<Box<dyn AttackTechnique>> {
         Box::new(execution::UncommonRemoteShellCommands {}),
         // Exfiltration techniques
         Box::new(network::ExfiltrationOverAlternativeProtocol {}),
+        Box::new(sharepoint_exfil::SharePointExfil {}),
         // Command and Control techniques
         Box::new(network::NonApplicationLayerProtocol {}),
         Box::new(command_and_control::IngressToolTransfer {}),
         Box::new(command_and_control::TrafficSignaling {}),
         Box::new(command_and_control::SuspiciousGitHubToolTransfer {}),
-        Box::new(command_and_control::SuspiciousDomainConnections {}),
+        Box::new(command_and_control::SuspiciousDomainsHttp {}),
+        Box::new(command_and_control::SuspiciousDomainsStratum {}),
+        Box::new(command_and_control::SuspiciousDomainsAsyncRat {}),
+        Box::new(command_and_control::SuspiciousDomainsDns {}),
+        Box::new(command_and_control::SuspiciousDomainsSoftEther {}),
         // Advanced Command Interpreter
         Box::new(command_interpreter::AdvancedCommandExecution {}),
         // System Process Persistence
@@ -176,6 +198,7 @@ pub fn get_all_techniques() -> Vec<Box<dyn AttackTechnique>> {
         Box::new(dnscat_c2::DnscatC2Test {}),
         // Software simulations
         Box::new(software::S1109Pacemaker {}),
+        Box::new(bpfdoor::S1161BpfDoor {}),
         // Collection techniques
         Box::new(collection::AutomatedCollection {}),
         // Impact techniques

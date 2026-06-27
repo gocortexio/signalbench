@@ -15,14 +15,17 @@ use crate::techniques::{
 use async_trait::async_trait;
 
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+use futures::stream::{self, StreamExt};
 use log::{debug, error, info, warn};
 use std::fs::File;
 use std::io::Write;
 use std::path::Path;
+use std::sync::Arc;
 use std::time::Instant;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpStream, UdpSocket};
 use tokio::process::Command;
+use tokio::sync::Semaphore;
 use tokio::time::{sleep, timeout, Duration};
 
 // Targeted high-value ports for security reconnaissance
@@ -221,6 +224,7 @@ async fn probe_udp_port(host: &str, port: u16) -> Result<bool, String> {
 // ======================================
 // T1046 - Network Service Discovery
 // ======================================
+#[allow(dead_code)]
 pub struct NetworkServiceDiscovery {}
 
 #[async_trait]
@@ -1838,6 +1842,497 @@ impl AttackTechnique for NonApplicationLayerProtocol {
             for artifact in artifacts {
                 if Path::new(artifact).exists() {
                     // Check if it's a directory
+                    if Path::new(artifact).is_dir() {
+                        if let Err(e) = std::fs::remove_dir_all(artifact) {
+                            error!("Failed to remove directory {artifact}: {e}");
+                        } else {
+                            debug!("Removed directory: {artifact}");
+                        }
+                    } else if let Err(e) = std::fs::remove_file(artifact) {
+                        error!("Failed to remove artifact {artifact}: {e}");
+                    } else {
+                        debug!("Removed artifact: {artifact}");
+                    }
+                }
+            }
+            Ok(())
+        })
+    }
+}
+
+// ======================================
+// T1046-COMMON - Network Service Discovery (Common Ports)
+// ======================================
+pub struct NetworkScanCommon {}
+
+#[async_trait]
+impl AttackTechnique for NetworkScanCommon {
+    fn info(&self) -> Technique {
+        Technique {
+            id: "T1046-COMMON".to_string(),
+            name: "Network Service Discovery (Common Ports)".to_string(),
+            description: "Concurrent TCP scan of ports 1-1024 plus backdoor ports (1337, 4444, 31337) with UDP probes on 53/123/161/514 and protocol-specific banner grabbing. Generates high-volume connection telemetry for XDR/EDR port-scan detection.".to_string(),
+            category: "DISCOVERY".to_string(),
+            parameters: vec![
+                TechniqueParameter {
+                    name: "target_hosts".to_string(),
+                    description: "Target hosts to scan (comma-separated IPs). Defaults to sinkhole.signalbench.sigre.xyz (fallback 198.135.184.22).".to_string(),
+                    required: false,
+                    default: None,
+                },
+                TechniqueParameter {
+                    name: "output_file".to_string(),
+                    description: "Path to save scan results".to_string(),
+                    required: false,
+                    default: Some("/tmp/signalbench_t1046_common.log".to_string()),
+                },
+            ],
+            detection: "High-volume sequential TCP connection attempts and UDP probes to well-known ports generate XDR/EDR port-scan alerts.".to_string(),
+            cleanup_support: true,
+            platforms: vec!["Linux".to_string()],
+            permissions: vec!["user".to_string()],
+            voltron_only: false,
+        }
+    }
+
+    fn execute<'a>(&'a self, config: &'a TechniqueConfig, dry_run: bool) -> ExecuteFuture<'a> {
+        Box::pin(async move {
+            let technique_info = self.info();
+            let scan_start = Instant::now();
+
+            let sinkhole_ip = crate::techniques::resolve_sinkhole_ip().await;
+            let target_hosts = config
+                .parameters
+                .get("target_hosts")
+                .cloned()
+                .unwrap_or_else(|| sinkhole_ip.clone());
+            let is_fallback = target_hosts == crate::techniques::SINKHOLE_IP_FALLBACK;
+            let output_file = config
+                .parameters
+                .get("output_file")
+                .cloned()
+                .unwrap_or_else(|| "/tmp/signalbench_t1046_common.log".to_string());
+
+            if dry_run {
+                return Ok(SimulationResult {
+                    technique_id: technique_info.id,
+                    success: true,
+                    message: format!(
+                        "Would scan ports 1-1024 + backdoor ports on {} (concurrent, 400 ms timeout) with UDP probes on 53/123/161/514",
+                        target_hosts
+                    ),
+                    artifacts: vec![output_file],
+                    cleanup_required: true,
+                });
+            }
+
+            // 400 ms TCP timeout: fast enough for concurrent telemetry generation,
+            // generous enough for a remote sinkhole response.
+            let tcp_timeout = Duration::from_millis(400);
+
+            let hosts: Vec<String> = target_hosts
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .collect();
+
+            let mut port_list: Vec<u16> = (1u16..=1024).collect();
+            for &p in &[1337u16, 4444, 31337] {
+                if !port_list.contains(&p) {
+                    port_list.push(p);
+                }
+            }
+            let udp_ports: Vec<u16> = vec![53, 123, 161, 514];
+
+            let mut file = File::create(&output_file)
+                .map_err(|e| format!("Failed to create output file: {e}"))?;
+
+            writeln!(file, "# SignalBench Network Service Discovery - Common Ports").unwrap();
+            writeln!(file, "# MITRE ATT&CK Technique: T1046-COMMON").unwrap();
+            writeln!(file, "# Target hosts: {target_hosts}").unwrap();
+            writeln!(
+                file,
+                "# TCP ports: 1-1024 + backdoor ports 1337,4444,31337 ({} total)",
+                port_list.len()
+            )
+            .unwrap();
+            writeln!(file, "# UDP ports: 53,123,161,514").unwrap();
+            writeln!(file, "# Concurrency: up to 100 simultaneous TCP probes, 400 ms timeout").unwrap();
+            writeln!(file, "# Scan started: {}", chrono::Local::now()).unwrap();
+            writeln!(file, "# ========================================================").unwrap();
+
+            let mut total_ports_scanned = 0u32;
+            let mut total_open_ports = 0u32;
+            let mut total_banners_grabbed = 0u32;
+            let mut total_udp_probes = 0u32;
+            let mut total_udp_responses = 0u32;
+
+            for host in &hosts {
+                writeln!(file, "\n[*] Scanning host: {host}").unwrap();
+                writeln!(
+                    file,
+                    "[*] {} TCP ports - concurrent (up to 100 at a time, 400 ms timeout)",
+                    port_list.len()
+                )
+                .unwrap();
+
+                // Fan out up to 100 simultaneous TCP probes.
+                // buffer_unordered drives at most 100 futures concurrently; results
+                // arrive out of order and are sorted by port before writing to the log.
+                let semaphore = Arc::new(Semaphore::new(100));
+                let mut scan_results: Vec<(u16, bool, bool, Option<String>)> =
+                    stream::iter(port_list.iter().copied())
+                        .map(|port| {
+                            let h = host.clone();
+                            let sem = Arc::clone(&semaphore);
+                            async move {
+                                let _permit = sem.acquire().await.unwrap();
+                                let addr = format!("{h}:{port}");
+                                match timeout(tcp_timeout, TcpStream::connect(&addr)).await {
+                                    Ok(Ok(mut stream)) => {
+                                        let banner = grab_banner(&mut stream, port).await;
+                                        // (port, open, timed_out, banner)
+                                        (port, true, false, banner)
+                                    }
+                                    Ok(Err(_)) => (port, false, false, None),
+                                    Err(_) => (port, false, true, None),
+                                }
+                            }
+                        })
+                        .buffer_unordered(100)
+                        .collect()
+                        .await;
+                scan_results.sort_by_key(|(p, _, _, _)| *p);
+
+                for (port, open, timed_out, banner) in &scan_results {
+                    total_ports_scanned += 1;
+                    if *open {
+                        total_open_ports += 1;
+                        let service_name = get_service_name(*port);
+                        writeln!(file, "\nPort {port:5} - OPEN - {service_name}").unwrap();
+                        info!("[T1046-COMMON] Port {port} on {host} is OPEN");
+                        if let Some(banner_text) = banner {
+                            total_banners_grabbed += 1;
+                            writeln!(file, "  Banner: {}", banner_text.trim()).unwrap();
+                        } else {
+                            writeln!(file, "  Banner: <no banner received>").unwrap();
+                        }
+                    } else if *timed_out {
+                        writeln!(file, "Port {port:5} - FILTERED/TIMEOUT").unwrap();
+                        debug!("[T1046-COMMON] Port {port} on {host} timed out");
+                    } else {
+                        writeln!(file, "Port {port:5} - CLOSED").unwrap();
+                        debug!("[T1046-COMMON] Port {port} on {host} CLOSED");
+                    }
+                }
+
+                writeln!(file, "\n[*] TCP scan complete for {host}").unwrap();
+                writeln!(file, "\n[*] Starting UDP scan on {host}").unwrap();
+
+                for port in &udp_ports {
+                    total_udp_probes += 1;
+                    let service_name = get_service_name(*port);
+                    writeln!(file, "\nUDP Port {port:5} - {service_name}").unwrap();
+                    match probe_udp_port(host, *port).await {
+                        Ok(true) => {
+                            total_udp_responses += 1;
+                            writeln!(file, "  Status: RESPONSE RECEIVED (likely open)").unwrap();
+                        }
+                        Ok(false) => {
+                            writeln!(file, "  Status: NO RESPONSE (open/filtered/closed)").unwrap();
+                        }
+                        Err(e) => {
+                            writeln!(file, "  Status: ERROR - {e}").unwrap();
+                            if is_fallback {
+                                debug!("[T1046-COMMON] UDP probe error on {host}:{port}: {e}");
+                            } else {
+                                warn!("[T1046-COMMON] UDP probe error on {host}:{port}: {e}");
+                            }
+                        }
+                    }
+                    sleep(Duration::from_millis(50)).await;
+                }
+
+                writeln!(file, "\n[*] UDP scan complete for {host}").unwrap();
+            }
+
+            let scan_duration = scan_start.elapsed();
+            let total_connections = total_ports_scanned + total_udp_probes;
+
+            writeln!(file, "\n# ========================================================").unwrap();
+            writeln!(file, "# SCAN SUMMARY").unwrap();
+            writeln!(file, "# TCP ports scanned: {total_ports_scanned}").unwrap();
+            writeln!(file, "# Open TCP ports: {total_open_ports}").unwrap();
+            writeln!(file, "# Banners grabbed: {total_banners_grabbed}").unwrap();
+            writeln!(file, "# UDP probes sent: {total_udp_probes}").unwrap();
+            writeln!(file, "# UDP responses received: {total_udp_responses}").unwrap();
+            writeln!(file, "# Total connections: {total_connections}").unwrap();
+            writeln!(file, "# Scan duration: {:.2}s", scan_duration.as_secs_f64()).unwrap();
+            writeln!(file, "# Scan completed: {}", chrono::Local::now()).unwrap();
+            writeln!(file, "# ========================================================").unwrap();
+
+            drop(file);
+
+            let summary = format!(
+                "Common port scan: {} TCP ({} open, {} banners), {} UDP ({} responses) in {:.2}s",
+                total_ports_scanned,
+                total_open_ports,
+                total_banners_grabbed,
+                total_udp_probes,
+                total_udp_responses,
+                scan_duration.as_secs_f64()
+            );
+
+            info!("[T1046-COMMON] {summary}");
+            println!("\n[T1046-COMMON] {summary}");
+            println!("[T1046-COMMON] Results saved to: {output_file}");
+
+            Ok(SimulationResult {
+                technique_id: technique_info.id,
+                success: true,
+                message: summary,
+                artifacts: vec![output_file],
+                cleanup_required: true,
+            })
+        })
+    }
+
+    fn cleanup<'a>(&'a self, artifacts: &'a [String]) -> CleanupFuture<'a> {
+        Box::pin(async move {
+            for artifact in artifacts {
+                if Path::new(artifact).exists() {
+                    if Path::new(artifact).is_dir() {
+                        if let Err(e) = std::fs::remove_dir_all(artifact) {
+                            error!("Failed to remove directory {artifact}: {e}");
+                        } else {
+                            debug!("Removed directory: {artifact}");
+                        }
+                    } else if let Err(e) = std::fs::remove_file(artifact) {
+                        error!("Failed to remove artifact {artifact}: {e}");
+                    } else {
+                        debug!("Removed artifact: {artifact}");
+                    }
+                }
+            }
+            Ok(())
+        })
+    }
+}
+
+// ======================================
+// T1046-HIGH-VALUE - Network Service Discovery (High-Value Ports)
+// ======================================
+pub struct NetworkScanHighValue {}
+
+#[async_trait]
+impl AttackTechnique for NetworkScanHighValue {
+    fn info(&self) -> Technique {
+        Technique {
+            id: "T1046-HIGH-VALUE".to_string(),
+            name: "Network Service Discovery (High-Value Ports)".to_string(),
+            description: "Targeted TCP scan of ~100 high-value ports: databases (MySQL, PostgreSQL, MongoDB, Redis, Cassandra, Elasticsearch), container/K8s APIs (Docker, etcd, Kubelet), message queues (RabbitMQ, Kafka, MQTT), VPN endpoints (OpenVPN, IPsec, L2TP), and IoT/industrial protocols (Modbus, BACnet). Includes protocol-specific banner grabbing.".to_string(),
+            category: "DISCOVERY".to_string(),
+            parameters: vec![
+                TechniqueParameter {
+                    name: "target_hosts".to_string(),
+                    description: "Target hosts to scan (comma-separated IPs). Defaults to sinkhole.signalbench.sigre.xyz (fallback 198.135.184.22).".to_string(),
+                    required: false,
+                    default: None,
+                },
+                TechniqueParameter {
+                    name: "output_file".to_string(),
+                    description: "Path to save scan results".to_string(),
+                    required: false,
+                    default: Some("/tmp/signalbench_t1046_highvalue.log".to_string()),
+                },
+            ],
+            detection: "Targeted access to database ports (3306, 5432, 27017), container APIs (2375, 10250, 6443), VPN endpoints (1194, 500), and industrial protocols (502, 47808) triggers XDR/EDR high-severity alerts.".to_string(),
+            cleanup_support: true,
+            platforms: vec!["Linux".to_string()],
+            permissions: vec!["user".to_string()],
+            voltron_only: false,
+        }
+    }
+
+    fn execute<'a>(&'a self, config: &'a TechniqueConfig, dry_run: bool) -> ExecuteFuture<'a> {
+        Box::pin(async move {
+            let technique_info = self.info();
+            let scan_start = Instant::now();
+
+            let sinkhole_ip = crate::techniques::resolve_sinkhole_ip().await;
+            let target_hosts = config
+                .parameters
+                .get("target_hosts")
+                .cloned()
+                .unwrap_or_else(|| sinkhole_ip.clone());
+            let tcp_timeout = if target_hosts == crate::techniques::SINKHOLE_IP_FALLBACK {
+                Duration::from_secs(1)
+            } else {
+                Duration::from_secs(2)
+            };
+            let output_file = config
+                .parameters
+                .get("output_file")
+                .cloned()
+                .unwrap_or_else(|| "/tmp/signalbench_t1046_highvalue.log".to_string());
+
+            if dry_run {
+                return Ok(SimulationResult {
+                    technique_id: technique_info.id,
+                    success: true,
+                    message: format!(
+                        "Would scan {} high-value ports on {} (databases, containers, VPN, IoT)",
+                        TARGETED_HIGH_VALUE_PORTS.len(),
+                        target_hosts
+                    ),
+                    artifacts: vec![output_file],
+                    cleanup_required: true,
+                });
+            }
+
+            let hosts: Vec<String> = target_hosts
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .collect();
+
+            let mut file = File::create(&output_file)
+                .map_err(|e| format!("Failed to create output file: {e}"))?;
+
+            writeln!(
+                file,
+                "# SignalBench Network Service Discovery - High-Value Ports"
+            )
+            .unwrap();
+            writeln!(file, "# MITRE ATT&CK Technique: T1046-HIGH-VALUE").unwrap();
+            writeln!(file, "# Target hosts: {target_hosts}").unwrap();
+            writeln!(
+                file,
+                "# Ports: {} high-value targets (databases, containers, VPN, IoT)",
+                TARGETED_HIGH_VALUE_PORTS.len()
+            )
+            .unwrap();
+            writeln!(file, "# Scan started: {}", chrono::Local::now()).unwrap();
+            writeln!(
+                file,
+                "# ========================================================"
+            )
+            .unwrap();
+
+            let mut targeted_ports_scanned = 0u32;
+            let mut targeted_open_ports = 0u32;
+            let mut targeted_banners_grabbed = 0u32;
+
+            info!(
+                "[T1046-HIGH-VALUE] Starting targeted scan ({} ports)",
+                TARGETED_HIGH_VALUE_PORTS.len()
+            );
+            println!(
+                "[T1046-HIGH-VALUE] Scanning {} high-value ports...",
+                TARGETED_HIGH_VALUE_PORTS.len()
+            );
+
+            for host in &hosts {
+                writeln!(file, "\n[*] Scanning host: {host}").unwrap();
+
+                for port in TARGETED_HIGH_VALUE_PORTS {
+                    targeted_ports_scanned += 1;
+                    let addr = format!("{host}:{port}");
+                    let service_name = get_service_name(*port);
+
+                    debug!("[T1046-HIGH-VALUE] Scanning {addr} ({service_name})");
+
+                    match timeout(tcp_timeout, TcpStream::connect(&addr)).await {
+                        Ok(Ok(mut stream)) => {
+                            targeted_open_ports += 1;
+                            writeln!(
+                                file,
+                                "\nPort {port:5} - OPEN - {service_name} [HIGH-VALUE]"
+                            )
+                            .unwrap();
+                            info!(
+                                "[T1046-HIGH-VALUE] Port {port} on {host} is OPEN ({service_name})"
+                            );
+                            let banner = grab_banner(&mut stream, *port).await;
+                            if let Some(banner_text) = banner {
+                                targeted_banners_grabbed += 1;
+                                writeln!(file, "  Banner: {}", banner_text.trim()).unwrap();
+                            } else {
+                                writeln!(file, "  Banner: <no banner received>").unwrap();
+                            }
+                        }
+                        Ok(Err(e)) => {
+                            writeln!(
+                                file,
+                                "Port {port:5} - CLOSED - {service_name} - {e}"
+                            )
+                            .unwrap();
+                            debug!("[T1046-HIGH-VALUE] Port {port} on {host} CLOSED: {e}");
+                        }
+                        Err(_) => {
+                            writeln!(file, "Port {port:5} - FILTERED - {service_name}").unwrap();
+                            debug!(
+                                "[T1046-HIGH-VALUE] Port {port} on {host} FILTERED/TIMEOUT"
+                            );
+                        }
+                    }
+
+                    sleep(Duration::from_millis(10)).await;
+                }
+
+                writeln!(file, "\n[*] Scan complete for {host}").unwrap();
+            }
+
+            let scan_duration = scan_start.elapsed();
+
+            writeln!(
+                file,
+                "\n# ========================================================"
+            )
+            .unwrap();
+            writeln!(file, "# SCAN SUMMARY").unwrap();
+            writeln!(file, "# Ports scanned: {targeted_ports_scanned}").unwrap();
+            writeln!(file, "# Open ports: {targeted_open_ports}").unwrap();
+            writeln!(file, "# Banners grabbed: {targeted_banners_grabbed}").unwrap();
+            writeln!(
+                file,
+                "# Scan duration: {:.2}s",
+                scan_duration.as_secs_f64()
+            )
+            .unwrap();
+            writeln!(file, "# Scan completed: {}", chrono::Local::now()).unwrap();
+            writeln!(
+                file,
+                "# ========================================================"
+            )
+            .unwrap();
+
+            drop(file);
+
+            let summary = format!(
+                "High-value port scan: {} ports ({} open, {} banners) in {:.2}s",
+                targeted_ports_scanned,
+                targeted_open_ports,
+                targeted_banners_grabbed,
+                scan_duration.as_secs_f64()
+            );
+
+            info!("[T1046-HIGH-VALUE] {summary}");
+            println!("\n[T1046-HIGH-VALUE] {summary}");
+            println!("[T1046-HIGH-VALUE] Results saved to: {output_file}");
+
+            Ok(SimulationResult {
+                technique_id: technique_info.id,
+                success: true,
+                message: summary,
+                artifacts: vec![output_file],
+                cleanup_required: true,
+            })
+        })
+    }
+
+    fn cleanup<'a>(&'a self, artifacts: &'a [String]) -> CleanupFuture<'a> {
+        Box::pin(async move {
+            for artifact in artifacts {
+                if Path::new(artifact).exists() {
                     if Path::new(artifact).is_dir() {
                         if let Err(e) = std::fs::remove_dir_all(artifact) {
                             error!("Failed to remove directory {artifact}: {e}");

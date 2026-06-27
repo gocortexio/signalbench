@@ -20,9 +20,9 @@ pub use state::TechniqueJournal;
 use std::path::PathBuf;
 
 pub fn keygen_command(output: PathBuf, _hostname: Option<String>) -> Result<(), String> {
-    println!("╔═══════════════════════════════════════════════════════════════════════╗");
-    println!("║         SignalBench Voltron - Pre-Shared Key Generation              ║");
-    println!("╚═══════════════════════════════════════════════════════════════════════╝\n");
+    println!("+=======================================================================+");
+    println!("|         SignalBench Voltron - Pre-Shared Key Generation              |");
+    println!("+=======================================================================+\n");
 
     println!("Generating 256-bit pre-shared key...");
     let psk = PreSharedKey::generate();
@@ -36,49 +36,49 @@ pub fn keygen_command(output: PathBuf, _hostname: Option<String>) -> Result<(), 
 
     println!("  [OK] Key saved successfully (permissions: 0600)");
 
-    println!("\n╔═══════════════════════════════════════════════════════════════════════╗");
-    println!("║                         USAGE INSTRUCTIONS                            ║");
-    println!("╠═══════════════════════════════════════════════════════════════════════╣");
-    println!("║                                                                       ║");
+    println!("\n+=======================================================================+");
+    println!("|                         USAGE INSTRUCTIONS                            |");
+    println!("+=======================================================================+");
+    println!("|                                                                       |");
     println!(
-        "║  IMPORTANT: Copy {} to all servers and clients          ║",
+        "|  IMPORTANT: Copy {} to all servers and clients          |",
         output.display()
     );
-    println!("║             All endpoints must use the SAME key file.                 ║");
-    println!("║                                                                       ║");
-    println!("║  Start Voltron Server:                                                ║");
+    println!("|             All endpoints must use the SAME key file.                 |");
+    println!("|                                                                       |");
+    println!("|  Start Voltron Server:                                                |");
     println!(
-        "║    signalbench voltron server --psk {}                   ║",
+        "|    signalbench voltron server --psk {}                   |",
         output.display()
     );
-    println!("║                                                                       ║");
-    println!("║  Connect Client:                                                      ║");
-    println!("║    signalbench voltron client --server <IP>:16969 \\                  ║");
+    println!("|                                                                       |");
+    println!("|  Connect Client:                                                      |");
+    println!("|    signalbench voltron client --server <IP>:16969 \\                  |");
     println!(
-        "║                               --psk {}                    ║",
+        "|                               --psk {}                    |",
         output.display()
     );
-    println!("║                                                                       ║");
-    println!("║  Enable Debug Logging:                                                ║");
-    println!("║    Add --debug flag to see all handshake and encryption details      ║");
-    println!("║                                                                       ║");
-    println!("╠═══════════════════════════════════════════════════════════════════════╣");
-    println!("║  Key Details:                                                         ║");
-    println!("║    Algorithm:    ChaCha20-Poly1305 AEAD                               ║");
-    println!("║    Key Size:     256 bits (32 bytes)                                  ║");
+    println!("|                                                                       |");
+    println!("|  Enable Debug Logging:                                                |");
+    println!("|    Add --debug flag to see all handshake and encryption details      |");
+    println!("|                                                                       |");
+    println!("+=======================================================================+");
+    println!("|  Key Details:                                                         |");
+    println!("|    Algorithm:    ChaCha20-Poly1305 AEAD                               |");
+    println!("|    Key Size:     256 bits (32 bytes)                                  |");
 
     let fingerprint = psk.fingerprint();
     if fingerprint.len() <= 68 {
-        println!("║    Fingerprint:  {:<54} ║", fingerprint);
+        println!("|    Fingerprint:  {:<54} |", fingerprint);
     } else {
         let mid_point = fingerprint.len() / 2;
         let (line1, line2) = fingerprint.split_at(mid_point);
-        println!("║    Fingerprint:  {:<54} ║", line1);
-        println!("║                  {:<54} ║", line2);
+        println!("|    Fingerprint:  {:<54} |", line1);
+        println!("|                  {:<54} |", line2);
     }
 
-    println!("║    File:         {:<54} ║", output.display().to_string());
-    println!("╚═══════════════════════════════════════════════════════════════════════╝\n");
+    println!("|    File:         {:<54} |", output.display().to_string());
+    println!("+=======================================================================+\n");
 
     println!("[OK] Key generation complete! Copy this file to all endpoints.");
 
@@ -90,9 +90,9 @@ pub async fn server_command(
     journal_path: PathBuf,
     debug: bool,
 ) -> Result<(), String> {
-    println!("╔═══════════════════════════════════════════════════════════════════════╗");
-    println!("║                 SignalBench Voltron Server                           ║");
-    println!("╚═══════════════════════════════════════════════════════════════════════╝\n");
+    println!("+=======================================================================+");
+    println!("|                 SignalBench Voltron Server                           |");
+    println!("+=======================================================================+\n");
 
     if debug {
         println!("[DEBUG MODE ENABLED] Verbose logging to stderr");
@@ -122,12 +122,12 @@ pub async fn server_command(
     println!("  [OK] JSON-RPC 2.0 control channel active");
     println!("  [OK] Heartbeat monitor running (60s timeout)");
 
-    println!("\n╔═══════════════════════════════════════════════════════════════════════╗");
-    println!("║  Server is ready. Clients can connect using:                         ║");
-    println!("║    signalbench voltron client --server <IP>:16969                    ║");
-    println!("║                                                                       ║");
-    println!("║  Press Ctrl+C to stop the server                                     ║");
-    println!("╚═══════════════════════════════════════════════════════════════════════╝\n");
+    println!("\n+=======================================================================+");
+    println!("|  Server is ready. Clients can connect using:                         |");
+    println!("|    signalbench voltron client --server <IP>:16969                    |");
+    println!("|                                                                       |");
+    println!("|  Press Ctrl+C to stop the server                                     |");
+    println!("+=======================================================================+\n");
 
     server
         .start()
@@ -143,9 +143,9 @@ pub async fn client_command(
     hostname: Option<String>,
     debug: bool,
 ) -> Result<(), String> {
-    println!("╔═══════════════════════════════════════════════════════════════════════╗");
-    println!("║           SignalBench Voltron Client - Endpoint Node                 ║");
-    println!("╚═══════════════════════════════════════════════════════════════════════╝\n");
+    println!("+=======================================================================+");
+    println!("|           SignalBench Voltron Client - Endpoint Node                 |");
+    println!("+=======================================================================+\n");
 
     if debug {
         println!("[DEBUG MODE ENABLED] Verbose logging to stderr");
@@ -176,14 +176,14 @@ pub async fn client_command(
     println!("\nConnecting to Voltron server at {}...", server_addr);
     let mut client = VoltronClient::new_with_psk(server_addr.clone(), hostname.clone(), psk, debug);
 
-    println!("\n╔═══════════════════════════════════════════════════════════════════════╗");
-    println!("║  Voltron Client - Auto-reconnect Mode                                ║");
-    println!("║    Hostname: {:<58}║", hostname);
-    println!("║    Server:   {:<58}║", server_addr);
-    println!("║                                                                       ║");
-    println!("║  Reconnection: Exponential backoff 1s-30s on disconnect              ║");
-    println!("║  Press Ctrl+C to stop                                                ║");
-    println!("╚═══════════════════════════════════════════════════════════════════════╝\n");
+    println!("\n+=======================================================================+");
+    println!("|  Voltron Client - Auto-reconnect Mode                                |");
+    println!("|    Hostname: {:<58}|", hostname);
+    println!("|    Server:   {:<58}|", server_addr);
+    println!("|                                                                       |");
+    println!("|  Reconnection: Exponential backoff 1s-30s on disconnect              |");
+    println!("|  Press Ctrl+C to stop                                                |");
+    println!("+=======================================================================+\n");
 
     client
         .run_with_reconnect()
@@ -206,9 +206,9 @@ pub async fn run_command(
     use crate::voltron::protocol::{JsonRpcRequest, RunTechniqueParams, RunTechniqueResult};
     use tokio::net::TcpStream;
 
-    println!("\n╔═══════════════════════════════════════════════════════════════════════╗");
-    println!("║           SignalBench Voltron Run - Technique Dispatch              ║");
-    println!("╚═══════════════════════════════════════════════════════════════════════╝\n");
+    println!("\n+=======================================================================+");
+    println!("|           SignalBench Voltron Run - Technique Dispatch              |");
+    println!("+=======================================================================+\n");
 
     if debug {
         eprintln!("[DEBUG MODE ENABLED] Verbose logging to stderr");
@@ -316,9 +316,9 @@ pub async fn run_command(
         serde_json::from_value(response.result.unwrap_or(serde_json::Value::Null))
             .map_err(|e| format!("Failed to parse result: {}", e))?;
 
-    println!("\n╔═══════════════════════════════════════════════════════════════════════╗");
-    println!("║                      Dispatch Successful                             ║");
-    println!("╚═══════════════════════════════════════════════════════════════════════╝\n");
+    println!("\n+=======================================================================+");
+    println!("|                      Dispatch Successful                             |");
+    println!("+=======================================================================+\n");
     println!("  Technique ID:  {}", result.technique_id);
     println!("  Group ID:      {}", result.group_id);
     println!("  Status:        {}", result.status);
@@ -333,9 +333,9 @@ pub async fn formed_command(server_addr: String, psk_path: PathBuf) -> Result<()
     use std::time::SystemTime;
     use tokio::net::TcpStream;
 
-    println!("╔═══════════════════════════════════════════════════════════════════════╗");
-    println!("║                 Voltron Formation Status                             ║");
-    println!("╚═══════════════════════════════════════════════════════════════════════╝\n");
+    println!("+=======================================================================+");
+    println!("|                 Voltron Formation Status                             |");
+    println!("+=======================================================================+\n");
 
     let server_addr = if server_addr.contains(':') {
         server_addr
@@ -403,11 +403,11 @@ pub async fn formed_command(server_addr: String, psk_path: PathBuf) -> Result<()
         serde_json::from_value(response.result.unwrap_or(serde_json::Value::Null))
             .map_err(|e| format!("Failed to parse result: {}", e))?;
 
-    println!("╔═══════════════════════════════════════════════════════════════════════╗");
-    println!("║  Connected Clients                                                    ║");
-    println!("╠═══════════════════════════════════════════════════════════════════════╣");
-    println!("║  Hostname           IP Address        Version    Status        Seen  ║");
-    println!("╠═══════════════════════════════════════════════════════════════════════╣");
+    println!("+=======================================================================+");
+    println!("|  Connected Clients                                                    |");
+    println!("+=======================================================================+");
+    println!("|  Hostname           IP Address        Version    Status        Seen  |");
+    println!("+=======================================================================+");
 
     let now = SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -429,12 +429,12 @@ pub async fn formed_command(server_addr: String, psk_path: PathBuf) -> Result<()
         };
 
         println!(
-            "║  {:<18} {:<17} {:<9} {:<13} {:<5} ║",
+            "|  {:<18} {:<17} {:<9} {:<13} {:<5} |",
             client.hostname, client.ip, client.version, status_str, age_str
         );
     }
 
-    println!("╚═══════════════════════════════════════════════════════════════════════╝\n");
+    println!("+=======================================================================+\n");
     println!("Total clients: {}\n", result.clients.len());
 
     Ok(())
@@ -444,9 +444,9 @@ pub fn list_command() -> Result<(), String> {
     use colored::Colorize;
     use std::collections::HashMap;
 
-    println!("\n╔═══════════════════════════════════════════════════════════════════════╗");
-    println!("║       SignalBench Voltron - Multi-Host MITRE ATT&CK Techniques      ║");
-    println!("╚═══════════════════════════════════════════════════════════════════════╝\n");
+    println!("\n+=======================================================================+");
+    println!("|       SignalBench Voltron - Multi-Host MITRE ATT&CK Techniques      |");
+    println!("+=======================================================================+\n");
 
     let all_techniques = get_all_techniques();
     let total_count = all_techniques.len();

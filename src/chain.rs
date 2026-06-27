@@ -156,7 +156,7 @@ pub fn spawn_next_chain_child(
     // Build the argument list for the child process.
     // Child will execute:  <alias> run <id> [flags] --chain
     let mut args: Vec<String> = vec![
-        child_name.clone(), // argv[0] — the TTP alias
+        child_name.clone(), // argv[0] -- the TTP alias
         "run".to_string(),
         next_id.clone(),
     ];
@@ -191,7 +191,7 @@ pub fn spawn_next_chain_child(
 
     if !status.success() {
         let code = status.code().unwrap_or(-1);
-        warn!("[CHAIN] Child process '{next_id}' exited with code {code} — aborting chain");
+        warn!("[CHAIN] Child process '{next_id}' exited with code {code} -- aborting chain");
         delete_chain_file(chain_file);
         return Err(format!(
             "Chain aborted: child '{next_id}' exited with non-zero code {code}"

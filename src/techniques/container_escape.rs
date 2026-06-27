@@ -4967,10 +4967,19 @@ impl AttackTechnique for ContainerReconnaissance {
                         "[T1611-RECON] Executing: nmap -sT -p 22,80,443,2375,6443,10250 {}",
                         gw
                     );
-                    let nmap_result = Command::new("nmap")
-                        .args(["-sT", "-p", "22,80,443,2375,6443,10250", "--open", gw])
-                        .output()
-                        .await;
+                    // Shell-wrapped so the nmap argv (the IoC) is still emitted
+                    // when nmap is absent; bash exits 127 and no findings are
+                    // recorded, while the rest of the recon continues.
+                    let nmap_result = crate::utils::shell_attempt(&[
+                        "nmap",
+                        "-sT",
+                        "-p",
+                        "22,80,443,2375,6443,10250",
+                        "--open",
+                        gw,
+                    ])
+                    .output()
+                    .await;
 
                     if let Ok(output) = nmap_result {
                         if output.status.success() {

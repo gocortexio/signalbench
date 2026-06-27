@@ -22,6 +22,7 @@ pub mod easter_egg;
 pub mod logger;
 pub mod runner;
 pub mod safety;
+pub mod suites;
 pub mod techniques;
 pub mod utils;
 pub mod voltron;

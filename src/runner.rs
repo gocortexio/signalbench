@@ -20,6 +20,7 @@ pub struct RunOptions {
     pub force: bool,
     pub debug: bool,
     pub delay_cleanup: u64,
+    pub step_delay: u64,
     pub chain: bool,
 }
 
@@ -94,9 +95,11 @@ pub fn list_techniques() -> Result<(), String> {
     println!("  signalbench run <technique_id_or_name> [technique2 ...] [--dry-run] [--force] [--debug] [--config <config_file>]");
     println!("  signalbench category <category1> [category2] ... [--dry-run] [--force] [--debug] [--config <config_file>]");
     println!("  signalbench category ALL_CAPS  [--dry-run]   # Run ALL techniques with FORCE mode");
+    println!("  signalbench suite <suite_name>  [--dry-run] [--force] [--step-delay N]");
     println!("\n{}", "Flags:".bold());
-    println!("  -d, --debug   Enable debug logging (verbose output to stderr)");
-    println!("  -f, --force   Bypass pre-checks, attempt all operations for maximum telemetry");
+    println!("  -d, --debug          Enable debug logging (verbose output to stderr)");
+    println!("  -f, --force          Bypass pre-checks, attempt all operations for maximum telemetry");
+    println!("      --step-delay N   Seconds between techniques in a batch (default 5)");
     println!("\n{}", "Note:".bold());
     println!(
         "  For techniques with the same MITRE ATT&CK ID, use the exact technique name in quotes"
@@ -107,6 +110,40 @@ pub fn list_techniques() -> Result<(), String> {
     );
 
     Ok(())
+}
+
+/// Pre-flight dependency gate.
+///
+/// Returns `Some(detail)` when the technique declares `required_tools()` that
+/// are missing from this host and `force` is not set — the caller should then
+/// report the technique as SKIPPED (not FAILED) rather than executing it.
+/// Returns `None` when the technique can run (deps present, none declared, or
+/// `--force` is in effect, which deliberately bypasses pre-checks).
+async fn missing_required_tools(
+    technique: &dyn crate::techniques::AttackTechnique,
+    force: bool,
+    dry_run: bool,
+) -> Option<String> {
+    // `--force` deliberately bypasses pre-checks; `--dry-run` never invokes the
+    // tool, so it should still show the technique's plan rather than skip.
+    if force || dry_run {
+        return None;
+    }
+    let required = technique.required_tools();
+    if required.is_empty() {
+        return None;
+    }
+    let missing = crate::utils::missing_tools(&required).await;
+    if missing.is_empty() {
+        return None;
+    }
+    Some(
+        missing
+            .iter()
+            .map(|bin| format!("{bin} (install {})", crate::utils::tool_package(bin)))
+            .collect::<Vec<_>>()
+            .join(", "),
+    )
 }
 
 /// Generate telemetry for a specific technique with custom parameters (for Voltron mode)
@@ -139,6 +176,12 @@ pub async fn run_technique_with_params(
         force,
     };
 
+    // Pre-flight: a missing hard dependency is a SKIP, not a failure.
+    if let Some(detail) = missing_required_tools(technique.as_ref(), force, dry_run).await {
+        warn!("Technique '{technique_id}' skipped -- dependency missing: {detail}");
+        return Ok(());
+    }
+
     // Execute the technique
     let result = match technique.execute(&technique_config, dry_run).await {
         Ok(result) => result,
@@ -164,7 +207,7 @@ pub async fn run_technique(
     technique_id: &str,
     opts: RunOptions,
 ) -> Result<(), String> {
-    let RunOptions { dry_run, no_cleanup, config_path, force, debug, delay_cleanup, chain } = opts;
+    let RunOptions { dry_run, no_cleanup, config_path, force, debug, delay_cleanup, step_delay: _, chain } = opts;
     // Load configuration
     let config = load_config(config_path.as_deref())?;
 
@@ -216,41 +259,55 @@ pub async fn run_technique(
     // In chain mode a technique-level failure (Err from execute, or result.success == false)
     // is non-fatal: log a warning and continue the chain.  A true crash (non-zero child exit)
     // is handled separately in spawn_next_chain_child and does abort the chain.
-    let exec_result = technique.execute(&technique_config, dry_run).await;
-
-    let result = match exec_result {
-        Ok(result) => {
-            // Print result
-            if result.success {
-                println!("\n{}", "Execution Successful".bold().green());
-            } else {
-                println!("\n{}", "Execution Failed".bold().red());
+    // Pre-flight: a missing hard dependency is reported as SKIPPED (naming the
+    // package) rather than a misleading FAILED. In chain mode we still fall
+    // through to spawn the next child so the chain is not broken.
+    let result = if let Some(detail) = missing_required_tools(technique.as_ref(), force, dry_run).await
+    {
+        println!("\n{}", "Execution Skipped".bold().yellow());
+        println!("{} Dependency missing: {}", "[SKIP]".yellow(), detail);
+        if chain {
+            warn!(
+                "[CHAIN] Technique '{}' skipped (missing dependency) -- continuing chain",
+                technique_id
+            );
+        }
+        None
+    } else {
+        match technique.execute(&technique_config, dry_run).await {
+            Ok(result) => {
+                // Print result
+                if result.success {
+                    println!("\n{}", "Execution Successful".bold().green());
+                } else {
+                    println!("\n{}", "Execution Failed".bold().red());
+                    if chain {
+                        warn!(
+                            "[CHAIN] Technique '{}' reported failure -- continuing chain",
+                            technique_id
+                        );
+                    }
+                }
+                println!("{}", result.message);
+                if !result.artifacts.is_empty() {
+                    println!("\n{}", "Created Artifacts:".bold());
+                    for artifact in &result.artifacts {
+                        println!("  - {artifact}");
+                    }
+                }
+                Some(result)
+            }
+            Err(e) => {
+                error!("Failed to execute technique: {e}");
                 if chain {
                     warn!(
-                        "[CHAIN] Technique '{}' reported failure — continuing chain",
+                        "[CHAIN] Technique '{}' errored -- continuing chain",
                         technique_id
                     );
+                    None
+                } else {
+                    return Err(format!("Failed to execute technique: {e}"));
                 }
-            }
-            println!("{}", result.message);
-            if !result.artifacts.is_empty() {
-                println!("\n{}", "Created Artifacts:".bold());
-                for artifact in &result.artifacts {
-                    println!("  - {artifact}");
-                }
-            }
-            Some(result)
-        }
-        Err(e) => {
-            error!("Failed to execute technique: {e}");
-            if chain {
-                warn!(
-                    "[CHAIN] Technique '{}' errored — continuing chain",
-                    technique_id
-                );
-                None
-            } else {
-                return Err(format!("Failed to execute technique: {e}"));
             }
         }
     };
@@ -309,7 +366,7 @@ pub async fn run_technique(
             let remaining = chain::peek_chain_entries(&chain_file);
 
             if remaining.is_empty() {
-                info!("[CHAIN] Last technique in chain finished — deleting chain file");
+                info!("[CHAIN] Last technique in chain finished -- deleting chain file");
                 chain::delete_chain_file(&chain_file);
             } else {
                 // Attempt to spawn next child; skip unknown techniques.
@@ -323,13 +380,13 @@ pub async fn run_technique(
                     // Validate the next entry exists as a technique before popping.
                     let next_id = &peek[0];
                     if get_technique_by_id_or_name(next_id).is_none() {
-                        warn!("[CHAIN] Unknown technique '{}' — skipping", next_id);
+                        warn!("[CHAIN] Unknown technique '{}' -- skipping", next_id);
                         // Pop and discard.
                         let _ = chain::pop_chain_entry(&chain_file);
                         skipped += 1;
                         if skipped > 500 {
                             // Safety valve to prevent infinite loop.
-                            warn!("[CHAIN] Too many consecutive unknown techniques — aborting chain");
+                            warn!("[CHAIN] Too many consecutive unknown techniques -- aborting chain");
                             chain::delete_chain_file(&chain_file);
                             break;
                         }
@@ -351,11 +408,40 @@ pub async fn run_technique(
                 }
             }
         } else {
-            info!("[CHAIN] Chain of one — process renamed, no child spawned");
+            info!("[CHAIN] Chain of one -- process renamed, no child spawned");
         }
     }
 
     Ok(())
+}
+
+/// Look up a suite by name and execute its technique list via `run_techniques`.
+pub async fn run_suite(suite_name: &str, opts: RunOptions) -> Result<(), String> {
+    let suite = match crate::suites::get_suite_by_name(suite_name) {
+        Some(s) => s,
+        None => {
+            return Err(format!(
+                "Suite '{}' not found. Run 'signalbench list' to see available suites.",
+                suite_name
+            ))
+        }
+    };
+
+    println!(
+        "\n{}",
+        format!("[SUITE] {}", suite.name).bold().cyan()
+    );
+    println!("{}", suite.description.italic());
+    println!(
+        "{}",
+        format!("[SUITE] {} techniques in sequence:", suite.technique_ids.len()).dimmed()
+    );
+    for id in suite.technique_ids {
+        println!("  -> {}", id.yellow());
+    }
+
+    let technique_ids: Vec<String> = suite.technique_ids.iter().map(|s| s.to_string()).collect();
+    run_techniques(&technique_ids, opts).await
 }
 
 /// Generate telemetry for one or more explicitly specified techniques.
@@ -375,7 +461,7 @@ pub async fn run_techniques(
         return run_technique(&techniques[0], opts).await;
     }
 
-    let RunOptions { dry_run, no_cleanup, config_path, force, debug, delay_cleanup, chain } = opts;
+    let RunOptions { dry_run, no_cleanup, config_path, force, debug, delay_cleanup, step_delay, chain } = opts;
 
     // Validate all IDs up front so the user gets a clear error before anything runs.
     for id in techniques {
@@ -395,7 +481,7 @@ pub async fn run_techniques(
                 .cyan()
         );
         for id in &all_ids {
-            println!("  → {}", id.yellow());
+            println!("  -> {}", id.yellow());
         }
 
         chain::write_chain_file(&all_ids)
@@ -418,6 +504,7 @@ pub async fn run_techniques(
                 force,
                 debug,
                 delay_cleanup,
+                step_delay,
                 chain: true,
             },
         )
@@ -436,10 +523,17 @@ pub async fn run_techniques(
         .cyan()
     );
 
+    if step_delay > 0 {
+        println!(
+            "{}",
+            format!("[STEP] {}s delay between techniques", step_delay).yellow()
+        );
+    }
+
     let mut success_count: u32 = 0;
     let mut failure_count: u32 = 0;
 
-    for technique_id in techniques {
+    for (idx, technique_id) in techniques.iter().enumerate() {
         match run_technique(
             technique_id,
             RunOptions {
@@ -449,6 +543,7 @@ pub async fn run_techniques(
                 force,
                 debug,
                 delay_cleanup,
+                step_delay,
                 chain: false,
             },
         )
@@ -460,6 +555,14 @@ pub async fn run_techniques(
                 error!("Technique {technique_id} failed: {e}");
                 println!("{}: {}", "Failed".red().bold(), e);
             }
+        }
+        // Apply step delay between techniques, not after the last one.
+        if step_delay > 0 && idx + 1 < techniques.len() {
+            println!(
+                "{}",
+                format!("[STEP] Waiting {}s before next technique...", step_delay).dimmed()
+            );
+            tokio::time::sleep(std::time::Duration::from_secs(step_delay)).await;
         }
     }
 
@@ -484,7 +587,7 @@ pub async fn run_categories(
     categories: &[String],
     opts: RunOptions,
 ) -> Result<(), String> {
-    let RunOptions { dry_run, no_cleanup, config_path, force, debug, delay_cleanup, chain } = opts;
+    let RunOptions { dry_run, no_cleanup, config_path, force, debug, delay_cleanup, step_delay, chain } = opts;
     use crate::cli::{get_available_categories, ALL_CAPS_CATEGORY};
 
     println!(
@@ -506,7 +609,7 @@ pub async fn run_categories(
     }
 
     // Check for ALL_CAPS meta-category (MF DOOM tribute)
-    let (effective_categories, effective_force, effective_delay) =
+    let (effective_categories, effective_force, effective_delay, effective_step_delay) =
         if categories.len() == 1 && categories[0].to_uppercase() == ALL_CAPS_CATEGORY {
             // MF DOOM tribute
             println!("\n{}", "=".repeat(60).cyan());
@@ -545,9 +648,10 @@ pub async fn run_categories(
                 .collect();
             // ALL_CAPS uses 5s delay by default if not specified
             let delay = if delay_cleanup == 0 { 5 } else { delay_cleanup };
-            (all_cats, true, delay)
+            let sdel = if step_delay == 0 { 5 } else { step_delay };
+            (all_cats, true, delay, sdel)
         } else {
-            (categories.to_vec(), force, delay_cleanup)
+            (categories.to_vec(), force, delay_cleanup, step_delay)
         };
 
     // Validate all categories first
@@ -579,6 +683,17 @@ pub async fn run_categories(
         );
     }
 
+    if effective_step_delay > 0 {
+        println!(
+            "{}",
+            format!(
+                "[STEP] {}s delay between techniques",
+                effective_step_delay
+            )
+            .yellow()
+        );
+    }
+
     // ── Chain mode: build flat ordered list, write chain file, delegate ────────
     if chain {
         // Expand all categories into a flat ordered list of TTP IDs.
@@ -604,7 +719,7 @@ pub async fn run_categories(
                 .cyan()
         );
         for id in &all_ids {
-            println!("  → {}", id.yellow());
+            println!("  -> {}", id.yellow());
         }
 
         // Per spec: write ALL TTP IDs to the chain file up front (including the
@@ -631,6 +746,7 @@ pub async fn run_categories(
                 force: effective_force,
                 debug,
                 delay_cleanup: effective_delay,
+                step_delay: effective_step_delay,
                 chain: true,
             },
         )
@@ -646,6 +762,7 @@ pub async fn run_categories(
 
     let mut total_success = 0;
     let mut total_failure = 0;
+    let mut total_skipped = 0;
     let mut total_techniques = 0;
 
     // Process each category
@@ -672,6 +789,8 @@ pub async fn run_categories(
 
         let mut success_count = 0;
         let mut failure_count = 0;
+        let mut skipped_count = 0;
+        let mut first_executed = true;
 
         // Execute each technique in the category
         for technique in &techniques {
@@ -695,6 +814,16 @@ pub async fn run_categories(
 
             total_techniques += 1;
 
+            // Apply step delay between techniques (not before the first one executed).
+            if !first_executed && effective_step_delay > 0 {
+                println!(
+                    "{}",
+                    format!("[STEP] Waiting {}s before next technique...", effective_step_delay).dimmed()
+                );
+                tokio::time::sleep(std::time::Duration::from_secs(effective_step_delay)).await;
+            }
+            first_executed = false;
+
             println!(
                 "\n{} {}",
                 "Executing:".bold(),
@@ -716,6 +845,21 @@ pub async fn run_categories(
             technique_config.force = effective_force;
             if no_cleanup {
                 technique_config.cleanup_after = Some(false);
+            }
+
+            // Pre-flight: skip (don't fail) when a declared hard dependency is absent.
+            if let Some(detail) =
+                missing_required_tools(technique.as_ref(), effective_force, dry_run).await
+            {
+                skipped_count += 1;
+                total_skipped += 1;
+                println!(
+                    "{}: {} - dependency missing: {}",
+                    "Skipped".yellow().bold(),
+                    info.name,
+                    detail
+                );
+                continue;
             }
 
             // Execute the technique
@@ -779,6 +923,7 @@ pub async fn run_categories(
         );
         println!("Techniques: {}", techniques.len());
         println!("Successful: {}", success_count.to_string().green());
+        println!("Skipped: {}", skipped_count.to_string().yellow());
         println!(
             "Failed: {}",
             if failure_count > 0 {
@@ -794,6 +939,7 @@ pub async fn run_categories(
     println!("Categories Processed: {}", effective_categories.len());
     println!("Total Techniques: {total_techniques}");
     println!("Total Successful: {}", total_success.to_string().green());
+    println!("Total Skipped: {}", total_skipped.to_string().yellow());
     println!(
         "Total Failed: {}",
         if total_failure > 0 {

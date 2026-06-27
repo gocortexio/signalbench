@@ -797,7 +797,7 @@ impl AttackTechnique for WebShellDeployment {
                 shells_created.len()
             );
             for shell in &shells_created {
-                info!("  • {shell}");
+                info!("  - {shell}");
             }
 
             Ok(SimulationResult {

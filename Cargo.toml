@@ -1,6 +1,6 @@
 [package]
 name = "signalbench"
-version = "1.8.1"
+version = "1.8.7"
 edition = "2021"
 authors = ["Simon Sigre <info@gocortex.io>"]
 description = "Endpoint telemetry generator for security analytics, research, and training using MITRE ATT&CK techniques"
@@ -29,6 +29,7 @@ sha2 = "0.10"
 hex = "0.4"
 base64 = "0.22"
 libc = "0.2"
+io-uring = "0.7"
 hostname = "0.4"
 async-trait = "0.1"
 regex = "1"
@@ -40,3 +41,4 @@ hmac = "0.12"
 hkdf = "0.12"
 chacha20poly1305 = "0.10"
 des = "0.8"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }

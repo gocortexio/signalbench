@@ -2,7 +2,7 @@
   <img src="assets/signalbench_1-8-0.png" alt="SignalBench Logo" width="600"/>
 </div>
 
-# SignalBench v1.8.1: It’s Always DNS (feat. C2 Sinkhole)
+# SignalBench v1.8.7: Suite Execution, SharePoint Exfil, and Split C2 Profiling
 
 Endpoint Telemetry Generator from GoCortex.io
 
@@ -119,19 +119,20 @@ signalbench voltron list
 
 ### Telemetry Coverage
 
-64 techniques across:
+77 techniques across:
 
 - Discovery: System/network reconnaissance, security tool detection, user/group enumeration
 - Credential Access: Memory dumping, keylogging, credential file harvesting, password hash extraction
-- Privilege Escalation: SUID binaries, sudo manipulation, local account creation, kernel exploits (T1068.001 CVE-2024-1086 nftables, T1068.002 CVE-2025-38352 POSIX timer race, T1068.003 CVE-2025-40190 ext4 xattr, T1068.004 CVE-2026-31431 Copy Fail AF_ALG page-cache write primitive); all T1548 and T1068 techniques include a post-escalation EUID verification phase using shared helpers (verify_command, log_privesc_verification) that runs a privileged child process, emits [VERIFIED] EUID=0 or [UNVERIFIED] EUID=N, and on success also emits [CRITICAL] Privilege escalation VERIFIED for high-confidence SIEM correlation
-- Defence Evasion: PATH hijacking, audit log manipulation, command history clearing, process masquerading, web shells
+- Privilege Escalation: SUID binaries, sudo manipulation, local account creation, kernel exploits (T1068.001 CVE-2024-1086 nftables, T1068.002 CVE-2025-38352 POSIX timer race, T1068.003 CVE-2025-40190 ext4 xattr, T1068.004 CVE-2026-31431 Copy Fail AF_ALG page-cache write primitive with Phase 3 behavioural tail: curl-staged copy.fail fetch pinned to sinkhole + setsid su correlated lineage); all T1548 and T1068 techniques include a post-escalation EUID verification phase using shared helpers (verify_command, log_privesc_verification) that runs a privileged child process, emits [VERIFIED] EUID=0 or [UNVERIFIED] EUID=N, and on success also emits [CRITICAL] Privilege escalation VERIFIED for high-confidence SIEM correlation
+- Defence Evasion: PATH hijacking, audit log manipulation, command history clearing, process masquerading, web shells, io_uring syscall-less recon and C2 (T1106-IOURING: RingReaper pattern -- five real post-exploitation ops driven entirely through io_uring SQEs so syscall-hooking EDR sensors see none of it; doubles as an XDR io_uring coverage test)
 - Execution: Reverse shells, Python reconnaissance, command injection, script execution
-- Command and Control: Port knocking, DNS tunnelling, ICMP beaconing, tool transfer, suspicious domain connections (T1071-IOC with security protections)
-- Exfiltration: Network protocols, DNS tunnelling, ICMP data transfer
-- Lateral Movement: SSH connections, protocol-based movement (Voltron Mode)
+- Command and Control: Port knocking, DNS tunnelling, ICMP beaconing, tool transfer, C2 framework profiling split across five independent techniques (T1071-IOC-HTTP: HTTP beaconing for 9 frameworks; T1071-IOC-STRATUM: Stratum v1 mining sessions; T1071-IOC-ASYNCRAT: TLS handshake CN=AsyncRAT Server; T1071-IOC-DNS: raw UDP/53 dnscat2 and Cobalt Strike beacon probes + T1048-style 120-query DNS exfil burst; T1572-SOFTETHER: SoftEther / PacketiX VPN protocol tunneling -- 9 HTTPS PACK exchanges on port 992 detected as softether-vpn App-ID by PA-440); all five run together via `signalbench suite c2-framework-profiling`
+- Exfiltration: Network protocols, DNS tunnelling, ICMP data transfer, SharePoint/OneDrive chunked upload exfiltration (T1567.002-SP: 10 HTTPS requests across two *.sharepoint.com tenant sessions, 256 KB synthetic payload, CASB/DLP trigger)
+- Lateral Movement: SSH (T1021.004), VNC (T1021.005), protocol-level SSH per RFC 4253 (T1021.004-PROTO), and RFB/VNC per RFC 6143 with TightVNC file exfil (T1021.005-PROTO) -- the two PROTO techniques require Voltron Mode and implement the wire protocol directly for authentic cross-host telemetry
 - Persistence: Cron jobs, startup scripts, systemd services, SSH keys
 - Collection: Automated file collection, recursive directory enumeration
 - Impact: Resource hijacking, file deletion, anti-forensics
+- Software: BPFDoor/Symbiote-class fileless ELF execution via memfd_create + fexecve (S1161); PACEMAKER healthcare device simulation (S1109)
 - Container Escape: Docker socket abuse (T1611-SOCK), privileged container breakout (T1611-PRIV), sensitive mount exploitation (T1611-MOUNT), cgroup escape (T1611-CGROUP), kernel module loading (T1611-MODULE), container reconnaissance (T1611-RECON), PID namespace escape (T1611-PIDNS), SUID binary exploitation (T1611-SUID), chroot breakout (T1611-BREAKOUT), kernel CVE checks (T1611-CVE), namespace escape (T1611-NS), RunC masked path escape (T1611.012), RunC console escape (T1611.013), RunC procfs escape (T1611.014)
 
 #### Container Escape Host Access Verification
@@ -201,14 +202,14 @@ SignalBench provides pre-built binaries for maximum compatibility across Linux d
 For Universal Linux Compatibility (Recommended):
 ```bash
 # Download static binary that works on any Linux distribution
-wget https://github.com/gocortexio/signalbench/releases/download/v1.8.1/signalbench-v1.8.1-linux-musl-x86_64
-chmod +x signalbench-v1.8.1-linux-musl-x86_64
-sudo mv signalbench-v1.8.1-linux-musl-x86_64 /usr/local/bin/signalbench
+wget https://github.com/gocortexio/signalbench/releases/download/v1.8.7/signalbench-v1.8.7-linux-musl-x86_64
+chmod +x signalbench-v1.8.7-linux-musl-x86_64
+sudo mv signalbench-v1.8.7-linux-musl-x86_64 /usr/local/bin/signalbench
 
 # For ARM64 systems (Apple Silicon, ARM servers)
-wget https://github.com/gocortexio/signalbench/releases/download/v1.8.1/signalbench-v1.8.1-linux-musl-aarch64
-chmod +x signalbench-v1.8.1-linux-musl-aarch64
-sudo mv signalbench-v1.8.1-linux-musl-aarch64 /usr/local/bin/signalbench
+wget https://github.com/gocortexio/signalbench/releases/download/v1.8.7/signalbench-v1.8.7-linux-musl-aarch64
+chmod +x signalbench-v1.8.7-linux-musl-aarch64
+sudo mv signalbench-v1.8.7-linux-musl-aarch64 /usr/local/bin/signalbench
 ```
 
 ### Option 2: Build from Source
@@ -271,6 +272,10 @@ signalbench category <category> --chain
 # Automatically enables force mode for maximum telemetry generation
 # (MF DOOM tribute - 1971-2020 - "JUST REMEMBER ALL CAPS WHEN YOU SPELL THE MAN NAME")
 signalbench category ALL_CAPS [--dry-run]
+
+# Run a named suite of related techniques as a group
+signalbench suite <suite_name> [--dry-run] [--force] [--step-delay N]
+# Available suites: c2-framework-profiling, network-port-scan
 ```
 
 ### Force Mode
@@ -329,6 +334,33 @@ Example:
 ```bash
 signalbench category discovery --delay-cleanup 10
 signalbench run T1003.001 --delay-cleanup 5
+```
+
+### Suite Execution Mode
+
+The `suite` subcommand runs a named, pre-defined group of related techniques in sequence, automatically applying a step delay between them:
+
+```bash
+# C2 framework traffic profiling (all four T1071-IOC-* phases in order)
+signalbench suite c2-framework-profiling [--dry-run] [--force] [--step-delay 10]
+
+# Two-phase network port scan (common ports then high-value ports)
+signalbench suite network-port-scan [--dry-run] [--force] [--step-delay 5]
+```
+
+Suites are equivalent to running each constituent technique individually, but the grouping is recorded in the help output and the step delay is applied automatically. The step delay defaults to 5 seconds unless overridden with `--step-delay`.
+
+### Step Delay Mode
+
+The `--step-delay <seconds>` flag inserts a pause between each technique when running a `suite` or `category` batch:
+- Gives the target security product time to process and alert on each technique before the next one begins
+- Default: 5 seconds in suite mode, 0 seconds in category mode
+- Useful when evaluating detection latency or preventing technique overlap in SIEM telemetry
+
+Example:
+```bash
+signalbench suite c2-framework-profiling --step-delay 10
+signalbench category command_and_control --step-delay 30
 ```
 
 ### Multi-Host Mode (Voltron)
