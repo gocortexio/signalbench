@@ -2,7 +2,7 @@
   <img src="assets/signalbench_1-8-0.png" alt="SignalBench Logo" width="600"/>
 </div>
 
-# SignalBench v1.8.7: Suite Execution, SharePoint Exfil, and Split C2 Profiling
+# SignalBench v1.8.7: It's Always DNS (feat. SharePoint Exfil + SoftEther VPN to Sinkhole)
 
 Endpoint Telemetry Generator from GoCortex.io
 
